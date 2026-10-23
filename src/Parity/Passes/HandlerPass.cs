@@ -20,7 +20,15 @@ public sealed class HandlerResult
     public HashSet<string> WantedFiles = new(StringComparer.Ordinal);
     public List<(string Field, ITypeSymbol Type)> ModelTypes = new();
     public List<(string Target, string Source)> DataSourceRefs = new();
+    /// <summary>Every body analysed, handler or method, once each: the context pass (#17) reads them again for shared state and the contract.</summary>
+    public List<UnitBody> Bodies = new();
+    /// <summary>Reflection entries: handler id to the file:line of each GetMethod/GetProperty/InvokeMember that names it.</summary>
+    public Dictionary<string, List<string>> InvokedFrom = new(StringComparer.Ordinal);
+    public Func<SyntaxTree, SemanticModel> Model = null!;
 }
+
+/// <summary>A body the handler pass analysed. Own: declared in the unit's class (its partials included), not a callee elsewhere.</summary>
+public sealed record UnitBody(string Id, string Name, string Kind, SyntaxNode Decl, SyntaxNode? Body, int Depth, bool Own);
 
 /// <summary>
 /// Everything the designer does not show: code-behind wiring, lambdas, overrides, the constructor,
@@ -63,6 +71,7 @@ public sealed class HandlerPass
 
     public HandlerResult Run(List<EventWiring> designerEvents)
     {
+        _r.Model = Model;
         var members = _form.Declarations.SelectMany(d => d.Members).ToList();
         var methodsByName = members.OfType<MethodDeclarationSyntax>()
             .Where(m => m.Identifier.Text is not ("InitializeComponent" or "Dispose"))
@@ -160,6 +169,20 @@ public sealed class HandlerPass
             handled.Add(name);
         }
 
+        // private methods some file names in a reflection call (typeof(Form).GetMethod("Name")...) are entry points too (#17)
+        foreach (var (name, decls) in methodsByName)
+        {
+            if (handled.Contains(name)) continue;
+            var sites = ReflectionSites(name);
+            if (sites.Count == 0) continue;
+            var evId = $"evt:{_formName}/$this.{name}";
+            var hid = $"handler:{_formName}/{name}";
+            _r.Events.Add(new EventWiring(evId, $"ctrl:{_formName}/$this", name, hid, "reflection", Syntax.LocOf(decls[0], _baseDir)));
+            foreach (var m in decls) EmitHandler(hid, name, "reflection", new List<string> { evId }, m, (SyntaxNode?)m.Body ?? m.ExpressionBody);
+            _r.InvokedFrom[hid] = sites;
+            handled.Add(name);
+        }
+
         // 3. transitive methods
         while (_work.Count > 0)
         {
@@ -185,6 +208,7 @@ public sealed class HandlerPass
                 _ => decl,
             };
             var a = Analyze(body, id, depth);
+            _r.Bodies.Add(new UnitBody(id, method.Name, "method", decl, body, depth, SymbolEqualityComparer.Default.Equals(method.ContainingType, _form.Symbol)));
             _r.Methods[id] = new MethodInfo(id, method.ToDisplayString(), depth, a.Reads, a.Writes, a.Calls, a.ServiceCalls, a.Unresolved,
                 Syntax.LocOf(decl, _baseDir), Syntax.Source(decl), null);
         }
@@ -238,6 +262,7 @@ public sealed class HandlerPass
     private void EmitHandler(string id, string name, string kind, List<string> events, SyntaxNode decl, SyntaxNode? body)
     {
         var a = Analyze(body, id, 0);
+        _r.Bodies.Add(new UnitBody(id, name, kind, decl, body, 0, true));
         if (a.Writes.Any(w => w.Contains("errorProvider", StringComparison.OrdinalIgnoreCase)) || a.Calls.Any(c => c.Contains("SetError") || c.Contains(".Validate(")))
             kind = kind is "ui" or "change" ? "validation" : kind;
         _r.Handlers.Add(new HandlerInfo(id, name, kind, events, a.Reads, a.Writes, a.Calls, a.ServiceCalls, a.Unresolved, Syntax.LocOf(decl, _baseDir), Syntax.Source(decl)));
@@ -322,7 +347,6 @@ public sealed class HandlerPass
                             _ => $"anon@L{Syntax.LocOf(oc, _baseDir).Start}",
                         };
                         var dynId = $"dyn:{_formName}/{ownerName}/{local}";
-                        dynamicLocals[local] = dynId;
                         string? addedTo = null;
                         foreach (var addInv in body.DescendantNodes().OfType<InvocationExpressionSyntax>())
                         {
@@ -331,8 +355,13 @@ public sealed class HandlerPass
                                 && addInv.ArgumentList.Arguments.Count == 1 && Syntax.FieldRef(addInv.ArgumentList.Arguments[0].Expression) == local)
                             { addedTo = arp.Root is "$this" or "Controls" && arp.Path.Length == 0 ? $"ctrl:{_formName}/$this" : _controls.Contains(arp.Root) ? $"ctrl:{_formName}/{arp.Root}" : arp.Root; break; }
                         }
-                        var stmt = oc.FirstAncestorOrSelf<StatementSyntax>();
-                        _r.DynamicUi.Add(new DynamicUiInfo(dynId, chain[0], addedTo, ownerId, Syntax.LocOf(oc, _baseDir), stmt != null ? Syntax.Text(stmt) : Syntax.Text(oc)));
+                        // another unit the handler opens is composition (embeds, #17), not dynamic UI; one added to a container is both
+                        if (addedTo != null || !FormDiscovery.IsUnit(type, _cfg, _index))
+                        {
+                            dynamicLocals[local] = dynId;
+                            var stmt = oc.FirstAncestorOrSelf<StatementSyntax>();
+                            _r.DynamicUi.Add(new DynamicUiInfo(dynId, chain[0], addedTo, ownerId, Syntax.LocOf(oc, _baseDir), stmt != null ? Syntax.Text(stmt) : Syntax.Text(oc)));
+                        }
                     }
                     var ctor = model.GetSymbolInfo(oc).Symbol as IMethodSymbol;
                     if (ctor != null && ctor.DeclaringSyntaxReferences.Length > 0)
@@ -368,6 +397,37 @@ public sealed class HandlerPass
         return a;
     }
 
+    /// <summary>
+    /// file:line of each GetMethod/GetProperty/InvokeMember("name", ...) whose receiver is typeof(ThisForm) or x.GetType() of
+    /// this form, in the loaded files. A file that names this form and the string but is not loaded yet is asked for.
+    /// </summary>
+    private List<string> ReflectionSites(string name)
+    {
+        var literal = "\"" + name + "\"";
+        var sites = new List<string>();
+        foreach (var tree in _compilation.SyntaxTrees)
+        {
+            if (!tree.GetText().ToString().Contains(literal, StringComparison.Ordinal)) continue;
+            foreach (var inv in tree.GetRoot().DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                if (inv.Expression is not MemberAccessExpressionSyntax { Name.Identifier.Text: "GetMethod" or "GetProperty" or "InvokeMember" } ma) continue;
+                if (inv.ArgumentList.Arguments.FirstOrDefault()?.Expression is not LiteralExpressionSyntax lit || lit.Token.ValueText != name) continue;
+                var receiver = ma.Expression switch
+                {
+                    TypeOfExpressionSyntax t => Model(tree).GetTypeInfo(t.Type).Type,
+                    InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax { Name.Identifier.Text: "GetType" } gt } => Model(tree).GetTypeInfo(gt.Expression).Type,
+                    _ => null,
+                };
+                if (!SymbolEqualityComparer.Default.Equals(receiver?.OriginalDefinition, _form.Symbol)) continue;
+                var loc = Syntax.LocOf(inv, _baseDir);
+                sites.Add($"{loc.File}:{loc.Start}");
+            }
+        }
+        foreach (var f in _index.FilesInstantiating(_formName))
+            if (!_loadedFiles.Contains(f) && File.ReadAllText(f).Contains(literal, StringComparison.Ordinal)) _r.WantedFiles.Add(f);
+        return sites.Distinct().OrderBy(x => x, StringComparer.Ordinal).ToList();
+    }
+
     private void RecordCall(IMethodSymbol m, List<string> args, string ownerId, int depth, Analysis a)
     {
         var type = m.ContainingType;
@@ -376,10 +436,12 @@ public sealed class HandlerPass
         {
             var id = $"svc:{type!.Name}.{m.Name}";
             a.SvcSet.Add(id);
-            if (!_r.ServiceCalls.TryGetValue(id, out var sc)) _r.ServiceCalls[id] = sc = new ServiceCallInfo(id, fullType, m.Name, new(), new());
+            if (!_r.ServiceCalls.TryGetValue(id, out var sc))
+                _r.ServiceCalls[id] = sc = new ServiceCallInfo(id, fullType, m.Name, new(), new(), ServiceShape.Signature(m), ServiceShape.Request(m), ServiceShape.Reply(m), new());
             if (!sc.CalledFrom.Contains(ownerId)) sc.CalledFrom.Add(ownerId);
             var argText = string.Join(", ", args);
             if (argText.Length > 0 && !sc.Args.Contains(argText)) sc.Args.Add(argText);
+            if (!sc.Sites!.Any(x => x.Via == ownerId && x.Args.SequenceEqual(args))) sc.Sites!.Add(new CallSite(ownerId, args));
             return;
         }
         if (Syntax.Matches(fullType, _cfg.IgnoreCalls)) return;
@@ -389,8 +451,17 @@ public sealed class HandlerPass
         var id2 = Syntax.MethodId(m);
         a.CallsSet.Add(id2);
         if (inSource && depth + 1 > _cfg.MaxCallDepth) return;
+        // another unit's code is its own manifest's; the host records the call and an embed: entry (#17), not a copy of the body
+        if (FormDiscovery.IsUnit(m.ContainingType, _cfg, _index) && !InChain(m.ContainingType)) return;
         if (!inSource && m.ContainingType != null && _index.FilesFor(m.ContainingType.Name).Count == 0) return; // framework-ish, not project-local
         _work.Enqueue((m, depth + 1));
+    }
+
+    private bool InChain(INamedTypeSymbol type)
+    {
+        for (var t = _form.Symbol; t != null; t = t.BaseType)
+            if (SymbolEqualityComparer.Default.Equals(t.OriginalDefinition, type.OriginalDefinition)) return true;
+        return false;
     }
 
     private static bool IsWrite(IdentifierNameSyntax id)

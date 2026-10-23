@@ -24,6 +24,9 @@ public static partial class SpecLinter
     [GeneratedRegex(@"decided-by\s+\S+.*\b\d{4}-\d{2}-\d{2}\b")] private static partial Regex Decided();
     [GeneratedRegex(@"\b\d{4}-\d{2}-\d{2}\b")] private static partial Regex DateRx();
     [GeneratedRegex(@"^closed by evidence\b")] private static partial Regex ClosedByEvidence();
+    [GeneratedRegex(@"^closed by decision\b")] private static partial Regex ClosedByDecision();
+    [GeneratedRegex(@"\bdecided-by\s+(dec:\S+?)[.,;)]?(?:\s|$)")] private static partial Regex DecidedByDecision();
+    [GeneratedRegex(@"\bdec:[a-z0-9]+(?:-[a-z0-9]+)*")] private static partial Regex DecIdRx();
     [GeneratedRegex(@"\bev:[A-Za-z_]\w*/\d+")] private static partial Regex EvIdRx();
     [GeneratedRegex(@"\bsvc:[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*")] private static partial Regex SvcIdRx();
     [GeneratedRegex(@"\bR-\w+-\d+\b")] private static partial Regex RuleIdRx();
@@ -93,6 +96,21 @@ public static partial class SpecLinter
         // ev: ids live outside the manifest, in evidence/<Unit>.json; each is re-read from the legacy source
         var evidence = new EvidenceSet(moduleDir);
         void Ev(int line, string who, string id) { if (evidence.Check(id) is { } bad) E(line, bad.Code, $"{who}: '{id}' {bad.Message}"); }
+        // dec: and scn: ids live in registry/ (#17): a decision stands for its owner and date, a scenario is named with its version
+        var decisions = new Lazy<HashSet<string>>(() => Registry.Decisions(moduleDir).Select(x => x.Id).ToHashSet(StringComparer.Ordinal));
+        var scenarioVersions = new Lazy<Dictionary<string, int>?>(() => Registry.ScenarioVersions(moduleDir));
+        bool KnownDecision(int line, string who, string id)
+        {
+            if (decisions.Value.Contains(id)) return true;
+            E(line, "DECISION-UNKNOWN", $"{who}: '{id}' is not in registry/decisions.json; record the answer there (question, answer, owner, date, cite) first");
+            return false;
+        }
+        // a 'decided-by' note: either a dec: id, or a name and a date written inline
+        bool DecidedBy(int line, string who, string text)
+        {
+            if (DecidedByDecision().Match(text) is { Success: true } dm) { KnownDecision(line, who, dm.Groups[1].Value); return true; }
+            return Decided().IsMatch(text);
+        }
 
         // ---- structure ----
         foreach (var s in new[] { "Fields", "Rules", "No behavior", "Service calls", "Open questions" })
@@ -166,9 +184,19 @@ public static partial class SpecLinter
             if (r.Get("quirk") is { } q)
             {
                 if (!q.StartsWith("preserve", StringComparison.Ordinal) && !q.StartsWith("diverge", StringComparison.Ordinal)) E(r.LineOf("quirk"), "GRAMMAR", $"{r.Id}: quirk must start with preserve or diverge");
-                if (!Decided().IsMatch(q)) E(r.LineOf("quirk"), "DROP-REASON", $"{r.Id}: quirk needs 'decided-by <name> <YYYY-MM-DD>'");
+                if (!DecidedBy(r.LineOf("quirk"), r.Id, q)) E(r.LineOf("quirk"), "DROP-REASON", $"{r.Id}: quirk needs 'decided-by dec:<id>' or 'decided-by <name> <YYYY-MM-DD>'");
             }
             foreach (var fx in SpecParser.SplitIds(r.Get("fixtures"))) ruleFixtures.Add((fx, r.LineOf("fixtures")));
+            foreach (var s in SpecParser.SplitIds(r.Get("scenarios")))
+            {
+                var line = r.LineOf("scenarios");
+                if (Registry.ScenarioRefRx().Match(s) is not { Success: true } sm) { E(line, "GRAMMAR", $"{r.Id}: scenarios lists scn:<id>@<version>, got '{s}'"); continue; }
+                var sid = sm.Groups[1].Value;
+                if (scenarioVersions.Value == null) E(line, "SCENARIO-UNKNOWN", $"{r.Id}: '{sid}' cannot be checked: the module has no readable registry/scenarios.json");
+                else if (!scenarioVersions.Value.TryGetValue(sid, out var v)) E(line, "SCENARIO-UNKNOWN", $"{r.Id}: '{sid}' is not in registry/scenarios.json");
+                else if (!sm.Groups[2].Success) E(line, "SCENARIO-VERSION", $"{r.Id}: '{sid}' names no version; write {sid}@{v} (registry has v{v})");
+                else if (int.Parse(sm.Groups[2].Value) != v) E(line, "SCENARIO-VERSION", $"{r.Id}: '{s}' was written against v{sm.Groups[2].Value}, registry has v{v}; re-read the scenario, then update the rule and its version");
+            }
 
             // outcomes are declared, never inferred from prose; each one is a fixture variant or a stated gap
             var outcomes = SpecParser.SplitIds(r.Get("outcomes"));
@@ -217,7 +245,7 @@ public static partial class SpecLinter
             var disp = row.Cell(4);
             var dispKind = disp.Contains(':') ? disp[..disp.IndexOf(':')] : disp;
             if (!Dispositions.Contains(dispKind) && dispKind != "shared") E(row.Line, "GRAMMAR", $"Fields: disposition '{disp}' must be field|layout|display|nonvisual|dropped|shared:<Component>");
-            if (dispKind == "dropped" && !Decided().IsMatch(row.Cell(5))) E(row.Line, "DROP-REASON", $"Fields: dropped {id} needs a note with 'decided-by <name> <YYYY-MM-DD>'");
+            if (dispKind == "dropped" && !DecidedBy(row.Line, "Fields", row.Cell(5))) E(row.Line, "DROP-REASON", $"Fields: dropped {id} needs a note with 'decided-by dec:<id>' or 'decided-by <name> <YYYY-MM-DD>'");
         }
 
         var noBehavior = new HashSet<string>(StringComparer.Ordinal);
@@ -238,10 +266,17 @@ public static partial class SpecLinter
             else svcRows[id] = row;
         }
 
-        // a question closed by evidence stays listed and links the record that answers it; only the rest are open
+        // a question closed by evidence or by a decision stays listed and links the record that answers it; only the rest are open
         var open = new List<(string Text, int Line)>();
         foreach (var (text, line) in spec.OpenQuestions)
         {
+            if (ClosedByDecision().IsMatch(text))
+            {
+                var decIds = DecIdRx().Matches(text).Select(x => x.Value).Distinct().ToList();
+                if (decIds.Count == 0) E(line, "DECISION-UNKNOWN", $"Open questions: closed by decision but links no dec: id: {text}");
+                if (decIds.Count == 0 || !decIds.All(id => KnownDecision(line, "Open questions", id))) open.Add((text, line));
+                continue;
+            }
             if (!ClosedByEvidence().IsMatch(text)) { open.Add((text, line)); continue; }
             var evIds = EvIdRx().Matches(text).Select(x => x.Value).Distinct().ToList();
             if (evIds.Count == 0) E(line, "EV-UNLINKED", $"Open questions: closed by evidence but links no ev: id: {text}");
@@ -351,6 +386,9 @@ public static partial class SpecLinter
             foreach (var (text, line) in open.Where(q => !string.Equals(q.Text, "none", StringComparison.OrdinalIgnoreCase)))
                 E(line, "OPEN", $"open question blocks the gate: {text}");
         if (open.Count == 0) E(0, "OPEN", "Open questions must contain '- none' to pass the gate");
+
+        // the accumulation protocol (#17): a module with a registry is not done until the registry was reviewed against this extract
+        if (Directory.Exists(Registry.DirOf(moduleDir)) && Registry.Stale(moduleDir) is { } stale) E(0, "REGISTRY-STALE", $"registry/: {stale}");
 
         if (!spec.Front.TryGetValue("status", out var st) || st.Value != "reviewed") E(st.Line, "STATUS", "status must be 'reviewed' (set by the human reviewer, with reviewed-by)");
         else if (!spec.Front.TryGetValue("reviewed-by", out var rb) || !DateRx().IsMatch(rb.Value)) E(st.Line, "STATUS", "reviewed needs 'reviewed-by: <name> YYYY-MM-DD'");

@@ -24,7 +24,7 @@ public sealed record EntryChange(string Section, string Id, char Kind, List<stri
 /// </summary>
 public static class ManifestDiff
 {
-    public static readonly string[] Sections = { "form", "controls", "events", "bindings", "validationRules", "handlers", "methods", "serviceCalls", "dynamicUi", "raw", "diagnostics", "variants", "delta", "variantMethods", "factories" };
+    public static readonly string[] Sections = { "form", "controls", "events", "bindings", "validationRules", "handlers", "methods", "serviceCalls", "dynamicUi", "raw", "diagnostics", "variants", "delta", "variantMethods", "factories", "contract", "sharedState", "embeds" };
 
     public static FormManifest Load(string path) => JsonSerializer.Deserialize<FormManifest>(File.ReadAllText(path), Json.Options)!;
 
@@ -81,6 +81,11 @@ public static class ManifestDiff
             "delta" => Variants(m).SelectMany(v => v.Delta).Select(x => (x.Id, (object)x)),
             "variantMethods" => Variants(m).SelectMany(v => v.Methods.Select(x => ($"{v.Id} {x.Id}", (object)x))),
             "factories" => (m.Factories ?? new()).Select(x => (x.Id, (object)x)),
+            "contract" => m.Contract == null ? Array.Empty<(string, object)>() : m.Contract.Entries.Select(x => ($"entry {x.Handler}", (object)x))
+                .Concat(m.Contract.Inputs.Select(x => ($"input {x.Kind} {x.Name}", (object)x)))
+                .Concat(m.Contract.Outputs.Select(x => ($"output {x.Kind} {x.Name}", (object)x))),
+            "sharedState" => (m.SharedState ?? new()).Select(x => (x.Id, (object)x)),
+            "embeds" => (m.Embeds ?? new()).Select(x => (x.Id, (object)x)),
             _ => throw new ArgumentOutOfRangeException(nameof(section)),
         };
         // an id can repeat (one event wired to two handlers, a binding set twice): all entries under it are compared together

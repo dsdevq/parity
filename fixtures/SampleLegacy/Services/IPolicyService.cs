@@ -8,5 +8,6 @@ namespace SampleLegacy.Services
         List<ProductDto> GetProducts();
         void SavePolicyStep(PolicyDto policy, int step);
         List<RiderDto> GetAvailableRiders(int productId);
+        void AddBeneficiary(int policyId, int clientId);
     }
 }

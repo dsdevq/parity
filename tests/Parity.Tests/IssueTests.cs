@@ -12,7 +12,7 @@ namespace Parity.Tests;
 /// stated in each test; docs/testing.md maps issue numbers to test names.
 /// </summary>
 [Collection("extract")]
-public sealed class IssueTests
+public sealed partial class IssueTests
 {
     private readonly ExtractFixture _f;
     public IssueTests(ExtractFixture f) => _f = f;
@@ -506,7 +506,7 @@ public sealed class IssueTests
             {
                 File.WriteAllText(phase, p + "\n");
                 var refused = Assert.Throws<InvalidOperationException>(() => Evidence.AddFromConfig(cfg, null, "BeneficiarySearchForm", "Services/Dto.cs:21-21", null));
-                Assert.Equal($"phase '{p}' may read evidence but not the source; record evidence in the extract phase", refused.Message);
+                Assert.Equal($"phase '{p}' may read evidence but not the source; record evidence in the extract or map phase", refused.Message);
             }
             Assert.False(File.Exists(evFile));
             File.WriteAllText(phase, "extract\n");
@@ -1240,7 +1240,7 @@ public sealed class IssueTests
         // the layout, from the kit: every kit file is where adopt/kit.json says
         foreach (var f in new[] { "legacy/extract.config.json", "legacy/control-categories.json", "legacy/.phase", "legacy/hooks/guard-legacy.sh", "legacy/hooks/lint-on-stop.sh",
                      "legacy/templates/spec.md", "legacy/templates/fixture.json", ".claude/skills/parity-extract/SKILL.md", ".claude/skills/parity-specify/SKILL.md",
-                     ".claude/skills/parity-implement/SKILL.md", ".claude/skills/parity-bug/SKILL.md", "legacy/Orders/spec/.gitkeep", "legacy/Orders/fixtures/.gitkeep" })
+                     ".claude/skills/parity-implement/SKILL.md", ".claude/skills/parity-bug/SKILL.md", ".claude/skills/parity-map/SKILL.md", "legacy/Orders/spec/.gitkeep", "legacy/Orders/fixtures/.gitkeep" })
             Assert.True(repo.Exists(f), f);
         Assert.Equal("extract\n", repo.Read("legacy/.phase"));
         Assert.Equal(Norm(File.ReadAllText(Path.Combine(_f.RepoRoot, "adopt", "hooks", "guard-legacy.sh"))), Norm(repo.Read("legacy/hooks/guard-legacy.sh")));
@@ -1561,6 +1561,7 @@ public sealed class IssueTests
         string Prompt(string phase, string form, string module) => phase switch
         {
             "extract" => $"Run the parity-extract skill for form {form} of module {module}.",
+            "map" => $"Run the parity-map skill for module {module}.",
             "specify" => $"Run the parity-specify skill for form {form} of module {module}.",
             _ => $"Run the parity-implement skill for form {form} of module {module}.",
         };
@@ -1569,9 +1570,9 @@ public sealed class IssueTests
         var straight = Drive(new(), "Order Entry", "OrderForm");
         Assert.Equal(0, straight.Code);
         var lines = Log().Select(l => l.Split('|')).ToList();
-        Assert.Equal(new[] { "extract", "specify", "implement" }, lines.Select(l => l[1]));
-        Assert.Equal(3, lines.Select(l => l[0]).Distinct().Count());                         // three processes: three fresh sessions
-        Assert.Equal(new[] { "extract", "specify", "implement" }.Select(p => Prompt(p, "OrderForm", "Order Entry")), lines.Select(l => l[2]));
+        Assert.Equal(new[] { "extract", "map", "specify", "implement" }, lines.Select(l => l[1]));
+        Assert.Equal(4, lines.Select(l => l[0]).Distinct().Count());                         // four processes: four fresh sessions
+        Assert.Equal(new[] { "extract", "map", "specify", "implement" }.Select(p => Prompt(p, "OrderForm", "Order Entry")), lines.Select(l => l[2]));
         Assert.Equal("implement\n", repo.Read("legacy/.phase"));
 
         // named phases run alone, in the order given
@@ -1585,7 +1586,7 @@ public sealed class IssueTests
         File.Delete(log);
         var failed = Drive(new() { ["AGENT_FAIL"] = "specify" }, "Orders", "OrderForm");
         Assert.Equal(1, failed.Code);
-        Assert.Equal(new[] { "extract", "specify" }, Log().Select(l => l.Split('|')[1]));
+        Assert.Equal(new[] { "extract", "map", "specify" }, Log().Select(l => l.Split('|')[1]));
         File.Delete(log);
         var phaseBefore = repo.Read("legacy/.phase");
         Assert.Equal(2, Drive(new(), "Orders", "OrderForm", "extract", "bug").Code);

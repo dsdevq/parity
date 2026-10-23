@@ -28,6 +28,13 @@ public sealed class ExtractConfig
     public GuardConfig Guard { get; set; } = new();
     /// <summary>Tenant or customer variants of the module's forms (issue #20). Each one's subclasses become a delta on their base form.</summary>
     public List<VariantConfig> Variants { get; set; } = new();
+    /// <summary>
+    /// Types whose members hold state shared between units (issue #17): a session, a context, a static cache. Same pattern
+    /// syntax as <see cref="ServiceBoundary"/>. Empty skips the shared-state pass.
+    /// </summary>
+    public List<string> SharedState { get; set; } = new();
+    /// <summary>How deep below a handler shared-state reads and writes are recorded; null means <see cref="MaxCallDepth"/>, 0 means handlers only.</summary>
+    public int? SharedStateDepth { get; set; }
 
     [JsonIgnore] public string BaseDir { get; set; } = ".";
 

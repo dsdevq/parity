@@ -1,0 +1,11 @@
+{
+  "service": "svc:IPolicyService.AddBeneficiary",
+  "recorded": "synthetic",
+  "variant": "duplicate",
+  "scenario": "scn:beneficiary-chosen",
+  "source": "written by hand from the host's documented error reply",
+  "shapeVerified": true,
+  "note": "the host refuses a client who is already a beneficiary of the policy; the training host has no such pair to record",
+  "request": { "policyId": 5001, "clientId": 42 },
+  "error": { "code": "BENEFICIARY_EXISTS" }
+}

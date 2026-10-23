@@ -9,6 +9,7 @@
   "ignoreCalls": ["System.*", "DevExpress.*"],
   "controlCategories": "../templates/control-categories.json",
   "maxCallDepth": 2,
+  "sharedState": ["SampleLegacy.Session.*"],
   "output": "../.out/legacy",
   "variants": [
     { "id": "Larkspur", "subclasses": ["LarkspurClientSearchForm"] },

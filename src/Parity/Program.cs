@@ -21,6 +21,11 @@ parity - reverse-engineer a legacy WinForms module into a citable manifest and g
                                                        record legacy lines the manifest lacks as ev:<Unit>/<n>; refused in specify and implement
   parity fixture scaffold <svc-id> --from <recorded.json> --variant <name> [--out <dir>]
                                                        write <from>.<variant>.json, a synthetic copy of a recorded reply to edit
+  parity registry check   <module-dir> [--gate]        the registries against the extract: STALE, GAP, schema, citations, scenario use
+  parity registry stamp   <module-dir>                 mark the registry reviewed against the current extract (refused while check has errors)
+  parity registry init    <module-dir>                 write registry/ seeded from module.json; never overwrites
+  parity registry query   <module-dir> [--touches <id>] [--role <r>] [--right <r>] [--negative|--positive] [--unverified]
+  parity registry catalog <module-dir> [--out <file.md>]  dependencies with shapes, callers, error cases and fixture provenance
   parity probe    <project.csproj> [--forms <glob>]    anonymized statement shapes; paste into an issue
   parity report   <manifest.json>                      anonymized raw/diagnostics/unresolved; review, then paste into an issue
   parity hash     <manifest.json>
@@ -114,6 +119,42 @@ try
             Console.WriteLine(FixtureScaffold.Run(svc, from, variant, Opt(opts, "out")));
             Console.Error.WriteLine($"edit request and response into the {variant} reply, check the shape against a real one, then set shapeVerified: true and write the note");
             return 0;
+        }
+        case "registry":
+        {
+            var sub = Positional(opts, 0) ?? throw new ArgumentException("registry: the subcommand is check, stamp, init, query or catalog");
+            var dir = Positional(opts, 1) ?? throw new ArgumentException($"registry {sub} needs <module-dir> (legacy/<Module>)");
+            switch (sub)
+            {
+                case "check":
+                {
+                    var findings = Registry.Check(dir, opts.ContainsKey("gate"));
+                    foreach (var x in findings) Console.WriteLine(x.Severity == "warning" ? $"{x} [warning]" : x.ToString());
+                    Console.Error.WriteLine(SpecLinter.Summary(findings, null));
+                    return findings.Any(x => x.Severity == "error") ? 1 : 0;
+                }
+                case "stamp":
+                    try { Console.WriteLine($"registry stamped at {Registry.Stamp(dir)}"); return 0; }
+                    catch (InvalidOperationException ex) { Console.Error.WriteLine(ex.Message); return 1; }
+                case "init":
+                    foreach (var f in Registry.Init(dir)) Console.WriteLine(f);
+                    return 0;
+                case "query":
+                {
+                    var negative = opts.ContainsKey("negative") ? true : opts.ContainsKey("positive") ? false : (bool?)null;
+                    var q = new ScenarioQuery(Opt(opts, "touches"), Opt(opts, "role"), Opt(opts, "right"), negative, opts.ContainsKey("unverified"));
+                    foreach (var s in Registry.Query(dir, q))
+                        Console.WriteLine($"{s.Id}@{s.Version}	{s.Role}	{(s.Negative ? "negative" : "positive")}	{s.LastVerified ?? "unverified"}	{s.Title}	fixtures: {(s.Fixtures.Count == 0 ? "none" : string.Join(", ", s.Fixtures))}");
+                    return 0;
+                }
+                case "catalog":
+                {
+                    var md = Registry.RenderCatalog(Registry.Catalog(dir));
+                    if (Opt(opts, "out") is { Length: > 0 } outPath) File.WriteAllText(outPath, md); else Console.Write(md);
+                    return 0;
+                }
+                default: throw new ArgumentException($"registry: unknown subcommand '{sub}'");
+            }
         }
         case "probe":
         {

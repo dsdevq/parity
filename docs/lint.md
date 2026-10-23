@@ -19,7 +19,10 @@ keeps the agent out of it, not the tool.
 | EV-UNLINKED | lint | an Open questions line is `closed by evidence` but links no `ev:` id |
 | ORPHAN-RULE | lint | a rule covers nothing |
 | HEDGE | lint | a hedging word in given/when/then |
-| DROP-REASON | lint | a dropped Fields row or a quirk without `decided-by <name> <date>` |
+| DROP-REASON | lint | a dropped Fields row or a quirk without `decided-by dec:<id>` or `decided-by <name> <date>` |
+| DECISION-UNKNOWN | lint | a `decided-by dec:` or `closed by decision` id is not in `registry/decisions.json`, or a `closed by decision` line links no `dec:` id (the question then stays open) |
+| SCENARIO-UNKNOWN | lint | a rule's `scenarios:` names an id `registry/scenarios.json` lacks, or the module has no readable scenarios file |
+| SCENARIO-VERSION | lint | a rule's `scenarios:` entry has no `@<version>`, or one that is not the scenario's current version |
 | COV-CONTROL | gate | a manifest control that needs a Fields row has none |
 | COV-DYNAMIC | gate | a `dyn:` entry has no Fields row |
 | COV-EVENT | gate | an event is neither covered by a rule nor under No behavior |
@@ -35,10 +38,32 @@ keeps the agent out of it, not the tool.
 | VAR-UNKNOWN | lint | a rule's `variants:` names no variant of the manifest (or the form has none), or a `var:` id in a rule or in Variant deltas without a rule is not a delta entry |
 | VAR-SCOPE | lint | a `var:` id is used in a rule whose scope includes `base` or excludes its variant; a rule whose scope includes a variant cites a base handler or method that variant replaces, or covers an event on a control it removes |
 | VAR-UNCOVERED | gate | a variant delta entry is neither covered or cited by a rule scoped to its variant nor listed under Variant deltas without a rule |
-| OPEN | gate | Open questions, less the lines closed by evidence, is not exactly `- none` |
+| OPEN | gate | Open questions, less the lines closed by evidence or by decision, is not exactly `- none` |
+| REGISTRY-STALE | gate | the module has a `registry/` that was not stamped against the current extract (see Registry below) |
 | STATUS | gate | status is not `reviewed`, or reviewed-by lacks a name and date |
 | COV-TEST | gate + implement | a rule id is in the title of no active test declaration in a `.ts`, `.js` or `.cs` file under the directory. Active: `it(`, `test(`, `describe(` (also `.only`, `.each`) or an xunit `[Fact]`/`[Theory]` whose `DisplayName` or method name (`R_Form_001` for `R-Form-001`) holds the id. A comment, a bare string constant, `it.todo`, `.skip`, `xit`, `xtest`, `xdescribe` or `Skip =` is not coverage. Known limit: the match is a regex over declaration titles, not a parser, so a declaration built dynamically or disabled by other means is not seen, and a passing run is not checked. |
 | COV-TODO | implement, warning | an id that `COV-TEST` rejects appears only in a todo or skipped declaration; the message names the file and the form so the placeholder can be found |
 
 Coverage is computed from the manifest. The spec can add rows and rules; it cannot remove what the
 extractor found.
+
+## Registry
+
+`parity registry check <module-dir> [--gate]` checks `registry/` against the module's extract, in the same
+output format (`docs/adopt.md`, The map phase and the registries). Exit 1 on errors.
+
+| Code | Level | Meaning |
+|---|---|---|
+| REGISTRY-MISSING | error | no `registry/`, no `module.json`, or one of the three files is missing |
+| REGISTRY-STALE | error | a file's `module` stamp is not the current extract revision (a hash over every manifest's hash): a re-extract changed a manifest and the registry has not been reviewed since. `parity registry stamp` clears it once the rest is green |
+| REGISTRY-INVALID | error | not valid JSON; a field outside the schema (the schema holds only invented or structural fields, never host data); a missing or mistyped field; an id that is not `scn:`/`dec:` lowercase words; a repeated id; `role`, `rights` or an error `case` that is not a lowercase token; a date that is not `YYYY-MM-DD` |
+| DECISION-INVALID | error | a decision entry with a field outside the schema, a missing `question`, `answer`, `owner` or `date`, a date that is not `YYYY-MM-DD`, no `cite`, a malformed id or a repeated one |
+| REGISTRY-GAP | error | a `svc:` id of `module.json` has no entry in `dependencies.json` |
+| REGISTRY-ORPHAN | error | a `dependencies.json` entry names a `svc:` id the module no longer calls |
+| REGISTRY-UNCITED | error | a scenario cites nothing, or an error case names neither a fixture nor a cite |
+| FIXTURE-MISSING | error | an error case's fixture does not exist or records another service |
+| CITE-UNKNOWN | error | a scenario's `exercises` or any `cite` holds an id that is not in the module's manifests, or an `ev:` id with no record |
+| EV-STALE, EV-INVALID | error | a cited `ev:` record, as in spec lint |
+| SCENARIO-UNKNOWN | error | a fixture's `scenario` is not in `scenarios.json` |
+| SCENARIO-UNREFERENCED | warning, error with `--gate` | no fixture names the scenario and no spec rule lists it under `scenarios:` |
+| SCENARIO-UNVERIFIED | warning, error with `--gate` | the scenario has no `lastVerified` date |

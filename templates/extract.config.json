@@ -29,6 +29,9 @@
   "ignoreCalls": ["System.*", "DevExpress.*", "LegacyApp.Framework.Logging.*"],
   "controlCategories": "control-categories.json",
   "maxCallDepth": 2,
+  "//sharedState": "Types whose members several forms read and write (a session, a context, a static cache); same patterns as serviceBoundary. Each manifest then lists the state: members it reads and writes, down to sharedStateDepth (default maxCallDepth, 0 = handlers only), and module.json graphs producers and consumers. Leave it empty to skip the pass.",
+  "sharedState": ["LegacyApp.Framework.Session.*"],
+  "sharedStateDepth": 2,
   "//variants": "Tenant or customer subclasses of the module's forms. Each becomes a delta section in its base form's manifest, not a unit of its own. Without project, subclasses is required.",
   "variants": [
     { "id": "Harbor", "subclasses": ["HarborCustomerForm"] },

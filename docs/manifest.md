@@ -10,7 +10,8 @@ keeps the previous generation. One generation is kept; older ones are in git. `m
 (`form` for the header fields, then `controls`, `events`, `bindings`, `validationRules`, `handlers`,
 `methods`, `serviceCalls`, `dynamicUi`; `raw` by `file:line`, `diagnostics` by the debt key
 `CODE: Form.member`, both including the variants'; `variants` for each variant's header, `delta` by `var:` id,
-`variantMethods`, `factories` by `method:` id). It prints one line per entry, `+` added, `-` removed, `~` changed with the fields
+`variantMethods`, `factories` by `method:` id, `contract` by entry handler and by input or output kind and name,
+`sharedState` by `state:` id, `embeds` by `embed:` id). It prints one line per entry, `+` added, `-` removed, `~` changed with the fields
 that differ (`props.Text`, `source`, `loc`), sorted by id, and exits 0 when identical, 1 when not.
 `parity rebind` (see `docs/spec.md`) runs the same comparison between `.prev.json` and the new manifest.
 
@@ -23,17 +24,20 @@ that differ (`props.Text`, `source`, `loc`), sorted by id, and exits 0 when iden
 | `files` | string[] | partial files, relative to the project directory |
 | `caption` | string? | `this.Text` |
 | `controls[]` | ControlInfo | includes `$this`; designer-declared components too (categories `nonvisual`, `rule`) |
-| `events[]` | EventWiring | `source`: designer, code, dynamic, override, ctor |
+| `events[]` | EventWiring | `source`: designer, code, dynamic, override, ctor, entry, reflection |
 | `bindings[]` | BindingInfo | `DataBindings.Add`, `DataSource`, `Properties.DataSource`, grid column `FieldName` |
 | `validationRules[]` | ValidationRuleInfo | `SetValidationRule(control, rule)`; the rule's properties are on the rule's control entry |
 | `handlers[]` | HandlerInfo | see below |
 | `methods[]` | MethodInfo | transitive, depth 1..maxCallDepth; `source` null when only metadata was available |
-| `serviceCalls[]` | ServiceCallInfo | aggregated per `svc:` id with callers and argument texts seen |
+| `serviceCalls[]` | ServiceCallInfo | aggregated per `svc:` id with callers and argument texts seen; `signature`, `request` and `reply` (type templates, never values) and `sites` (each caller with its arguments) feed the dependency catalog |
 | `dynamicUi[]` | DynamicUiInfo | controls created in code |
 | `constants[]` | ConstantInfo | constants and resource texts the slices and bound model read by name; facts, not ids |
 | `raw[]` | RawStatement | designer statements not interpreted |
 | `variants[]` | VariantInfo? | only when `variants` is configured and a subclass of this form was found; see Variants |
 | `factories[]` | FactoryInfo? | only alongside variants or a configured factory; see Factories |
+| `contract` | UnitContract? | the unit's entries, inputs and outputs; see Context around a unit |
+| `sharedState[]` | SharedStateUse? | only when `sharedState` is configured and the unit touches a member; see Context around a unit |
+| `embeds[]` | EmbedInfo? | other units of the module this unit creates; see Context around a unit |
 | `diagnostics[]` | Diagnostic | `REF-MISSING`, `REF-LOAD`, `BASE-UNRESOLVED`, `NO-DESIGNER`, `TYPE-UNRESOLVED`, `RESX-MISSING`, `MEMBER-UNRESOLVED`, `HANDLER-MISSING`, `WIRING-UNKNOWN`, `UNREACHED-METHOD` (says what it checked and where else the name appears), `GRID-NO-COLUMNS` (a grid view, tree list, list view or DataGridView with no designer column, naming the loaded code that touches its `Columns`), `RESOURCE-KEY-MISSING` (a resource key read by a slice or a `[Display]` that the resource's default-culture resx in the project does not define; names the resource, the resx and the readers) |
 
 ## Ids
@@ -49,6 +53,10 @@ that differ (`props.Text`, `source`, `loc`), sorted by id, and exits 0 when iden
 | `svc:` | `svc:IService.Method` (containing type's simple name) | Service calls table; `then` text |
 | `ev:` | `ev:Class/<n>`, not in the manifest: a record in `evidence/<Class>.json` written by `parity evidence add` | `cite:`; a question closed by evidence |
 | `var:` | `var:Variant` (the variant), `var:Variant/<kind>/<name>` (one delta entry) | `covers:` or `cite:` of a rule scoped to that variant, or Variant deltas without a rule |
+| `state:` | `state:Type.Member` (simple type name) of a configured shared-state type | a scenario's `exercises`; `then` text |
+| `embed:` | `embed:Host/<creating handler or method>/<local or field>` | a scenario's `exercises` |
+| `scn:` | `scn:<words>`, not in the manifest: a scenario in `registry/scenarios.json`, versioned | a rule's `scenarios:` as `scn:<id>@<version>`; a fixture's `scenario` |
+| `dec:` | `dec:<words>`, not in the manifest: a decision in `registry/decisions.json` | `decided-by dec:<id>`; `closed by decision dec:<id>` |
 
 ## ControlInfo
 
@@ -173,9 +181,79 @@ family, plus any `factories` configured on a variant: a type, or `Type.Method`, 
 An entry that matches no type, or from which no factory is read, is a `VARIANT-CONFIG` diagnostic; the second
 is checked only in a run that describes the entry's variant.
 
+## Context around a unit
+
+A unit is a form class the glob selects. What crosses its edge is recorded in three sections, all derived
+from the handlers, methods and declarations the extract already reads, so they cost no extra compilation.
+
+**`contract`** `{ entries[], inputs[], outputs[] }`.
+`entries[]` is `handler, kind, signature, loc, invokedFrom?`: every way in from outside. `kind` is one of:
+
+- `ctor`;
+- `entry`: a non-private method nothing in the unit wires;
+- `reflection`: a private method whose name is the first argument, as a string literal, of a
+  `GetMethod`, `GetProperty` or `InvokeMember` call on `typeof(Unit)` or `x.GetType()` in a loaded file.
+  It becomes a handler with an `evt:Unit/$this.<name>` pseudo-event of source `reflection`, so it is
+  coverable like any entry. `invokedFrom` lists the calling `file:line`s.
+
+`inputs[]` and `outputs[]` are `kind, name, type, via[], values?`. `via` lists the handler and method ids that
+read or write the value. Input kinds:
+
+- `param`: of an entry;
+- `property`: a property of the unit with a non-private setter, which the unit reads;
+- `state`: a shared-state member read;
+- `host`: a member read on an object handed in through a ctor or entry parameter.
+
+Output kinds:
+
+- `property`: a property of the unit with a public getter, which the unit writes;
+- `dialog-result`;
+- `state`: a shared-state member written;
+- `host`: a member written on a handed-in object;
+- `host-call`: a method called on one.
+
+**`sharedState[]`** `{ id, type, member, valueType, reads[], writes[] }`. Each entry is a member of a type in
+the config's `sharedState` list that the unit reads or writes. The pass covers the unit's handlers and the
+in-source methods they reach, down to `sharedStateDepth` (default `maxCallDepth`, 0 = handlers only). It stops
+at another unit's code, which is described in that unit's manifest. The analysis is syntactic:
+
+- a write is the left side of an assignment or an `out` argument;
+- a compound assignment, `++`, `--` or `ref` argument is both;
+- anything else is a read.
+
+The extract log prints `shared-state: <n> bodies to depth <d>, <n> access(es), <t>s`, or
+`shared-state: skipped` when `sharedState` is empty. `docs/design.md` explains why the pass is syntactic.
+
+**`embeds[]`** `{ id, unit, class, via, mode, factory?, factoryArgs?, calls[], sets[], reads[], loc, statement }`.
+Each entry is another unit of the module that this unit creates. `mode` is one of:
+
+- `dialog` (`ShowDialog`);
+- `show`;
+- `embedded` (added to a container; it is then also a `dyn:` entry);
+- `created`.
+
+`factory` is the `method:` id when the instance comes from a factory rather than `new`. That factory's cases
+(Factories, #20) say which variant each host key gets. `calls`, `sets` and `reads` are `member, args, loc,
+reflection?`: what the host does with the instance. A `GetMethod(...).Invoke` on it is a call with
+`reflection: true`.
+
 ## module.json
 
-`schemaVersion, module, project, forms[], serviceCalls[], duplicates[] { hash, kind: exact|near, tokens, members[] }`
+`schemaVersion, module, project, forms[], serviceCalls[], duplicates[] { hash, kind: exact|near, tokens, members[] }`,
+and the three module-wide context graphs. Each is built from the manifests on disk, so `module.json`
+accumulates across runs like `forms`.
+
+- `sharedState { types[], fields[] }`. Each field is `id, version, type, valueType, producers[], consumers[],
+  retired?`, where each producer or consumer is `{ unit, via }`.
+  - `version` starts at 1 and goes up when the member's value type changes.
+  - A field no manifest touches any more stays, with `retired: true`. Its id is never reused for something else.
+  - Absent when `sharedState` is not configured.
+- `composition[] { unit, hosts[] }`: for each embedded unit, every host. A host is `unit, embed, mode,
+  factory?, variants?, setup[]`. `variants` lists the factory's cases as `key -> variant`. `setup` lists the
+  calls and sets the host makes before showing the unit, a reflective call marked `(reflection)`.
+- `dependencies[]`: one per `svc:` id. Each is `id, type, method, signature, request, reply, callers[]`,
+  where a caller is `{ unit, via, args[] }`. Error cases and fixture provenance are not facts of the code.
+  They live in `registry/dependencies.json` and `fixtures/`, and `parity registry catalog` joins the three.
 
 ## Grid columns: what is extracted
 

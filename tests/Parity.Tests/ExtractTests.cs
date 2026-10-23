@@ -17,6 +17,7 @@ public sealed class ExtractTests
             ["BaseDialogForm"] = new[] { "NO-DESIGNER" },             // a base class without InitializeComponent
             ["BeneficiarySearchForm"] = new[] { "GRID-NO-COLUMNS", "UNREACHED-METHOD" }, // gvHistory's columns are built in code; btnExport_Click is never wired
             ["PremiumHistoryForm"] = new[] { "RESOURCE-KEY-MISSING" },  // lsArchiveReasonTooLong is not in Captions.resx (#19)
+            // BeneficiaryHostForm and CoverSummaryForm (#17) have none: the reflection-invoked ApplyDefaults is an entry, not unreached
         };
         foreach (var s in _f.Summaries)
         {
@@ -25,7 +26,7 @@ public sealed class ExtractTests
             Assert.True((expected.GetValueOrDefault(s.Form) ?? Array.Empty<string>()).OrderBy(x => x).SequenceEqual(codes),
                 $"{s.Form}: diagnostics " + string.Join("; ", _f.Manifest(s.Form).Diagnostics.Select(d => d.Code + " " + d.Message)));
         }
-        Assert.Equal(7, _f.Summaries.Count);
+        Assert.Equal(9, _f.Summaries.Count);
     }
 
     [Fact]
@@ -178,7 +179,7 @@ public sealed class ExtractTests
         var mod = _f.Module();
         var exact = mod.Duplicates.Where(c => c.Kind == "exact").ToList();
         Assert.Contains(exact, c => c.Members.Contains("handler:ClientSearchForm/btnSelect_Click") && c.Members.Contains("handler:ClaimClientSearchForm/btnSelect_Click"));
-        Assert.DoesNotContain(exact, c => c.Members.Any(x => x.StartsWith("method:") && c.Members.Any(y => y.StartsWith("handler:") && y.EndsWith(x[(x.LastIndexOf('.') + 1)..x.IndexOf('(')]))));
+        Assert.DoesNotContain(exact, c => c.Members.Any(x => x.StartsWith("method:") && c.Members.Any(y => y.StartsWith("handler:") && y.EndsWith(x[(x[..x.IndexOf('(')].LastIndexOf('.') + 1)..x.IndexOf('(')]))));
         var near = Assert.Single(mod.Duplicates, c => c.Kind == "near");
         Assert.Equal(new[] { "handler:ClaimClientSearchForm/btnSearch_Click", "handler:ClientSearchForm/btnSearch_Click" }, near.Members);
     }
@@ -186,7 +187,7 @@ public sealed class ExtractTests
     [Fact]
     public void only_the_files_the_module_needs_are_loaded()
     {
-        Assert.Contains("files loaded: 29 of 30 (+1 from variant projects)", _f.Log);
+        Assert.Contains("files loaded: 34 of 35 (+1 from variant projects)", _f.Log);
         Assert.Contains("references: ", _f.Log);
         Assert.Contains("round 1:", _f.Log);
     }

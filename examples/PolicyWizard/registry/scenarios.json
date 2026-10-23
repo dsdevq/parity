@@ -1,0 +1,26 @@
+{
+  "module": "sha256:0000000000000000",
+  "scenarios": [
+    {
+      "id": "scn:beneficiary-chosen",
+      "version": 1,
+      "title": "a beneficiary chosen on the host form is added to the policy from the cover summary",
+      "role": "agent",
+      "rights": ["policy.edit"],
+      "negative": false,
+      "exercises": ["handler:BeneficiaryHostForm/btnChoose_Click", "handler:CoverSummaryForm/btnConfirm_Click", "svc:IPolicyService.AddBeneficiary", "state:WizardSession.BeneficiaryId"],
+      "lastVerified": "2026-10-20",
+      "cite": ["handler:CoverSummaryForm/btnConfirm_Click"]
+    },
+    {
+      "id": "scn:deceased-beneficiary-refused",
+      "version": 1,
+      "title": "the search the host opens refuses a deceased client unless the host allows it",
+      "role": "agent",
+      "rights": ["policy.edit"],
+      "negative": true,
+      "exercises": ["handler:BeneficiaryHostForm/btnChoose_Click", "handler:BeneficiarySearchForm/Setup"],
+      "cite": ["handler:BeneficiarySearchForm/Setup"]
+    }
+  ]
+}

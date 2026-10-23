@@ -2,6 +2,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Parity.Model;
+using Parity.Project;
 using Diagnostic = Parity.Model.Diagnostic;
 
 namespace Parity.Passes;
@@ -10,6 +11,14 @@ public sealed record FormClass(INamedTypeSymbol Symbol, List<ClassDeclarationSyn
 
 public static class FormDiscovery
 {
+    /// <summary>
+    /// A class the project declares (loaded, or resolved from selfAssembly) whose base chain reaches a configured form base
+    /// type: a unit of its own.
+    /// </summary>
+    public static bool IsUnit(ITypeSymbol? type, ExtractConfig cfg, FileIndex index) =>
+        type is INamedTypeSymbol { TypeKind: TypeKind.Class } && (type.DeclaringSyntaxReferences.Length > 0 || index.FilesFor(type.Name).Count > 0)
+        && Syntax.TypeChain(type).Skip(1).Any(b => Syntax.Matches(b, cfg.FormBaseTypes));
+
     /// <summary>Every class in the compilation whose base chain hits a configured form base type.</summary>
     public static List<FormClass> Find(CSharpCompilation compilation, ExtractConfig cfg, Func<string, bool> nameFilter) => Find(compilation, cfg, nameFilter, out _);
 

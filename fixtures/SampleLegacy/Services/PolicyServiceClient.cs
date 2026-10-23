@@ -9,6 +9,7 @@ namespace SampleLegacy.Services
         public List<ProductDto> GetProducts() { return new List<ProductDto>(); }
         public void SavePolicyStep(PolicyDto policy, int step) { }
         public List<RiderDto> GetAvailableRiders(int productId) { return new List<RiderDto>(); }
+        public void AddBeneficiary(int policyId, int clientId) { }
     }
 
     public class ClientServiceClient : IClientService
