@@ -137,7 +137,7 @@ the consuming repo does not have, hooks ordered after a repo's own. `parity init
 - **`settings.json` is merged, never replaced.** Parity's entries are appended after the repo's own for each event
   (hooks run in order, and the repo's hooks may depend on running first), nothing foreign is reordered or
   rewritten, and an entry already wired (same command or same script) is not added twice. A file with comments is
-  refused, because rewriting it would lose them; the same strictness is needed by `jq` in the guard.
+  read but never rewritten, because rewriting it would lose them: what it lacks is named for the adopter to add.
 - **The config skeleton comes from the csproj**, using the same reader as `extract`, so what `init` writes is what
   `extract` resolves. What is a decision of the adopter (`serviceBoundary`, `variants`) is emptied, not guessed.
 - **`doctor` looks tools up instead of running them** (`sh`, `jq`, `parity` on PATH or `PARITY_BIN`) and reuses

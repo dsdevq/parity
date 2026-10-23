@@ -36,8 +36,11 @@ public static class Init
         // everything that can refuse is read before anything is written
         var settingsPath = Abs(m.Settings.To);
         var wantSettings = SettingsMerge.Parse(kit.Text(m.Settings.From), m.Settings.From);
-        var haveSettings = File.Exists(settingsPath) ? SettingsMerge.Parse(File.ReadAllText(settingsPath), m.Settings.To) : null;
+        var haveText = File.Exists(settingsPath) ? File.ReadAllText(settingsPath) : null;
+        var haveSettings = haveText == null ? null : SettingsMerge.Parse(haveText, m.Settings.To);
         var addedSettings = haveSettings == null ? null : SettingsMerge.Merge(haveSettings, wantSettings);
+        if (addedSettings is { Count: > 0 } && !SettingsMerge.IsStrict(haveText!))
+            throw new InvalidOperationException($"{m.Settings.To} has comments or trailing commas, which rewriting it would drop: add {string.Join(", ", addedSettings)} from {m.Settings.From} by hand, then run parity init again");
         var cfgPath = Abs(m.Config.To);
         var built = File.Exists(cfgPath) ? null : ConfigSkeleton.Build(kit.Text(m.Config.From), repo, Path.GetDirectoryName(cfgPath)!, o.Project);
 

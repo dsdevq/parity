@@ -1314,19 +1314,30 @@ public sealed class IssueTests
         Assert.Equal(0, fresh.Parity("init").Code);
         Assert.True(System.Text.Json.Nodes.JsonNode.DeepEquals(kitSettings, fresh.Settings()));
 
-        // settings.json that is not strict JSON (comments: rewriting would drop them; a duplicate key: which one counts is
-        // unclear) is refused as a failure, not a usage error, before init writes anything
-        foreach (var bad in new[] { "{\n  // keep me\n  \"hooks\": {}\n}\n", "{ \"hooks\": {}, \"hooks\": {} }\n" })
+        // a settings.json init cannot rewrite safely is refused as a failure, not a usage error, before init writes anything:
+        // comments while a kit hook is missing (a rewrite would drop them), and a duplicate key (which one counts is unclear)
+        foreach (var (bad, why) in new[] { ("{\n  // keep me\n  \"hooks\": {}\n}\n", "comments"), ("{ \"hooks\": {}, \"hooks\": {} }\n", "not valid JSON") })
         {
             using var refusing = new ConsumingRepo(_f.RepoRoot, foreignSetup: false);
             Directory.CreateDirectory(refusing.Path_(".claude"));
             File.WriteAllText(refusing.SettingsPath, bad);
-            var before = Snapshot(refusing);
+            var untouched = Snapshot(refusing);
             var refused = refusing.Parity("init", "--merge");
             Assert.Equal(3, refused.Code);
-            Assert.Contains("not strict JSON", refused.Err);
-            Assert.Equal(before, Snapshot(refusing));
+            Assert.Contains(why, refused.Err);
+            Assert.Equal(untouched, Snapshot(refusing));
         }
+
+        // with the kit's hooks added by hand, a commented settings.json is accepted and left byte for byte as it is
+        using var commented = new ConsumingRepo(_f.RepoRoot, foreignSetup: false);
+        Directory.CreateDirectory(commented.Path_(".claude"));
+        var handWired = "// wired by hand\n" + File.ReadAllText(Path.Combine(_f.RepoRoot, "adopt", ".claude", "settings.json"));
+        File.WriteAllText(commented.SettingsPath, handWired);
+        var accepted = commented.Parity("init", "--merge");
+        Assert.Equal(0, accepted.Code);
+        Assert.Equal("unchanged", InitActions(accepted.Out)[".claude/settings.json"]);
+        Assert.Equal(handWired, commented.Read(".claude/settings.json"));
+        Assert.True(commented.Exists("legacy/.phase"));
     }
 
     [Fact]

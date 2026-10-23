@@ -56,8 +56,9 @@ Every line it prints says what happened to one path:
 - **settings.json.** With `--merge`, parity's hook entries are appended to each event's array **after** the
   repo's own, which keep their order and content; permissions and every other key stay as they are. A hook the
   repo already wires (same command, or the same script) is not added twice, and a different matcher on it is
-  left alone (`doctor` warns). A `settings.json` with comments is refused: rewriting it would drop them, so add
-  the block from `adopt/.claude/settings.json` by hand. Without a `settings.json`, the kit's is written.
+  left alone (`doctor` warns). A `settings.json` with comments (or trailing commas) is read, but never rewritten:
+  while it lacks something of the kit's, `init` names what and stops before writing anything, so add those
+  entries from `adopt/.claude/settings.json` by hand and run `init` again. Without a `settings.json`, the kit's is written.
 - **Skills.** Only `parity-*` folders are installed. The repo's own skills are not touched. The specify skill
   starts from `.claude/skills/parity-specify/spec.md`, a copy of `templates/spec.md` next to it, and every
   skill calls the binary as `"${PARITY_BIN:-parity}" <command>`: `PARITY_BIN` when set, else `parity` on PATH.

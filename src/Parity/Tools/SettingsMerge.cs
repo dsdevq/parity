@@ -13,11 +13,18 @@ public static class SettingsMerge
 {
     static readonly JsonSerializerOptions Out = new() { WriteIndented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
-    /// <summary>Strict JSON only: rewriting a file with comments would silently drop them.</summary>
+    /// <summary>Comments and trailing commas are read; a duplicate key is refused, since which one counts is unclear.</summary>
     public static JsonObject Parse(string text, string what)
     {
-        try { return JsonNode.Parse(text, null, new JsonDocumentOptions { AllowDuplicateProperties = false }) as JsonObject ?? throw new InvalidOperationException($"{what} is not a JSON object"); }
-        catch (JsonException ex) { throw new InvalidOperationException($"{what} is not strict JSON ({ex.Message}); parity will not rewrite it and drop its comments. Add the hooks block from adopt/.claude/settings.json by hand"); }
+        try { return JsonNode.Parse(text, null, new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true, AllowDuplicateProperties = false }) as JsonObject ?? throw new InvalidOperationException($"{what} is not a JSON object"); }
+        catch (JsonException ex) { throw new InvalidOperationException($"{what} is not valid JSON ({ex.Message})"); }
+    }
+
+    /// <summary>Whether rewriting the text loses nothing: no comments and no trailing commas.</summary>
+    public static bool IsStrict(string text)
+    {
+        try { using var _ = JsonDocument.Parse(text); return true; }
+        catch (JsonException) { return false; }
     }
 
     public static string Serialize(JsonNode node) => node.ToJsonString(Out) + "\n";
