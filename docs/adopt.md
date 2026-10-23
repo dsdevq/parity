@@ -48,10 +48,11 @@ Put the `parity` binary on PATH (`bin/publish.sh win-x64` here, or a release zip
 5. Record fixtures for every id in `module.json` `serviceCalls` with your own runner, one file per
    recording, `service` and `recorded` set. An outcome the host cannot be made to return is a synthetic
    fixture: `parity fixture scaffold <svc-id> --from <recorded.json> --variant <outcome>` writes a
-   labelled copy to edit into that reply (`docs/spec.md`, Fixtures). Quote the legacy facts a rule will need that the manifest lacks
-   with `parity evidence add <Form> <file>:<start>-<end> --note <text>` (the file relative to the
-   legacy root; `--config` defaults to `legacy/extract.config.json`). It reads `legacy/.phase` and
-   refuses in `specify` and `implement`: the agent there may cite evidence, not collect it.
+   labelled copy to edit into that reply (`docs/spec.md`, Fixtures). Quote the legacy facts a rule will
+   need that the manifest lacks with `parity evidence add <Form> <file>:<start>-<end> --note <text>`
+   (the file relative to the legacy root; `--config` defaults to `legacy/extract.config.json`). It reads
+   `legacy/.phase` and refuses in `specify` and `implement`: the agent there may cite evidence, not
+   collect it.
 6. Set `legacy/.phase` to `specify`, start a fresh agent session, run the `parity-specify` skill for
    the form. The hook denies reads under the legacy path in this phase; the agent works from
    `manifests/<Form>.md` and `evidence/<Form>.json`. Iterate until `parity lint` is green. The linter

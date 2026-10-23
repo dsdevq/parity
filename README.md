@@ -226,7 +226,7 @@ manifests and specs are meant to be committed and reviewed.
 
 - `legacy/<Module>/module.json` lists every `svc:` id. Record at least one real call per id with your
   own runner into `legacy/<Module>/fixtures/<name>.json`, shape per `templates/fixture.json`, the
-  `service` field set to the id.
+  `service` field set to the id and `recorded` to the capture date (`synthetic` only for a variant, see Gate).
 - Check: `ls legacy/<Module>/fixtures` has a file for every id.
 - While `.phase` is still `extract`, quote any legacy fact a rule will need that the manifest lacks:
   `parity evidence add <Form> <file>:<start>-<end> --note <text>` (file relative to the legacy root)
