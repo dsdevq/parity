@@ -2,7 +2,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Read|Grep|Glob|Bash|Edit|Write|MultiEdit",
+        "matcher": "^(Read|Grep|Glob|Bash|PowerShell|Monitor|Edit|Write|MultiEdit|NotebookEdit|mcp__.*)$",
         "hooks": [{ "type": "command", "command": "sh legacy/hooks/guard-legacy.sh" }]
       }
     ],

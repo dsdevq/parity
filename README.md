@@ -134,9 +134,10 @@ that will hold the new implementation.
 **0. Prerequisites**
 
 - Windows: Git for Windows. Run every command in this section from **Git Bash**, not PowerShell;
-  the hooks run under its `sh`. `jq` is optional: the guard hook falls back to `sed`, and if it
-  still cannot find the legacy root it refuses every call in a guarded phase rather than failing open.
-  Setting `PARITY_LEGACY_ROOT` to the legacy project directory bypasses both.
+  the hooks run under its `sh`. Install `jq` (`winget install jqlang.jq`, `scoop install jq`): the guard
+  hook needs it to read tool input and refuses every call in specify and implement without it, rather
+  than failing open. A `sed` fallback only finds the legacy root, so the refusal can say what is wrong;
+  setting `PARITY_LEGACY_ROOT` to the legacy project directory skips that lookup.
 - The legacy project must have been **built at least once** so its `bin` folder holds its own DLL and
   every referenced DLL (DevExpress included). parity never builds it; it reads the outputs.
 - For a .NET Framework legacy project, the Reference Assemblies folder must exist, typically
@@ -176,7 +177,7 @@ entries per event are fine and run in order:
 ```json
 "PreToolUse": [
   { "matcher": "Bash", "hooks": [ { "type": "command", "command": "your-existing-hook" } ] },
-  { "matcher": "Read|Grep|Glob|Bash|Edit|Write|MultiEdit", "hooks": [ { "type": "command", "command": "sh legacy/hooks/guard-legacy.sh" } ] }
+  { "matcher": "^(Read|Grep|Glob|Bash|PowerShell|Monitor|Edit|Write|MultiEdit|NotebookEdit|mcp__.*)$", "hooks": [ { "type": "command", "command": "sh legacy/hooks/guard-legacy.sh" } ] }
 ]
 ```
 
@@ -232,7 +233,8 @@ manifests and specs are meant to be committed and reviewed.
 **6. Specify, then implement, each in a fresh session**
 
 - Write `specify` into `legacy/.phase`, start a new session, run the `parity-specify` skill for the form.
-  The guard hook now refuses any read under the legacy path; that is intended.
+  The guard hook now refuses anything outside the consuming repo, and every MCP code-index tool; that
+  is intended (`docs/adopt.md`, "The guard hook").
 - Check: `parity lint legacy/<Module>/spec/<Form>.md` prints `0 error(s)`. A human reviews the spec
   against the running legacy app and sets `status: reviewed` with `reviewed-by: <name> <date>`.
 - Check: `parity lint legacy/<Module>/spec/<Form>.md --gate` prints `0 error(s)`.

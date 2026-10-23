@@ -51,12 +51,12 @@ Put the `parity` binary on PATH (`bin/publish.sh win-x64` here, or a release zip
    legacy root; `--config` defaults to `legacy/extract.config.json`). It reads `legacy/.phase` and
    refuses in `specify` and `implement`: the agent there may cite evidence, not collect it.
 6. Set `legacy/.phase` to `specify`, start a fresh agent session, run the `parity-specify` skill for
-   the form. The hook denies reads under the legacy path in this phase; the agent works from
+   the form. The hook denies anything outside the consuming repo in this phase; the agent works from
    `manifests/<Form>.md` and `evidence/<Form>.json`. Iterate until `parity lint` is green. The linter
    itself reads the legacy source to re-hash every cited `ev:` record (`EV-STALE` when it moved): the
    guard constrains the agent, not the tool, so the legacy root must be reachable where lint runs
-   (`PARITY_LEGACY_ROOT` overrides the path recorded in the evidence file). Review the spec against the running
-   legacy app. Set `status: reviewed`.
+   (`PARITY_LEGACY_ROOT` overrides the path recorded in the evidence file). Review the spec against the
+   running legacy app. Set `status: reviewed`.
 7. Set `.phase` to `implement`, fresh session, `parity-implement` skill. The agent gets the spec, the
    fixtures and your scaffold; tests are named with rule ids; the stop hook runs
    `parity lint --gate --implement <dir>`.
@@ -67,5 +67,72 @@ Put the `parity` binary on PATH (`bin/publish.sh win-x64` here, or a release zip
 
 A skill is prose. The agent that reads "do not open the legacy repo" will open it when the manifest
 is unfamiliar and the legacy file is one `Read` away. `guard-legacy.sh` makes the legacy path
-physically unavailable during specify and implement; `lint-on-stop.sh` refuses to end a turn with a
+unavailable during specify and implement (next section); `lint-on-stop.sh` refuses to end a turn with a
 red spec. Both are a few lines of shell reading the hook's JSON from stdin.
+
+## The guard hook
+
+`guard-legacy.sh` is a PreToolUse hook. In `extract` and `bug` it does nothing. In `specify` and
+`implement` it works as an **allow-list**: a tool call may only touch the consuming repo (the directory
+the hook runs in) minus the legacy source root, plus the directories in `guard.allowRoots`. The manifests,
+specs, fixtures, evidence and scaffold are all inside the repo, so they need no entry. The legacy root
+is `PARITY_LEGACY_ROOT`, else the directory of `project` in `legacy/extract.config.json`; it is always
+refused, even when an allowed root contains it.
+
+| Tool | What is checked |
+|---|---|
+| `Read`, `Edit`, `Write`, `MultiEdit`, `NotebookEdit` | the file path, resolved against the `cwd` in the hook input, must be allowed |
+| `Grep`, `Glob` | the search path (the `cwd` when omitted) and the literal prefix of the glob must be allowed |
+| `Bash`, `PowerShell`, `Monitor` | the `cwd`; every path-like token (contains a slash, is `.` or `..`, a drive path); a `cd`, `pushd`, `Set-Location` and friends must stay inside the allowed roots. `~` and `$VAR/...` paths cannot be resolved and are refused |
+| `mcp__*` | refused when the tool name matches the deny-list (below) |
+| anything else | refused: the hook cannot decide |
+
+Paths are compared case-insensitively with `/` and `\` equal and `C:\x`, `/c/x`, `/mnt/c/x` and
+`/cygdrive/c/x` the same place. After those checks the legacy root is also searched for as a plain
+substring of the whole input, which catches a root named in the input of a tool the hook does not parse.
+
+**Fail closed.** If the hook cannot decide in a restricted phase it exits 2 with a one-line reason: root
+unknown, input not JSON, no path in a path tool's input, unresolvable `cd`, unknown tool, unreadable
+`guard` settings, **or no `jq`**. `jq` is required to read tool input; the `sed` fallback only finds the
+legacy root so the message can say what is wrong. Install it with `winget install jqlang.jq`,
+`scoop install jq`, `brew install jq` or `apt install jq`.
+
+**MCP code-index servers.** A code-search or code-graph server that indexes the legacy tree usually takes
+no path, so no path check can see it. The hook refuses MCP tools by name instead. Built in, matched
+case-insensitively against the full `mcp__<server>__<tool>` name (`?` is any one character): `*code?index*`,
+`*codeindex*`, `*code?graph*`, `*codegraph*`, `*code?search*`, `*codesearch*`, `*codebase*`, `*repo?map*`,
+`*repomap*`, `*symbol*`, `*semantic?search*`, `*serena*`, `*sourcegraph*`, `*tree?sitter*`, `*treesitter*`,
+`*ast?grep*`, `*lsp*`, `*language?server*`, `*roslyn*`, `*ctags*`, `*cocoindex*`, `*gitnexus*`,
+`*graphify*`, `*claude?context*`. Add your own in `legacy/extract.config.json`:
+
+```json
+"guard": {
+  "denyTools": ["mcp__house-index__*"],
+  "allowRoots": ["../../shared-fixtures"]
+}
+```
+
+`allowRoots` entries are relative to the config file (`legacy/`) or absolute. The cleanest fix for an
+index server is still not to register it in the consuming repo's MCP config for these phases.
+
+**Matcher per platform.** The hook only sees the tools the `matcher` in `.claude/settings.json` selects:
+
+| Platform | Shell tool | Covered by |
+|---|---|---|
+| macOS, Linux, Windows with Git Bash | `Bash` | the shipped matcher |
+| Windows with the native PowerShell tool enabled | `PowerShell` | the shipped matcher |
+| any, long-running watchers | `Monitor` (takes a `command`) | the shipped matcher |
+| any, MCP servers | `mcp__<server>__<tool>` | `mcp__.*` in the shipped matcher |
+
+The shipped matcher is `^(Read|Grep|Glob|Bash|PowerShell|Monitor|Edit|Write|MultiEdit|NotebookEdit|mcp__.*)$`.
+If your Claude Code version names a tool differently, or adds another shell or file tool, add it to the
+matcher; a tool the matcher does not select is never checked. A name the matcher selects but the hook does
+not know is refused. The hook command itself runs under `sh` (Git Bash on Windows) on every platform.
+
+**Proof.** Every denial appends one tab-separated line to `legacy/.guard-denials.log`: UTC date, phase,
+tool, reason. The reason carries the resolved path or the tool name, so the file is a record of every
+attempt on the legacy source during the run, all of them blocked. Keep it with the run's evidence; an
+absent or empty file after a specify or implement session says the agent never asked for the source
+through a guarded tool. This is a guard for a cooperative agent, not a sandbox: it does not follow
+symlinks or junctions, cannot see inside a script or program the agent runs, and does not expand shell
+variables. Enforce a hard guarantee with file permissions or a separate machine user.

@@ -18,7 +18,7 @@ form with invented names, then the extractor is changed until the test passes.
 | #6 probe misses `.designer.cs` | `BeneficiarySearchForm.designer.cs` (lowercase) | `IssueTests.issue_6_probe_matches_a_lowercase_designer_companion_by_exact_form_name` |
 | #7 references reloaded per round, no timing, solution-wide globs | - | `ProjectTests.references_can_be_derived_from_the_csproj_items`, `IssueTests.issue_7_references_load_once_and_each_phase_is_timed` |
 | #8 CRLF breaks tests and slices | - | `ExtractTests.slices_never_contain_carriage_returns`, `IssueTests.issue_8_a_spec_with_crlf_line_endings_lints_identically`; `.gitattributes` forces LF |
-| #9 guard hook fails open without jq | - | `GuardHookTests.issue_9_guard_fails_closed_without_a_root_and_works_without_jq` (runs the script under `sh` with jq hidden; skipped where no POSIX shell exists) |
+| #9 guard hook fails open without jq | - | `GuardHookTests.issue_9_guard_fails_closed_without_a_root_and_without_jq` (runs the script under `sh` with jq hidden; skipped where no POSIX shell exists) |
 | #10.3 anonymization claim | - | `IssueTests.issue_10_report_contains_no_identifier_from_the_codebase`, `issue_10_report_anonymizes_every_diagnostic_shape_the_extractor_emits` |
 | #10.6 verifying `formBaseTypes` | - | `IssueTests.issue_10_an_unresolvable_form_base_type_is_a_diagnostic_and_a_glob_that_matches_no_form_explains_itself` |
 | #10.8 output path | - | `issue_6_...` asserts the probe prints `outputPath:` and reference counts |
@@ -30,6 +30,7 @@ form with invented names, then the extractor is changed until the test passes.
 | #15 grid without designer columns is silent | `gvHistory`, columns built in `InitHistoryColumns` | `IssueTests.issue_15_a_grid_view_without_designer_columns_is_a_named_diagnostic_pointing_at_the_code_that_builds_them` |
 | #16 `COV-TEST` satisfied by `it.todo` / comments | - (test writes an implement dir) | `IssueTests.issue_16_a_rule_id_in_a_todo_skip_comment_or_constant_is_not_a_test` |
 | #21 spec cannot cite a fact outside the manifest | `ClientDto` (`Services/Dto.cs:21`) behind `BeneficiarySearchForm.Setup` | `IssueTests.issue_21_a_spec_cites_evidence_outside_the_manifest_and_lint_reports_it_stale_when_the_source_moves` |
+| #22 guard coverage: shell tool names, MCP tools, root-substring bypass | - | `IssueTests.issue_22_guard_allow_lists_readable_roots_denies_code_index_tools_and_logs_every_denial` (hook JSON through `sh` in a temp repo with the legacy tree beside it; asserts the settings matcher, the allow-list in both restricted phases, `extract` unguarded, `guard.denyTools` / `guard.allowRoots`, Windows spellings of the root, no-jq refusal and one log line per denial; skipped where no POSIX shell exists) |
 | #25 `STALE` is a dead end after a re-extract | `PolicyWizardStep3` re-extracted with an extra `formBaseTypes` entry, a moved handler, a changed callee under a handler-only citation, IPolicyService out of the boundary, then a lower `maxCallDepth` | `IssueTests.issue_25_a_re_extract_keeps_the_previous_manifest_and_rebind_rewrites_the_hash_only_when_nothing_cited_changed` |
 
 ## Adding a pattern

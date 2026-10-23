@@ -29,5 +29,7 @@
   "ignoreCalls": ["System.*", "DevExpress.*", "LegacyApp.Framework.Logging.*"],
   "controlCategories": "control-categories.json",
   "maxCallDepth": 2,
-  "output": "."
+  "output": ".",
+  "//guard": "Read by legacy/hooks/guard-legacy.sh in the specify and implement phases. denyTools: more MCP tool-name globs to refuse (code-index and code-graph servers are built in). allowRoots: more readable directories besides this repo, relative to this file.",
+  "guard": { "denyTools": [], "allowRoots": [] }
 }

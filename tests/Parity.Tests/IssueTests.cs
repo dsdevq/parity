@@ -198,6 +198,141 @@ public sealed class IssueTests
         Assert.DoesNotContain(_f.Manifest("ClientSearchForm").Diagnostics, x => x.Code == "GRID-NO-COLUMNS");
     }
 
+    private static string HookCall(string tool, object input, string cwd) =>
+        System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, object> { ["cwd"] = cwd, ["hook_event_name"] = "PreToolUse", ["tool_name"] = tool, ["tool_input"] = input });
+
+    [Fact]
+    public void issue_22_guard_allow_lists_readable_roots_denies_code_index_tools_and_logs_every_denial()
+    {
+        // input: the guard run through sh with hook JSON on stdin, the legacy tree a sibling of the consuming repo;
+        // output: exit 0 for the manifest/spec/fixtures/evidence folders, exit 2 (and one log line each) for everything else
+        var settings = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(_f.RepoRoot, "adopt", ".claude", "settings.json")));
+        var matcher = settings.RootElement.GetProperty("hooks").GetProperty("PreToolUse")[0].GetProperty("matcher").GetString()!;
+        foreach (var tool in new[] { "Read", "Grep", "Glob", "Bash", "PowerShell", "Edit", "Write", "MultiEdit", "NotebookEdit", "Monitor", "mcp__codegraph__get_symbol", "mcp__docs__search" })
+            Assert.Matches(matcher, tool);
+        Assert.DoesNotMatch(matcher, "TodoWrite");
+        Assert.DoesNotMatch(matcher, "WebSearch");
+
+        if (GuardHookTests.Sh() == null) return; // no POSIX shell: the hook cannot run here at all
+        var baseDir = Path.Combine(Path.GetTempPath(), "parity-guard-" + Guid.NewGuid().ToString("N")[..8]);
+        var work = Path.Combine(baseDir, "repo");
+        var legacy = Path.Combine(baseDir, "Legacy", "AcmeAdmin");
+        Directory.CreateDirectory(Path.Combine(work, "legacy", "hooks"));
+        Directory.CreateDirectory(Path.Combine(legacy, "Forms"));
+        Directory.CreateDirectory(Path.Combine(baseDir, "shared"));
+        File.Copy(Path.Combine(_f.RepoRoot, "adopt", "hooks", "guard-legacy.sh"), Path.Combine(work, "legacy", "hooks", "guard-legacy.sh"));
+        var config = Path.Combine(work, "legacy", "extract.config.json");
+        File.WriteAllText(config, "{\n  \"project\": \"" + legacy.Replace('\\', '/') + "/AcmeAdmin.csproj\",\n  \"output\": \".\"\n}\n");
+        var log = Path.Combine(work, "legacy", ".guard-denials.log");
+        try
+        {
+            var legacyForm = Path.Combine(legacy, "Forms", "X.cs");
+            // calls a restricted phase must let through: the manifest, spec, fixtures and evidence folders, by relative and absolute path
+            var allowed = new (string Tool, object Input, string Cwd)[]
+            {
+                ("Read", new { file_path = "legacy/M/manifests/X.md" }, work),
+                ("Read", new { file_path = Path.Combine(work, "legacy", "M", "spec", "X.md") }, work),
+                ("Read", new { file_path = "spec/X.md" }, Path.Combine(work, "legacy", "M")),
+                ("Edit", new { file_path = "legacy/M/spec/X.md", old_string = "a", new_string = "b" }, work),
+                ("Grep", new { pattern = "Rule", path = "legacy/M/fixtures" }, work),
+                ("Grep", new { pattern = "Rule" }, work),
+                ("Glob", new { pattern = "legacy/M/evidence/**/*.png" }, work),
+                ("Glob", new { pattern = "**/*.md", path = "legacy/M/manifests" }, work),
+                ("Bash", new { command = "cat legacy/M/manifests/X.md | head -5 2>/dev/null" }, work),
+                ("Bash", new { command = "cd legacy/M && ls fixtures evidence && dotnet test --filter \"Name=Rule\"" }, work),
+                ("PowerShell", new { command = "Get-Content legacy\\M\\spec\\X.md" }, work),
+                ("Monitor", new { command = "tail -f legacy/M/evidence/run.log" }, work),
+                ("mcp__docs__search_docs", new { query = "angular signals" }, work),
+            };
+            // calls it must refuse
+            var denied = new (string Tool, object Input, string Cwd, string Why)[]
+            {
+                ("PowerShell", new { command = "Get-Content " + legacyForm.Replace('/', '\\') }, work, "outside"),                     // the shell tool on Windows, root named
+                ("Bash", new { command = "cat " + legacyForm }, work, "outside"),
+                ("mcp__docs__search_docs", new { query = "x", path = legacyForm }, work, "off limits"),                        // a tool we cannot parse, the root named anyway (second net)
+                ("mcp__codegraph__get_symbol", new { symbol = "PolicyForm" }, work, "code-index"),                               // no path at all
+                ("mcp__serena__find_symbol", new { name_path = "Save" }, work, "code-index"),
+                ("Read", new { file_path = "../Legacy/AcmeAdmin/Forms/X.cs" }, work, "outside"),                                 // relative path
+                ("Read", new { file_path = "Forms/X.cs" }, legacy, "outside"),                                                    // short path from inside the tree
+                ("Read", new { file_path = "legacy/../../Legacy/AcmeAdmin/Forms/X.cs" }, work, "outside"),                        // dot-dot detour
+                ("Read", new { file_path = "../../etc/hostname" }, work, "outside"),                                              // outside the allow-list, not the legacy tree
+                ("Grep", new { pattern = "Save", path = "../Legacy" }, work, "outside"),
+                ("Grep", new { pattern = "Save" }, legacy, "outside"),                                                            // default search root is the cwd
+                ("Glob", new { pattern = "../Legacy/**/*.cs" }, work, "outside"),
+                ("Write", new { file_path = "../shared/x.txt", content = "x" }, work, "outside"),
+                ("Bash", new { command = "cd ../Legacy/AcmeAdmin && cat Forms/X.cs" }, work, "directory"),                      // cd into the tree, relative reads
+                ("Bash", new { command = "cat Forms/X.cs" }, legacy, "outside"),                                                 // session sitting in the tree
+                ("Bash", new { command = "cat ../Legacy/AcmeAdmin/Forms/X.cs" }, work, "outside"),
+                ("Bash", new { command = "git -C .. log" }, work, "outside"),
+                ("Bash", new { command = "cd $HOME && ls" }, work, "directory"),
+                ("Bash", new { command = "cat ~/notes.txt" }, work, "outside"),
+                ("Bash", new { command = "cat $ROOT/Forms/X.cs" }, work, "resolve"),
+                ("PowerShell", new { command = "Set-Location -Path ..\\Legacy; Get-Content Forms\\X.cs" }, work, "directory"),
+                ("Monitor", new { command = "tail -f ../Legacy/AcmeAdmin/Forms/X.cs" }, work, "outside"),
+                ("Read", new { }, work, "path"),                                                                                  // nothing to decide on
+                ("NotAKnownTool", new { x = 1 }, work, "tool"),
+            };
+            var denials = 0;
+            foreach (var phase in new[] { "specify", "implement" })
+            {
+                File.WriteAllText(Path.Combine(work, "legacy", ".phase"), phase + "\n");
+                foreach (var (tool, input, cwd) in allowed)
+                {
+                    var r = GuardHookTests.Run(work, HookCall(tool, input, cwd), hideJq: false);
+                    Assert.True(r.Code == 0, $"{phase}: {tool} {System.Text.Json.JsonSerializer.Serialize(input)} should pass:\n{r.Err}");
+                }
+                foreach (var (tool, input, cwd, why) in denied)
+                {
+                    var r = GuardHookTests.Run(work, HookCall(tool, input, cwd), hideJq: false);
+                    Assert.True(r.Code == 2, $"{phase}: {tool} {System.Text.Json.JsonSerializer.Serialize(input)} should be refused");
+                    Assert.Contains(why, r.Err);
+                    Assert.Single(r.Err.Trim().Split('\n'));                                                                      // a one-line reason
+                    denials++;
+                }
+                // an input the hook cannot parse is refused, not waved through
+                var junk = GuardHookTests.Run(work, "this is not json", hideJq: false);
+                Assert.Equal(2, junk.Code); denials++;
+            }
+            // the log: one line per denial, date, phase, tool, reason; the legitimate calls left no line
+            var lines = File.ReadAllLines(log);
+            Assert.Equal(denials, lines.Length);
+            Assert.All(lines, l => { var f = l.Split('\t'); Assert.Equal(4, f.Length); Assert.Matches(@"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$", f[0]); Assert.Contains(f[1], new[] { "specify", "implement" }); Assert.NotEmpty(f[2]); Assert.NotEmpty(f[3]); });
+            Assert.Contains(lines, l => l.Split('\t')[2] == "mcp__docs__search_docs" && l.Contains("off limits"));
+            Assert.Contains(lines, l => l.Split('\t')[2] == "mcp__codegraph__get_symbol");
+
+            // extract phase stays unguarded and logs nothing
+            File.WriteAllText(Path.Combine(work, "legacy", ".phase"), "extract\n");
+            Assert.Equal(0, GuardHookTests.Run(work, HookCall("Read", new { file_path = legacyForm }, work), hideJq: false).Code);
+            Assert.Equal(0, GuardHookTests.Run(work, HookCall("mcp__codegraph__get_symbol", new { symbol = "X" }, work), hideJq: false).Code);
+            Assert.Equal(denials, File.ReadAllLines(log).Length);
+
+            // guard.denyTools extends the deny-list, guard.allowRoots the allow-list
+            File.WriteAllText(Path.Combine(work, "legacy", ".phase"), "specify\n");
+            Assert.Equal(0, GuardHookTests.Run(work, HookCall("mcp__house-lookup__find", new { q = "x" }, work), hideJq: false).Code);
+            Assert.Equal(2, GuardHookTests.Run(work, HookCall("Read", new { file_path = "../shared/x.txt" }, work), hideJq: false).Code);
+            File.WriteAllText(config, "{\n  \"project\": \"" + legacy.Replace('\\', '/') + "/AcmeAdmin.csproj\",\n  \"output\": \".\",\n  \"guard\": { \"denyTools\": [\"mcp__house-lookup__*\"], \"allowRoots\": [\"../../shared\"] }\n}\n");
+            var custom = GuardHookTests.Run(work, HookCall("mcp__house-lookup__find", new { q = "x" }, work), hideJq: false);
+            Assert.Equal(2, custom.Code); Assert.Contains("code-index", custom.Err);
+            Assert.Equal(0, GuardHookTests.Run(work, HookCall("Read", new { file_path = "../shared/x.txt" }, work), hideJq: false).Code);
+            Assert.Equal(2, GuardHookTests.Run(work, HookCall("Read", new { file_path = "../Legacy/AcmeAdmin/Forms/X.cs" }, work), hideJq: false).Code);
+
+            // the legacy root named as a Windows drive path, in every spelling a Windows host produces
+            File.WriteAllText(config, "{\n  \"project\": \"C:/src/Legacy/AcmeAdmin/AcmeAdmin.csproj\"\n}\n");
+            foreach (var spelling in new[] { "C:\\src\\Legacy\\AcmeAdmin\\Forms\\X.cs", "c:/SRC/legacy/acmeadmin/Forms/X.cs", "/c/src/Legacy/AcmeAdmin/Forms/X.cs", "/mnt/c/src/Legacy/AcmeAdmin/Forms/X.cs" })
+                Assert.Equal(2, GuardHookTests.Run(work, HookCall("Read", new { file_path = spelling }, work), hideJq: false).Code);
+
+            // without jq nothing in a restricted phase can be parsed: refused, with the reason
+            var nojq = Path.Combine(work, "nojq"); Directory.CreateDirectory(nojq);
+            foreach (var tool in new[] { "cat", "tr", "sed", "grep", "dirname", "printf", "head", "date", "sh" })
+                foreach (var cand in new[] { "/usr/bin/" + tool, "/bin/" + tool })
+                    if (File.Exists(cand) && !File.Exists(Path.Combine(nojq, tool))) { File.CreateSymbolicLink(Path.Combine(nojq, tool), cand); break; }
+            var noJq = GuardHookTests.Run(work, HookCall("Read", new { file_path = "legacy/M/manifests/X.md" }, work), hideJq: true);
+            Assert.Equal(2, noJq.Code); Assert.Contains("jq", noJq.Err);
+            Assert.Contains(File.ReadAllLines(log), l => l.Contains("jq"));
+        }
+        finally { Directory.Delete(baseDir, true); }
+    }
+
     [Fact]
     public void issue_21_a_spec_cites_evidence_outside_the_manifest_and_lint_reports_it_stale_when_the_source_moves()
     {
@@ -441,9 +576,9 @@ public sealed class IssueTests
 /// <summary>The guard hook, run through sh. Skipped where no POSIX shell exists (plain Windows without Git Bash).</summary>
 public sealed class GuardHookTests
 {
-    private static string? Sh() => new[] { "/bin/sh", "/usr/bin/sh", "sh" }.FirstOrDefault(p => { try { using var x = Process.Start(new ProcessStartInfo(p, "-c true") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true }); x!.WaitForExit(); return x.ExitCode == 0; } catch { return false; } });
+    internal static string? Sh() => new[] { "/bin/sh", "/usr/bin/sh", "sh" }.FirstOrDefault(p => { try { using var x = Process.Start(new ProcessStartInfo(p, "-c true") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true }); x!.WaitForExit(); return x.ExitCode == 0; } catch { return false; } });
 
-    private static (int Code, string Err) Run(string workDir, string stdin, bool hideJq)
+    internal static (int Code, string Err) Run(string workDir, string stdin, bool hideJq)
     {
         var psi = new ProcessStartInfo(Sh()!, "legacy/hooks/guard-legacy.sh") { WorkingDirectory = workDir, UseShellExecute = false, RedirectStandardInput = true, RedirectStandardError = true, RedirectStandardOutput = true };
         if (hideJq) psi.Environment["PATH"] = Path.Combine(workDir, "nojq");
@@ -455,7 +590,7 @@ public sealed class GuardHookTests
     }
 
     [Fact]
-    public void issue_9_guard_fails_closed_without_a_root_and_works_without_jq()
+    public void issue_9_guard_fails_closed_without_a_root_and_without_jq()
     {
         if (Sh() == null) return; // no POSIX shell: the hook cannot run here at all
         var dir = AppContext.BaseDirectory;
@@ -465,11 +600,11 @@ public sealed class GuardHookTests
         File.Copy(Path.Combine(dir!, "adopt", "hooks", "guard-legacy.sh"), Path.Combine(work, "legacy", "hooks", "guard-legacy.sh"));
         // a PATH with only the core tools and no jq: cat, tr, sed, grep, dirname resolved via a symlink farm
         var nojq = Path.Combine(work, "nojq"); Directory.CreateDirectory(nojq);
-        foreach (var tool in new[] { "cat", "tr", "sed", "grep", "dirname", "printf", "head", "sh" })
+        foreach (var tool in new[] { "cat", "tr", "sed", "grep", "dirname", "printf", "head", "date", "sh" })
             foreach (var cand in new[] { "/usr/bin/" + tool, "/bin/" + tool })
                 if (File.Exists(cand) && !File.Exists(Path.Combine(nojq, tool))) { File.CreateSymbolicLink(Path.Combine(nojq, tool), cand); break; }
         var legacyRead = "{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"C:\\\\src\\\\Legacy\\\\AcmeAdmin\\\\Forms\\\\X.cs\"}}";
-        var manifestRead = "{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"/repo/legacy/M/manifests/X.md\"}}";
+        var manifestRead = "{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"legacy/M/manifests/X.md\"}}";
 
         File.WriteAllText(Path.Combine(work, "legacy", ".phase"), "extract\n");
         Assert.Equal(0, Run(work, legacyRead, hideJq: true).Code);                        // extract phase: nothing guarded
@@ -483,7 +618,10 @@ public sealed class GuardHookTests
         var blocked = Run(work, legacyRead, hideJq: true);                                  // sed fallback finds the root
         Assert.Equal(2, blocked.Code);
         Assert.Contains("off limits", blocked.Err);
-        Assert.Equal(0, Run(work, manifestRead, hideJq: true).Code);                       // manifests stay readable
+        var noJq = Run(work, manifestRead, hideJq: true);                                   // sed finds the root, but parsed input needs jq (#22 d): refused, not waved through
+        Assert.Equal(2, noJq.Code);
+        Assert.Contains("jq is required", noJq.Err);
+        Assert.Equal(0, Run(work, manifestRead, hideJq: false).Code);                      // manifests stay readable with jq
         Assert.Equal(2, Run(work, legacyRead, hideJq: false).Code);                         // and the same with jq if present
         Directory.Delete(work, true);
     }
