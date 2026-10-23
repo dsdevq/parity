@@ -435,6 +435,24 @@ public sealed class IssueTests
             foreach (var c in new[] { "ls", "grep -r Foo src", "cat legacy/M/spec/X.md" })
                 Assert.Equal(0, GuardHookTests.Run(inner, HookCall("Bash", new { command = c }, inner), hideJq: false).Code);
             Assert.Equal(0, GuardHookTests.Run(inner, HookCall("mcp__docs__search_docs", new { query = "Foo" }, inner), hideJq: false).Code);
+            // ... and a search rooted at a directory above it reaches it without naming it
+            foreach (var (tool, input) in new (string, object)[]
+            {
+                ("Grep", new { pattern = "Foo" }),
+                ("Grep", new { pattern = "Foo", path = "." }),
+                ("Glob", new { pattern = "**/*.cs" }),
+                ("Glob", new { pattern = "*/Forms/*.cs" }),
+                ("Grep", new { pattern = "Foo", glob = "*.cs" }),
+                ("mcp__fs__search", new { path = ".", pattern = "x" }),
+                ("mcp__fs__search", new { path = "", pattern = "x" }),
+            })
+            {
+                var r = GuardHookTests.Run(inner, HookCall(tool, input, inner), hideJq: false);
+                Assert.True(r.Code == 2, $"{tool} {System.Text.Json.JsonSerializer.Serialize(input)} should be refused");
+                Assert.Contains("contains the legacy source root", r.Err);
+                Assert.Contains("legacyapp", r.Err);
+            }
+            Assert.Equal(0, GuardHookTests.Run(inner, HookCall("Grep", new { pattern = "Foo", path = "src" }, inner), hideJq: false).Code);
 
             // without jq nothing in a restricted phase can be parsed: refused, with the reason
             var nojq = Path.Combine(work, "nojq"); Directory.CreateDirectory(nojq);

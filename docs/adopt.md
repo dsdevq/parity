@@ -82,9 +82,9 @@ refused, even when an allowed root contains it.
 | Tool | What is checked |
 |---|---|
 | `Read`, `Edit`, `Write`, `MultiEdit`, `NotebookEdit` | the file path, resolved against the `cwd` in the hook input, must be allowed |
-| `Grep`, `Glob` | the search path (the `cwd` when omitted) and the glob up to its first wildcard segment must be allowed; a `..` after a wildcard segment and a brace alternative that can stand for `..` (`{..,x}`, `{.?,x}`) are refused, `*.{ts,tsx}` is fine |
+| `Grep`, `Glob` | the search path (the `cwd` when omitted) and the glob up to its first wildcard segment must be allowed, and the search root they make must not contain the legacy root (`Grep` with no path, `.` or `**/*.cs` from a repo that holds it is refused: narrow the path to a directory outside it); a `..` after a wildcard segment and a brace alternative that can stand for `..` (`{..,x}`, `{.?,x}`) are refused, `*.{ts,tsx}` is fine |
 | `Bash`, `PowerShell`, `Monitor` | the `cwd`; every path-like token (contains `/` or `\`, is `.` or `..`, a drive path), also when glued to a short option (`-I../x`); a `cd`, `pushd`, `Set-Location` and friends as the first word of a command must stay inside the allowed roots, and later relative paths resolve from there. A command starts after `;`, `|`, `&`, `(`, `)`, `{`, `}` or a newline outside quotes, and after a reserved word (`then`, `do`, `else`, `elif`, `if`, `while`, `until`, `!`, `time`) or a wrapper (`command`, `builtin`, `env`, `exec`, `VAR=x`). The quoted argument of `sh`/`bash`/`zsh`/`dash`/`ksh`/`powershell`/`pwsh` `-c`/`-command` and of `eval` is a command of its own, and its `cd`, like one in a `( )` subshell, ends with it. Option words before `-c` (`--norc`, `--login`, `-o pipefail`) do not change that. A `cd` word anywhere else that is followed by a path, a variable (`$HOME`, `%USERPROFILE%`) or nothing refuses the call, unless it is an argument of `echo`, `git` or `printf`. A word without a separator that names the legacy root from the `cwd` (`ls LegacyApp` with the root inside the repo) is refused too. Each path segment is judged: a segment a wildcard or a quote/backslash splice can turn into `..` (`.''./x`, `.\./x`, `.?/x`, `.*/x`, `[.]*`), a `..` after a wildcard segment (`src/*/../..`), unquoted brace expansion, `~` and `$VAR/...` cannot be resolved and are refused. Other wildcards (`src/**/*.ts`), regexes (`s/a.*b/c/`, `[a-z]+`), quoted arguments (`grep -E "[0-9]{2,4}"`) and MSBuild switches (`/p:Configuration=Release`, `/t:Rebuild`) are fine; the path is checked up to its first wildcard segment |
-| `mcp__*` | refused when the tool name matches the deny-list (below); otherwise every string value in the input that contains `/` or `\`, or is `.`, `..` or `~`, must be an allowed path, and any other value must not name the legacy root from the `cwd` |
+| `mcp__*` | refused when the tool name matches the deny-list (below); otherwise every string value in the input that contains `/` or `\`, or is `.`, `..`, `~` or empty (read as `.`), must be an allowed path that does not contain the legacy root, and any other value must not name the legacy root from the `cwd` |
 | anything else | refused: the hook cannot decide |
 
 Paths are compared case-insensitively with `/` and `\` equal and `C:\x`, `/c/x`, `/mnt/c/x` and
@@ -151,9 +151,12 @@ variables or command substitutions. It reads a command as tokens, so what a prog
 handed (a tool that opens its own wildcards, a path assembled by `eval` or `xargs`) is outside it, and a
 token that starts with `\` (a drive-rooted Windows path or a regex escape) is not resolved. A command string
 handed to a program other than the shells above (`su -c`, `watch`, `ssh`) is read as plain arguments. With the
-legacy root inside the repo, a recursive search or a wildcard over a directory that contains it (`grep -r Foo .`,
-`cat */Forms/X.cs` from the repo root) reaches it without naming it, which token checks cannot catch; keep the
-legacy tree outside the repo. A `cd` is followed as if it ran unconditionally and succeeded: a conditional
+legacy root inside the repo, `Grep`, `Glob` and MCP searches rooted above it are refused, but a shell recursive
+search or wildcard over a directory that contains it (`grep -r Foo .`, `cat */Forms/X.cs` from the repo root)
+reaches it without naming it, which token checks cannot catch. Prefer the layout with the legacy tree beside the
+repo, not inside it: with the legacy root inside the repo, every repo-wide `Grep`, `Glob` or MCP search is refused in
+the restricted phases.
+A `cd` is followed as if it ran unconditionally and succeeded: a conditional
 (`false && cd src`, `cd src || ...`), backgrounded (`cd src &`) or piped (`cd src | ...`) `cd`, a `cd` that
 fails, and `popd` are not modelled, so a later relative path may resolve elsewhere than the guard thinks. An
 MCP server with its own index of the legacy tree takes no path, so only its name can refuse it. Neither the

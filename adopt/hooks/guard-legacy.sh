@@ -4,14 +4,16 @@
 # legacy/extract.config.json (relative entries are relative to that file). Exit 2 blocks the call and shows
 # the one-line reason to the agent; every denial is also appended to legacy/.guard-denials.log
 # (date, phase, tool, reason; tab separated).
-#   path tools (Read Edit Write MultiEdit NotebookEdit Grep Glob): every path, resolved against the hook's cwd, must be allowed
+#   path tools (Read Edit Write MultiEdit NotebookEdit Grep Glob): every path, resolved against the hook's cwd, must be allowed;
+#     a Grep or Glob search root (the path or the cwd, plus the glob up to its first wildcard) must not contain the legacy root
 #   shell tools (Bash PowerShell Monitor): every path-like token must be allowed, no cd may leave the allowed roots;
 #     a cd is followed when it is the first word of a command (after ; | & ( ) { } or a newline outside quotes, a
 #     reserved word such as then or do, or a wrapper such as command or VAR=x); the quoted argument of sh -c,
 #     bash -c, powershell -command or eval is a command of its own, as is a ( ) subshell, so its cd does not
 #     outlive it; any other cd word before a path, a variable or nothing refuses the call
 #   mcp__* tools: refused when the name matches the code-index deny-list below or "guard.denyTools"; every string
-#     value in the input that contains / or \, or is . .. or ~, must be an allowed path
+#     value in the input that contains / or \, or is . .. ~ or empty (read as .), must be an allowed path that does not
+#     contain the legacy root
 #   a word without a separator (a shell token or an MCP value) is refused when it resolves into the legacy root
 #   any other tool, or any input that cannot be decided: refused (fail closed)
 # After those checks the legacy root is still looked for as a whole path anywhere in the input (second net).
@@ -123,6 +125,11 @@ need_allowed() {
   deny "$3 '$N' is outside the allowed roots (the consuming repo plus guard.allowRoots in $cfg)"
 }
 
+# not_above WHAT: deny when N (an allowed search root) contains the legacy root, which a search from it reaches
+not_above() {
+  case $legacy in "$N"/*) deny "$1 '$N' contains the legacy source root '$legacy'; narrow path to a directory outside it" "" ;; esac
+}
+
 # --- the legacy root --------------------------------------------------------------------------------------
 repo=$(pwd)
 repo=$(lc "$(fwd "$repo")")
@@ -228,7 +235,8 @@ case $tool in
       deny "the glob '$g' has a brace alternative ('$a') that can stand for '..' and cannot be resolved, so it may be outside the allowed roots"
     done
     g=$(printf '%s' "$g" | sed 's#[^/]*[*?[{].*##')
-    [ -z "$g" ] || need_allowed "$g" "$base" "the glob prefix"
+    if [ -n "$g" ]; then need_allowed "$g" "$base" "the glob prefix"; else N=$base; fi
+    not_above "the search root"
     ;;
   Bash|PowerShell|Monitor)
     need_allowed "$cwd" "$repo" "the working directory"
@@ -347,7 +355,7 @@ $deny_extra"
       # shellcheck disable=SC2254
       case $name in $pat) deny "'$tool' is a code-index tool (matches '$pat'; guard.denyTools in $cfg extends the list) and could read the legacy source" ;; esac
     done
-    vals=$(jget '.tool_input | .. | strings | gsub("[\r\n]+"; " ")')
+    vals=$(jget '.tool_input | .. | strings | if . == "" then "." else gsub("[\r\n]+"; " ") end')
     _ifs=$IFS; IFS='
 '
     set -- $vals
@@ -356,6 +364,7 @@ $deny_extra"
       case $v in \~|\~/*|\~\\*) deny "the path '$v' (the home directory) is outside the allowed roots" ;; esac
       case $v in */*|*\\*|.|..) ;; *) norm "$v" "$cwd"; case $N in "$legacy"|"$legacy"/*) ;; *) continue ;; esac ;; esac
       need_allowed "$v" "$cwd" "the path"
+      not_above "the path"
     done
     ;;
   *) deny "unrecognised tool '$tool' in a restricted phase" "Only path tools, shell tools and MCP tools are checked; narrow the hook matcher or extend the guard" ;;
