@@ -15,7 +15,7 @@ namespace SampleLegacy.Forms
             InitializeComponent();
         }
 
-        private void btnSearch_Click(object sender, EventArgs e)
+        protected virtual void btnSearch_Click(object sender, EventArgs e)
         {
             if (string.IsNullOrEmpty(txtSurname.Text) && string.IsNullOrEmpty(txtPostcode.Text))
             {
@@ -27,7 +27,8 @@ namespace SampleLegacy.Forms
                 Surname = txtSurname.Text,
                 Postcode = txtPostcode.Text,
                 DateOfBirth = dtDob.EditValue as DateTime?,
-                IncludeDeceased = chkDeceased.Checked
+                IncludeDeceased = chkDeceased.Checked,
+                MaxResults = SearchLimits.MaxResults
             };
             grdResults.DataSource = ServiceLocator.Client.SearchClients(criteria);
             btnSelect.Enabled = false;

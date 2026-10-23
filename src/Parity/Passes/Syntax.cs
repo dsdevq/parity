@@ -12,7 +12,8 @@ public static class Syntax
     {
         var span = node.GetLocation().GetLineSpan();
         var file = span.Path;
-        if (baseDir != null && file.StartsWith(baseDir, StringComparison.Ordinal))
+        // relative even outside baseDir (a variant project next to the main one reads ../Other/File.cs), so no machine path leaks into a manifest
+        if (baseDir != null && Path.IsPathRooted(file))
             file = Path.GetRelativePath(baseDir, file);
         return new Loc(file.Replace('\\', '/'), span.StartLinePosition.Line + 1, span.EndLinePosition.Line + 1);
     }

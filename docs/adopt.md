@@ -44,6 +44,13 @@ Put the `parity` binary on PATH (`bin/publish.sh win-x64` here, or a release zip
    issue with `parity report <manifest.json>` and the probe shapes, and acknowledge the entries in
    `extractor-debt.md` meanwhile. Never quote the manifest's Raw or Diagnostics sections directly;
    they carry real identifiers.
+   When some tenants get a customised subclass of a form instead of the form, list them under `variants`
+   (one entry per tenant family; see `templates/extract.config.json`): `id` names the variant in specs,
+   `subclasses` the class names to describe, `project` and `selfAssembly` the variant's csproj and built
+   assembly when it lives outside the module's project (`subclasses` then defaults to every subclass of a
+   module form found there). `factories` names factories to read when the tool does not find them itself:
+   a type, or `Type.Method`, simple or namespace-qualified. The log prints `variant <id>: <class> on <form>`
+   per variant, listing each subclass found; a `VARIANT-CONFIG` diagnostic means an entry could not be applied.
 4. Commit the manifests. They are generated, deterministic, and the thing specs bind to.
 5. Record fixtures for every id in `module.json` `serviceCalls` with your own runner, one file per
    recording, `service` and `recorded` set. An outcome the host cannot be made to return is a synthetic

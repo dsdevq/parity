@@ -42,12 +42,17 @@ public sealed class HandlerPass
     private readonly HandlerResult _r = new();
     private readonly Queue<(IMethodSymbol Method, int Depth)> _work = new();
     private readonly Dictionary<SyntaxTree, SemanticModel> _models = new();
+    private readonly HashSet<INamedTypeSymbol> _owners = new(SymbolEqualityComparer.Default);
 
+    /// <param name="controlOwners">Types whose fields count as the form's controls; a variant passes its chain down to the base form.</param>
     public HandlerPass(FormClass form, CSharpCompilation compilation, HashSet<string> controls, ExtractConfig cfg,
-        ControlCategories cats, FileIndex index, HashSet<string> loadedFiles, string baseDir, ConstantCollector constants)
+        ControlCategories cats, FileIndex index, HashSet<string> loadedFiles, string baseDir, ConstantCollector constants,
+        IEnumerable<INamedTypeSymbol>? controlOwners = null)
     {
         _form = form; _compilation = compilation; _controls = controls; _cfg = cfg; _cats = cats; _k = constants;
         _index = index; _loadedFiles = loadedFiles; _baseDir = baseDir; _formName = form.Symbol.Name;
+        _owners.Add(form.Symbol);
+        foreach (var o in controlOwners ?? Enumerable.Empty<INamedTypeSymbol>()) _owners.Add(o);
     }
 
     private SemanticModel Model(SyntaxTree t)
@@ -262,7 +267,7 @@ public sealed class HandlerPass
         {
             if (!_controls.Contains(id.Identifier.Text)) continue;
             var sym = model.GetSymbolInfo(id).Symbol;
-            if (sym is not IFieldSymbol f || !SymbolEqualityComparer.Default.Equals(f.ContainingType, _form.Symbol)) continue;
+            if (sym is not IFieldSymbol f || !_owners.Contains(f.ContainingType)) continue;
             var ctrlId = $"ctrl:{_formName}/{f.Name}";
             if (IsWrite(id)) a.WritesSet.Add(ctrlId); else a.ReadsSet.Add(ctrlId);
         }
@@ -322,9 +327,9 @@ public sealed class HandlerPass
                         foreach (var addInv in body.DescendantNodes().OfType<InvocationExpressionSyntax>())
                         {
                             if (addInv.Expression is MemberAccessExpressionSyntax am && am.Name.Identifier.Text == "Add"
-                                && Syntax.RootAndPath(am.Expression) is { } arp && arp.Path.EndsWith("Controls", StringComparison.Ordinal)
+                                && Syntax.RootAndPath(am.Expression) is { } arp && (arp.Path.EndsWith("Controls", StringComparison.Ordinal) || arp is ("Controls", ""))
                                 && addInv.ArgumentList.Arguments.Count == 1 && Syntax.FieldRef(addInv.ArgumentList.Arguments[0].Expression) == local)
-                            { addedTo = arp.Root == "$this" ? $"ctrl:{_formName}/$this" : _controls.Contains(arp.Root) ? $"ctrl:{_formName}/{arp.Root}" : arp.Root; break; }
+                            { addedTo = arp.Root is "$this" or "Controls" && arp.Path.Length == 0 ? $"ctrl:{_formName}/$this" : _controls.Contains(arp.Root) ? $"ctrl:{_formName}/{arp.Root}" : arp.Root; break; }
                         }
                         var stmt = oc.FirstAncestorOrSelf<StatementSyntax>();
                         _r.DynamicUi.Add(new DynamicUiInfo(dynId, chain[0], addedTo, ownerId, Syntax.LocOf(oc, _baseDir), stmt != null ? Syntax.Text(stmt) : Syntax.Text(oc)));

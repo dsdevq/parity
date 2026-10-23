@@ -29,5 +29,10 @@
   "ignoreCalls": ["System.*", "DevExpress.*", "LegacyApp.Framework.Logging.*"],
   "controlCategories": "control-categories.json",
   "maxCallDepth": 2,
+  "//variants": "Tenant or customer subclasses of the module's forms. Each becomes a delta section in its base form's manifest, not a unit of its own. Without project, subclasses is required.",
+  "variants": [
+    { "id": "Harbor", "subclasses": ["HarborCustomerForm"] },
+    { "id": "Meadow", "project": "C:/src/LegacyApp/Tenants/Meadow/Meadow.csproj", "selfAssembly": "C:/src/LegacyApp/Tenants/Meadow/bin/Debug/Meadow.dll", "factories": ["LegacyApp.Forms.CustomerFormFactory.Create"] }
+  ],
   "output": "."
 }

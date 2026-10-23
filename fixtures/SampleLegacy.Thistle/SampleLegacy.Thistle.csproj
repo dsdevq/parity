@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- A tenant project: it subclasses forms of SampleLegacy for one tenant. Parsed, never built;
+       SampleLegacy.Build compiles it into the stand-in assembly together with the base project. -->
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <RootNamespace>SampleLegacy.Tenants.Thistle</RootNamespace>
+    <AssemblyName>SampleLegacy.Thistle</AssemblyName>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <OutputPath>bin\Debug\</OutputPath>
+    <LangVersion>7.3</LangVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="DevExpress.XtraEditors.v23.2" />
+    <ProjectReference Include="..\SampleLegacy\SampleLegacy.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Forms\ThistleClientSearchForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>
