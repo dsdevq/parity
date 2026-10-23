@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>parity</AssemblyName>
+    <RootNamespace>Parity</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <TieredCompilation>true</TieredCompilation>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.9.0" />
+  </ItemGroup>
+  <!-- A small set of .NET reference assemblies travels inside the binary, so "includeRuntimeReferences"
+       works the same from a single-file publish as from the SDK. Legacy .NET Framework projects should
+       set it to false and point "references" at the v4.x Reference Assemblies folder instead. -->
+  <ItemGroup>
+    <_ParityRefRoot Include="$(NetCoreTargetingPackRoot)/Microsoft.NETCore.App.Ref/$(BundledNETCoreAppPackageVersion)/ref/net10.0" />
+    <EmbeddedResource Include="@(_ParityRefRoot->'%(Identity)/System.Runtime.dll');@(_ParityRefRoot->'%(Identity)/netstandard.dll');@(_ParityRefRoot->'%(Identity)/mscorlib.dll');@(_ParityRefRoot->'%(Identity)/System.Collections.dll');@(_ParityRefRoot->'%(Identity)/System.Linq.dll');@(_ParityRefRoot->'%(Identity)/System.ComponentModel.dll');@(_ParityRefRoot->'%(Identity)/System.ComponentModel.Primitives.dll');@(_ParityRefRoot->'%(Identity)/System.ComponentModel.TypeConverter.dll');@(_ParityRefRoot->'%(Identity)/System.Drawing.Primitives.dll');@(_ParityRefRoot->'%(Identity)/System.ObjectModel.dll');@(_ParityRefRoot->'%(Identity)/System.Runtime.Extensions.dll');@(_ParityRefRoot->'%(Identity)/System.Console.dll');@(_ParityRefRoot->'%(Identity)/System.Text.RegularExpressions.dll');@(_ParityRefRoot->'%(Identity)/System.Resources.ResourceManager.dll');@(_ParityRefRoot->'%(Identity)/System.Collections.Concurrent.dll')"
+                      LogicalName="refs/%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

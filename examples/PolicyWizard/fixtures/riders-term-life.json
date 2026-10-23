@@ -1,0 +1,6 @@
+{
+  "service": "svc:IPolicyService.GetAvailableRiders",
+  "recorded": "2026-10-22",
+  "request": { "productId": 101 },
+  "response": [ { "riderId": 1, "name": "Waiver of premium", "loading": 5.0 }, { "riderId": 2, "name": "Accidental death", "loading": 12.5 } ]
+}

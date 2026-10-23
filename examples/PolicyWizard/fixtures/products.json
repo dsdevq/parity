@@ -1,0 +1,6 @@
+{
+  "service": "svc:IPolicyService.GetProducts",
+  "recorded": "2026-10-22",
+  "request": {},
+  "response": [ { "productId": 101, "name": "Term Life", "minPremium": 10.00, "maxPremium": 5000.00 }, { "productId": 102, "name": "Whole Life", "minPremium": 25.00, "maxPremium": 20000.00 } ]
+}

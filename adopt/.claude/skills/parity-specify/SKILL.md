@@ -1,0 +1,30 @@
+---
+name: parity-specify
+description: Write or extend the parity spec for one form from its manifest, until parity lint is green. Use when asked to "specify <Form>", "write the spec for <Form>", or "port <Form>" before any implementation exists.
+---
+
+# parity-specify
+
+Your only input is `legacy/<Module>/manifests/<Form>.md` plus `legacy/<Module>/fixtures/`. The legacy
+source is off limits in this phase (a hook enforces it). Everything you may cite is printed in the
+manifest; every id you write must appear there verbatim.
+
+1. Ensure `legacy/.phase` contains `specify`. Open the manifest .md. Copy the `manifest:` hash line.
+2. Start `legacy/<Module>/spec/<Form>.md` from `templates/spec.md` (status `draft`).
+3. Fields: one row per control the manifest lists with category input, action, grid, column, display or
+   unknown, per container that has events, and per `dyn:` entry. Labels come from the control caption or
+   its layout item's caption. `dropped` needs a decision from the user, not from you; if you think a control
+   is out of scope, write it as `field` and add an Open question.
+4. Rules: read each handler and the methods it reaches, in the manifest. One rule per observable
+   behavior; a rule may cover several events. `given`/`when`/`then` describe what the legacy code does,
+   in user terms, naming controls. Cite the handler and every method the behavior depends on. If a
+   handler calls a `svc:` id, name it in `then` and list a fixture.
+5. Anything you cannot establish from the manifest goes under Open questions, phrased as a question.
+   Never resolve it by assumption and never use hedging words in a rule.
+6. Events whose handler needs no port go under No behavior with the reason.
+7. Run `parity lint legacy/<Module>/spec/<Form>.md`. Fix every error. Repeat until `0 error(s)`.
+8. Run `parity lint ... --gate` once and report the coverage findings as the list of what is still
+   missing (do not force-close Open questions to make it pass).
+9. Commit the spec. Tell the user what needs a human: open questions, candidate drops, quirks.
+
+Stop. `status: reviewed` is set by the reviewer, not by you.

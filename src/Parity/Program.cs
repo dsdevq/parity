@@ -1,0 +1,93 @@
+using System.Diagnostics;
+using System.Text.RegularExpressions;
+using Parity.Lint;
+using Parity.Model;
+using Parity.Passes;
+using Parity.Project;
+using Parity.Render;
+using Parity.Tools;
+
+const string Usage = """
+parity - reverse-engineer a legacy WinForms module into a citable manifest and gate its spec.
+
+  parity extract  --config <extract.config.json> --module <Name> --forms <glob>
+  parity render   <manifest.json>                      rewrite the .md next to it
+  parity lint     <spec.md> [--gate] [--implement <dir>]
+  parity probe    <project.csproj> [--forms <glob>]    anonymized statement shapes; paste into an issue
+  parity report   <manifest.json>                      anonymized raw/diagnostics/unresolved; review, then paste into an issue
+  parity hash     <manifest.json>
+
+Exit codes: 0 ok, 1 lint errors, 2 usage, 3 failure.
+""";
+
+try
+{
+    if (args.Length == 0 || args[0] is "-h" or "--help") { Console.Error.WriteLine(Usage); return 2; }
+    var opts = ParseOpts(args.Skip(1).ToArray());
+    switch (args[0])
+    {
+        case "extract":
+        {
+            var cfg = ExtractConfig.Load(Opt(opts, "config") ?? "extract.config.json");
+            var module = Opt(opts, "module") ?? throw new ArgumentException("--module is required");
+            var forms = Opt(opts, "forms") ?? "*";
+            var summaries = Extractor.Run(cfg, module, forms, Console.Error);
+            Console.WriteLine("form\tcontrols\tevents\thandlers\tmethods\tsvc\tdynamic\traw\tdiag");
+            foreach (var s in summaries)
+                Console.WriteLine($"{s.Form}\t{s.Controls}\t{s.Events}\t{s.Handlers}\t{s.Methods}\t{s.ServiceCalls}\t{s.DynamicUi}\t{s.Raw}\t{s.Diagnostics}");
+            return 0;
+        }
+        case "render":
+        {
+            var path = Positional(opts, 0) ?? throw new ArgumentException("manifest.json path required");
+            var m = System.Text.Json.JsonSerializer.Deserialize<FormManifest>(File.ReadAllText(path), Json.Options)!;
+            File.WriteAllText(Path.ChangeExtension(path, ".md"), MarkdownRenderer.Render(m, ManifestHash.Of(path)));
+            return 0;
+        }
+        case "hash":
+            Console.WriteLine(ManifestHash.Of(Positional(opts, 0) ?? throw new ArgumentException("manifest.json path required")));
+            return 0;
+        case "lint":
+        {
+            var path = Positional(opts, 0) ?? throw new ArgumentException("spec.md path required");
+            var findings = SpecLinter.Lint(path, opts.ContainsKey("gate"), Opt(opts, "implement"));
+            foreach (var x in findings) Console.WriteLine(x.Severity == "warning" ? $"{x} [warning]" : x.ToString());
+            var errors = findings.Count(x => x.Severity == "error");
+            Console.Error.WriteLine($"{errors} error(s), {findings.Count - errors} warning(s)");
+            return errors > 0 ? 1 : 0;
+        }
+        case "probe":
+        {
+            var r = Probe.Run(Positional(opts, 0) ?? throw new ArgumentException("csproj path required"), Opt(opts, "forms") ?? "*");
+            Console.Write(r.Text);
+            Console.Error.WriteLine($"time: {r.Seconds:0.0}s  peak-rss-mb: {Process.GetCurrentProcess().PeakWorkingSet64 / (1024 * 1024)}");
+            return 0;
+        }
+        case "report":
+            Console.Write(Report.Render(Positional(opts, 0) ?? throw new ArgumentException("manifest.json path required")));
+            Console.Error.WriteLine("review the output before pasting: $id/$lit/$form/$type/<path> mark removed identifiers; anything else is framework vocabulary or the tool's own words");
+            return 0;
+        default:
+            Console.Error.WriteLine(Usage); return 2;
+    }
+}
+catch (ArgumentException ex) { Console.Error.WriteLine($"usage: {ex.Message}"); Console.Error.WriteLine(Usage); return 2; }
+catch (Exception ex) { Console.Error.WriteLine($"parity: {ex.Message}"); return 3; }
+
+static Dictionary<string, string> ParseOpts(string[] a)
+{
+    var d = new Dictionary<string, string>(StringComparer.Ordinal);
+    var pos = 0;
+    for (var i = 0; i < a.Length; i++)
+    {
+        if (a[i].StartsWith("--", StringComparison.Ordinal))
+        {
+            var k = a[i][2..];
+            if (i + 1 < a.Length && !a[i + 1].StartsWith("--", StringComparison.Ordinal)) d[k] = a[++i]; else d[k] = "";
+        }
+        else d[$"#{pos++}"] = a[i];
+    }
+    return d;
+}
+static string? Opt(Dictionary<string, string> o, string k) => o.TryGetValue(k, out var v) ? v : null;
+static string? Positional(Dictionary<string, string> o, int i) => o.TryGetValue($"#{i}", out var v) ? v : null;

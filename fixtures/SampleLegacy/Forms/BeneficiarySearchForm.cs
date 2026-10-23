@@ -1,0 +1,44 @@
+using System;
+using System.Windows.Forms;
+using SampleLegacy.Services;
+
+namespace SampleLegacy.Forms
+{
+    public partial class BeneficiarySearchForm : BaseDialogForm
+    {
+        public ClientDto Selected { get; private set; }
+
+        public BeneficiarySearchForm()
+        {
+            // VB6-upgrade style: column headers created in code, not in the designer
+            _lstResults_ColumnHeader_1 = new ColumnHeader("name");
+            _lstResults_ColumnHeader_2 = new ColumnHeader("dob");
+            InitializeComponent();
+        }
+
+        private void txtName_ButtonClick(object sender, EventArgs e)
+        {
+            lstResults.Columns[0].Text = "Name";
+            var results = ServiceLocator.Client.SearchClients(new ClientSearchCriteria { Surname = txtName.EditValue as string });
+            btnOK.Enabled = results.Count > 0;
+        }
+
+        private void lstResults_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            btnOK.Enabled = true;
+        }
+
+        protected override void OnAccept()
+        {
+            Selected = new ClientDto();
+            DialogResult = DialogResult.OK;
+            Close();
+        }
+
+        // handler-shaped, never wired anywhere: must be diagnosed as such
+        private void btnExport_Click(object sender, EventArgs e)
+        {
+            MessageBox.Show("export");
+        }
+    }
+}

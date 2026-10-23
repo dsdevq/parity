@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read|Grep|Glob|Bash|Edit|Write|MultiEdit",
+        "hooks": [{ "type": "command", "command": "sh legacy/hooks/guard-legacy.sh" }]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [{ "type": "command", "command": "sh legacy/hooks/lint-on-stop.sh" }]
+      }
+    ]
+  }
+}

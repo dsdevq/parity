@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype"><value>text/microsoft-resx</value></resheader>
+  <resheader name="version"><value>2.0</value></resheader>
+  <data name="cboProduct.Properties.NullText" xml:space="preserve">
+    <value>[select a product]</value>
+  </data>
+  <data name="chkSinglePremium.Properties.Caption" xml:space="preserve">
+    <value>Single premium</value>
+  </data>
+  <data name="layoutControlItem2.Text" xml:space="preserve">
+    <value>Premium</value>
+  </data>
+  <data name="$this.Text" xml:space="preserve">
+    <value>New Business - Step 3: Premium</value>
+  </data>
+</root>

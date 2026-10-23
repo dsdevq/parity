@@ -1,0 +1,13 @@
+{
+  "//": "Config for the synthetic fixture. At work this file lives in your Angular repo and points at the real csproj.",
+  "project": "SampleLegacy/SampleLegacy.csproj",
+  "references": ["WinFormsStubs/bin/Debug/net10.0/WinFormsStubs.dll"],
+  "selfAssembly": "SampleLegacy.Build/bin/Debug/net10.0/SampleLegacy.dll",
+  "includeRuntimeReferences": true,
+  "formBaseTypes": ["System.Windows.Forms.Form", "System.Windows.Forms.UserControl", "DevExpress.XtraEditors.XtraForm", "DevExpress.XtraEditors.XtraUserControl"],
+  "serviceBoundary": ["SampleLegacy.Services.IPolicyService", "SampleLegacy.Services.IClientService", "SampleLegacy.Services.*Client"],
+  "ignoreCalls": ["System.*", "DevExpress.*"],
+  "controlCategories": "../templates/control-categories.json",
+  "maxCallDepth": 2,
+  "output": "../.out/legacy"
+}

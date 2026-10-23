@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Compiles the synthetic legacy sources against the stubs to produce SampleLegacy.dll,
+       which stands in for "the legacy project's own built assembly" (extract.config selfAssembly). -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>SampleLegacy</AssemblyName>
+    <RootNamespace>SampleLegacy</RootNamespace>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <NoWarn>CS0067;CS0169;CS0414;CS0649</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../SampleLegacy/**/*.cs" />
+    <ProjectReference Include="../WinFormsStubs/WinFormsStubs.csproj" />
+  </ItemGroup>
+</Project>

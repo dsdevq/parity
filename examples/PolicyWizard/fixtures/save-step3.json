@@ -1,0 +1,6 @@
+{
+  "service": "svc:IPolicyService.SavePolicyStep",
+  "recorded": "2026-10-22",
+  "request": { "policy": { "policyId": 0, "productId": 101, "premium": 120.00, "frequency": "Monthly", "installments": 12, "singlePremium": false }, "step": 3 },
+  "response": null
+}

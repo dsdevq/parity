@@ -1,0 +1,36 @@
+# Testing
+
+`dotnet test` runs the suite over `fixtures/SampleLegacy`, a synthetic legacy project that reproduces the
+patterns reported from real codebases. Every extraction test states its input (a fixture form) and its
+expected output (ids, categories, parents, counts); every lint test mutates the example spec and names
+the codes it expects. The fixture is the contract: a new real-world pattern is first added there as a
+form with invented names, then the extractor is changed until the test passes.
+
+## Issues to tests
+
+| Issue | Pattern in the fixture | Test |
+|---|---|---|
+| #1 `ImageList.Images.SetKeyName` raw | `BeneficiarySearchForm.designer.cs` `imgIcons` | `ExtractTests.names_the_designer_uses_but_never_creates_are_resolved_not_diagnosed` (`Images.SetKeyName()` prop) |
+| #2 designer locals diagnosed | `editorButtonImageOptions1` local | same test: category `local` |
+| #3 ListView `ColumnHeader` fields | `_lstResults_ColumnHeader_1/2` created in the constructor | same test: category `column`, parent `lstResults`, `@declaredOnly`, no `dyn:` duplicate |
+| #4 members inherited from a custom base form | `BaseDialogForm` with `btnOK`, `btnCancel`, `pnlMain`; `this.Appearance.BackColor`, `this.IconOptions.ShowIcon` | same test: `@inherited`, form props |
+| #5 `UNREACHED-METHOD` without detail | `btnExport_Click`, never wired | `ExtractTests.unreached_method_diagnostic_says_what_was_checked` |
+| #6 probe misses `.designer.cs` | `BeneficiarySearchForm.designer.cs` (lowercase) | `IssueTests.issue_6_probe_matches_a_lowercase_designer_companion_by_exact_form_name` |
+| #7 references reloaded per round, no timing, solution-wide globs | - | `ProjectTests.references_can_be_derived_from_the_csproj_items`, `IssueTests.issue_7_references_load_once_and_each_phase_is_timed` |
+| #8 CRLF breaks tests and slices | - | `ExtractTests.slices_never_contain_carriage_returns`, `IssueTests.issue_8_a_spec_with_crlf_line_endings_lints_identically`; `.gitattributes` forces LF |
+| #9 guard hook fails open without jq | - | `GuardHookTests.issue_9_guard_fails_closed_without_a_root_and_works_without_jq` (runs the script under `sh` with jq hidden; skipped where no POSIX shell exists) |
+| #10.3 anonymization claim | - | `IssueTests.issue_10_report_contains_no_identifier_from_the_codebase`, `issue_10_report_anonymizes_every_diagnostic_shape_the_extractor_emits` |
+| #10.6 verifying `formBaseTypes` | - | `IssueTests.issue_10_an_unresolvable_form_base_type_is_a_diagnostic_and_a_glob_that_matches_no_form_explains_itself` |
+| #10.8 output path | - | `issue_6_...` asserts the probe prints `outputPath:` and reference counts |
+| #10.1, .2, .4, .5, .7 | documentation and `bin/parity.cmd` | not testable; README handoff section |
+
+## Adding a pattern
+
+1. Add or extend a form under `fixtures/SampleLegacy/Forms` with invented names, and list its files in
+   `fixtures/SampleLegacy/SampleLegacy.csproj`. If it needs a control type the stubs lack, add the type
+   to `fixtures/WinFormsStubs` with only the members the form touches.
+2. `dotnet build fixtures/SampleLegacy.Build` must stay green: the fixture is compiled so that
+   `selfAssembly` is exercised like at work.
+3. Write the test first: what the manifest must contain for that form. Then change the extractor.
+4. `every_form_has_no_raw_statements_and_only_the_intended_diagnostics` lists the diagnostics each
+   form is allowed to have; a new intended diagnostic goes into that table with its reason.

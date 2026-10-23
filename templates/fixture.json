@@ -1,0 +1,6 @@
+{
+  "service": "svc:<IService>.<Method>",
+  "recorded": "<YYYY-MM-DD>",
+  "request": {},
+  "response": {}
+}

@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Stand-ins for System.Windows.Forms and DevExpress so the synthetic legacy fixture
+       compiles on any OS. Only type names and the members the fixture touches exist here.
+       At work the real assemblies come from the legacy bin folder; this project is never shipped. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <NoWarn>CS0067;CS1591</NoWarn>
+  </PropertyGroup>
+</Project>

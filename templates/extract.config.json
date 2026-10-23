@@ -1,0 +1,33 @@
+{
+  "//": "Lives in the Angular repo (e.g. legacy/extract.config.json). Paths are relative to this file.",
+  "project": "C:/src/LegacyApp/Modules/AcmeAdmin/AcmeAdmin.csproj",
+  "//references": "Framework reference assemblies (both folders) and nothing solution-wide. Globbing a shared output folder with hundreds of DLLs takes tens of minutes behind an antivirus.",
+  "references": [
+    "C:/Program Files (x86)/Reference Assemblies/Microsoft/Framework/.NETFramework/v4.8/*.dll",
+    "C:/Program Files (x86)/Reference Assemblies/Microsoft/Framework/.NETFramework/v4.8/Facades/*.dll"
+  ],
+  "//referencesFromProject": "Resolve the csproj's own Reference and ProjectReference items by name in referenceDirs (the project's output folder, as printed by parity probe), plus HintPaths when they exist.",
+  "referencesFromProject": true,
+  "referenceDirs": [
+    "C:/src/LegacyApp/bin/Debug",
+    "C:/Program Files (x86)/DevExpress 23.2/Components/Bin/Framework"
+  ],
+  "selfAssembly": "C:/src/LegacyApp/Modules/AcmeAdmin/bin/Debug/AcmeAdmin.dll",
+  "//framework": "A .NET Framework legacy project: keep includeRuntimeReferences false and list the v4.x reference assemblies (installed with Visual Studio or the targeting pack). Mixing them with the embedded .NET 10 references makes System types ambiguous.",
+  "includeRuntimeReferences": false,
+  "formBaseTypes": [
+    "System.Windows.Forms.Form",
+    "System.Windows.Forms.UserControl",
+    "DevExpress.XtraEditors.XtraForm",
+    "DevExpress.XtraEditors.XtraUserControl",
+    "LegacyApp.Framework.BaseForm"
+  ],
+  "serviceBoundary": [
+    "LegacyApp.Services.*",
+    "LegacyApp.Proxies.*Client"
+  ],
+  "ignoreCalls": ["System.*", "DevExpress.*", "LegacyApp.Framework.Logging.*"],
+  "controlCategories": "control-categories.json",
+  "maxCallDepth": 2,
+  "output": "."
+}
