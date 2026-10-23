@@ -77,7 +77,4 @@ public sealed class Kit
     }
 
     public string Text(string source) => System.Text.Encoding.UTF8.GetString(Files[source]);
-
-    /// <summary>The phase named in .phase, or the first one.</summary>
-    public KitPhase? Phase(string name) => Manifest.Phases.FirstOrDefault(p => p.Name == name);
 }

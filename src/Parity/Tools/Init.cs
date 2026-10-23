@@ -27,6 +27,9 @@ public static class Init
 {
     public static InitResult Run(Kit kit, InitOptions o)
     {
+        var driverKind = o.PhaseDriver == null ? null : o.PhaseDriver.Length > 0 ? o.PhaseDriver : OperatingSystem.IsWindows() ? "cmd" : "sh";
+        if (driverKind is not (null or "sh" or "cmd")) throw new ArgumentException("--phase-driver takes sh or cmd (or nothing, for this platform)");
+
         var lines = new List<InitLine>();
         var notes = new List<string>();
         var repo = Path.GetFullPath(o.RepoDir);
@@ -78,13 +81,11 @@ public static class Init
         }
 
         // 7. the phase driver
-        if (o.PhaseDriver != null)
+        if (driverKind != null)
         {
-            var kind = o.PhaseDriver.Length > 0 ? o.PhaseDriver : OperatingSystem.IsWindows() ? "cmd" : "sh";
-            if (kind is not ("sh" or "cmd")) throw new ArgumentException("--phase-driver takes sh or cmd (or nothing, for this platform)");
             var sh = PhaseDriver.ScriptPath(m, "sh");
             Own(lines, Abs(sh), sh, Encoding.UTF8.GetBytes(PhaseDriver.Sh(m)), o.Merge);
-            if (kind == "cmd")
+            if (driverKind == "cmd")
             {
                 var cmd = PhaseDriver.ScriptPath(m, "cmd");
                 Own(lines, Abs(cmd), cmd, Encoding.UTF8.GetBytes(PhaseDriver.Cmd(m)), o.Merge);

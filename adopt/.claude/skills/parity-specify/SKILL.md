@@ -10,7 +10,7 @@ exists, `legacy/<Module>/evidence/<Form>.json`. The legacy source is off limits 
 enforces it). Everything you may cite is printed in the manifest or recorded as an `ev:` id in the
 evidence file; every id you write must appear there verbatim.
 
-1. Ensure `legacy/.phase` contains `specify`. If the spec already exists and `parity lint` reports
+1. Ensure `legacy/.phase` contains `specify`. If the spec already exists and `"${PARITY_BIN:-parity}" lint` reports
    `STALE`, run `"${PARITY_BIN:-parity}" rebind legacy/<Module>/spec/<Form>.md` before anything else: exit 0 means it is
    rebound and you continue at step 7; exit 1 prints the rules whose citations changed or vanished, so
    re-read exactly those in the manifest, fix them, set the hash it printed, and continue at step 7;

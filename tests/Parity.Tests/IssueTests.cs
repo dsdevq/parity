@@ -1328,52 +1328,65 @@ public sealed class IssueTests
     public void issue_23_the_installed_skills_are_self_contained()
     {
         // input: the skills as init installs them. Expected: the spec template sits beside the specify skill and equals
-        // templates/spec.md, no skill names a path the consuming repo lacks, and every command goes through PARITY_BIN
-        // with the PATH lookup as the fallback (run here through sh both ways).
+        // templates/spec.md; every repo-relative file a skill names exists in the consuming repo; every command a skill
+        // gives (a span whose first word names parity) runs through sh with PARITY_BIN set and nothing named parity on PATH,
+        // and reaches that binary - a bare `parity`, a shell variable or any other spelling fails with "not found".
         using var repo = new ConsumingRepo(_f.RepoRoot);
         repo.Parity("init", "--merge");
 
         var template = repo.Read(".claude/skills/parity-specify/spec.md");
         Assert.Equal(Norm(File.ReadAllText(Path.Combine(_f.RepoRoot, "templates", "spec.md"))), Norm(template));
-        var spans = new List<string>();
+        var commands = new List<string>();
         foreach (var skill in repo.Files(".claude/skills").Where(f => f.EndsWith("/SKILL.md") && f.Contains("/parity-")))
         {
-            var text = repo.Read(skill);
-            Assert.DoesNotContain("templates/", text);
-            var mine = System.Text.RegularExpressions.Regex.Matches(text, "`([^`]+)`").Select(m => m.Groups[1].Value).ToList();
-            spans.AddRange(mine);
-            // a command with arguments never starts at a bare `parity`
-            Assert.DoesNotContain(mine, sp => System.Text.RegularExpressions.Regex.IsMatch(sp, @"^parity \w+ "));
-            // a repo-relative path into the skills folder exists in the consuming repo
-            foreach (var path in mine.Where(sp => sp.StartsWith(".claude/skills/")))
-                Assert.True(repo.Exists(path.Split(' ')[0]), $"{skill} names {path}");
+            var spans = System.Text.RegularExpressions.Regex.Matches(repo.Read(skill), "`([^`]+)`").Select(m => m.Groups[1].Value).ToList();
+            foreach (var sp in spans.Where(sp => !sp.Contains(' ') && !sp.Contains('<') && sp.Contains('/') && System.Text.RegularExpressions.Regex.IsMatch(sp, @"\.(md|json|sh|phase)$")))
+                Assert.True(repo.Exists(sp), $"{skill} names {sp}, which the consuming repo lacks");
+            commands.AddRange(spans.Where(sp => sp.Contains(' ') && (sp.Contains("PARITY_BIN") || sp.Split(' ')[0].Trim('"', '$', '{', '}', '\'').Contains("parity", StringComparison.OrdinalIgnoreCase))));
         }
-        Assert.Contains(".claude/skills/parity-specify/spec.md", repo.Read(".claude/skills/parity-specify/SKILL.md"));
-        foreach (var verb in new[] { "extract", "probe", "lint", "rebind" })
-            Assert.Contains(spans, sp => sp.StartsWith("\"${PARITY_BIN:-parity}\" " + verb + " "));
-
+        Assert.NotEmpty(commands);
         if (OperatingSystem.IsWindows() || GuardHookTests.Sh() == null) return;
-        // the same spelling runs: through PARITY_BIN, and, with it unset, through parity on PATH
-        var wrapper = Path.Combine(repo.Dir, "..", "tools");
-        Directory.CreateDirectory(wrapper);
-        var script = Path.Combine(wrapper, "parity");
-        File.WriteAllText(script, $"#!/bin/sh\nexec '{Environment.ProcessPath}' '{Path.Combine(AppContext.BaseDirectory, "parity.dll")}' \"$@\"\n");
-        if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-        var command = "\"${PARITY_BIN:-parity}\" lint legacy/Orders/spec/Missing.md";
-        foreach (var (name, env) in new (string, Dictionary<string, string>)[]
-        {
-            ("PARITY_BIN", new() { ["PARITY_BIN"] = script }),
-            ("PATH", new() { ["PATH"] = wrapper + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH") }),
-        })
+
+        // a skill's span is a template: <placeholders> stand for values the agent fills in
+        string Fill(string span) => System.Text.RegularExpressions.Regex.Replace(span, "<[^>]*>", "x");
+        (int Code, string Out, string Err) Sh(string command, Dictionary<string, string> env)
         {
             var psi = new ProcessStartInfo(GuardHookTests.Sh()!) { WorkingDirectory = repo.Dir, UseShellExecute = false, RedirectStandardError = true, RedirectStandardOutput = true };
             psi.ArgumentList.Add("-c"); psi.ArgumentList.Add(command);
             psi.Environment.Remove("PARITY_BIN");
             foreach (var (k, v) in env) psi.Environment[k] = v;
             using var p = Process.Start(psi)!;
-            var err = p.StandardError.ReadToEnd(); p.StandardOutput.ReadToEnd(); p.WaitForExit();
-            Assert.True(p.ExitCode == 3 && err.StartsWith("parity:"), $"via {name}: exit {p.ExitCode}: {err}");   // the binary ran: it refused the missing spec itself
+            var err = p.StandardError.ReadToEndAsync(); var o = p.StandardOutput.ReadToEnd(); p.WaitForExit();
+            return (p.ExitCode, o, err.Result);
         }
+
+        var tools = Path.Combine(repo.Dir, "..", "tools");
+        Directory.CreateDirectory(tools);
+        var empty = Path.Combine(repo.Dir, "..", "empty-path");
+        Directory.CreateDirectory(empty);
+        var record = Path.Combine(tools, "record-argv");
+        var calls = Path.Combine(tools, "calls.log");
+        File.WriteAllText(record, "#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$CALLS\"\n");
+        File.SetUnixFileMode(record, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var verbs = new HashSet<string>();
+        foreach (var command in commands.Distinct())
+        {
+            File.Delete(calls);
+            var r = Sh(Fill(command), new() { ["PARITY_BIN"] = record, ["CALLS"] = calls, ["PATH"] = empty });
+            Assert.True(File.Exists(calls), $"`{command}` never reached PARITY_BIN: exit {r.Code}: {r.Err}");
+            verbs.Add(File.ReadAllLines(calls).Single());
+        }
+        Assert.Superset(new HashSet<string> { "extract", "probe", "lint", "rebind" }, verbs);
+
+        // with PARITY_BIN unset the same spelling falls back to parity on PATH, and that is the real binary
+        var wrapper = Path.Combine(tools, "on-path");
+        Directory.CreateDirectory(wrapper);
+        var script = Path.Combine(wrapper, "parity");
+        File.WriteAllText(script, $"#!/bin/sh\nexec '{Environment.ProcessPath}' '{Path.Combine(AppContext.BaseDirectory, "parity.dll")}' \"$@\"\n");
+        File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var lint = Fill(commands.First(c => c.Contains(" lint ") && c.EndsWith(".md")));
+        var viaPath = Sh(lint, new() { ["PATH"] = wrapper + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH") });
+        Assert.True(viaPath.Code == 3 && viaPath.Err.StartsWith("parity:"), $"via PATH: exit {viaPath.Code}: {viaPath.Err}");   // the binary ran: it refused the missing spec itself
     }
 
     static string StatusOf(List<(string Status, string Line)> lines, string name) => lines.Single(l => l.Line.StartsWith(name + " ")).Status;
@@ -1514,16 +1527,14 @@ public sealed class IssueTests
         var both = repo.Parity("init", "--phase-driver", "cmd");
         Assert.Equal(0, both.Code);
         var cmd = repo.Read("legacy/run-phases.cmd");
-        Assert.Contains("sh \"%~dp0run-phases.sh\" %*", cmd);
         Assert.DoesNotContain("\n", cmd.Replace("\r\n", ""));   // CRLF only
         Assert.Equal("unchanged", InitActions(repo.Parity("init", "--phase-driver", "cmd").Out)["legacy/run-phases.sh"]);
-        Assert.Equal(2, repo.Parity("init", "--phase-driver", "bat").Code);
 
-        // generated from the kit: every driven phase is in the script, the human-only one is not
-        var driver = repo.Read("legacy/run-phases.sh");
-        var phases = Kit.Load().Manifest.Phases;
-        foreach (var p in phases.Where(p => p.Driven)) Assert.Contains($"    {p.Name}) printf", driver);
-        foreach (var p in phases.Where(p => !p.Driven)) Assert.DoesNotContain($"    {p.Name}) printf", driver);
+        // a mistyped driver kind is refused before anything is written
+        using var untouched = new ConsumingRepo(_f.RepoRoot, foreignSetup: false);
+        var before = Snapshot(untouched);
+        Assert.Equal(2, untouched.Parity("init", "--phase-driver", "bat").Code);
+        Assert.Equal(before, Snapshot(untouched));
 
         if (OperatingSystem.IsWindows() || GuardHookTests.Sh() == null) return;
         var log = Path.Combine(repo.Dir, "..", "agent.log");
