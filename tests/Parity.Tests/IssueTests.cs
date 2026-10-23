@@ -388,6 +388,7 @@ public sealed class IssueTests
             // an outcome is judged by the rule's own fixtures: a variant only on its service row does not count
             var rowVariant = _f.InstallExampleSpec("PolicyWizardStep3", s => s.Replace("- fixtures: limits-term-life\n", "- fixtures: limits-term-life\n- outcomes: valid, invalid\n")
                 .Replace("| limits-term-life |", "| limits-term-life, limits-term-life.invalid |"));
+            File.WriteAllText(recorded, File.ReadAllText(recorded).Replace("\"recorded\": \"2026-10-22\",", "\"recorded\": \"2026-10-22\", \"variant\": \"valid\","));   // installing the spec restored the example's copy
             Assert.Equal(new[] { "R-PolicyWizardStep3-001: outcome 'invalid' has no listed fixture with variant 'invalid' and no 'outcome-gap: invalid - <reason>'" },
                 Errors(Gate(rowVariant, out _)).Select(x => x.Message));
 
