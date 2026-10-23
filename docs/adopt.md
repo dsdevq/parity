@@ -102,9 +102,9 @@ directory the call is refused.
 unknown, input not JSON, no path in a path tool's input, unresolvable `cd`, unknown tool, unreadable
 `guard` settings, a `legacy/extract.config.json` that is not strict JSON, **or no `jq`**. The hook reads the
 config with `jq`, so keep it free of the `//` comments and trailing commas parity itself accepts; the refusal
-says so when it finds them, even with `PARITY_LEGACY_ROOT` set. `jq` is required to read tool input; the `sed` fallback only finds the
-legacy root so the message can say what is wrong. Install it with `winget install jqlang.jq`,
-`scoop install jq`, `brew install jq` or `apt install jq`.
+says so when it finds them, even with `PARITY_LEGACY_ROOT` set. `jq` is required to read tool input; the `sed`
+fallback only finds the legacy root so the message can say what is wrong. Install it with
+`winget install jqlang.jq`, `scoop install jq`, `brew install jq` or `apt install jq`.
 
 **MCP code-index servers.** A code-search or code-graph server that indexes the legacy tree usually takes
 no path, so no path check can see it. The hook refuses MCP tools by name instead. Built in, matched
@@ -155,8 +155,7 @@ legacy root inside the repo, `Grep`, `Glob` and MCP searches rooted above it are
 search or wildcard over a directory that contains it (`grep -r Foo .`, `cat */Forms/X.cs` from the repo root)
 reaches it without naming it, which token checks cannot catch. Prefer the layout with the legacy tree beside the
 repo, not inside it: with the legacy root inside the repo, every repo-wide `Grep`, `Glob` or MCP search is refused in
-the restricted phases.
-A `cd` is followed as if it ran unconditionally and succeeded: a conditional
+the restricted phases. A `cd` is followed as if it ran unconditionally and succeeded: a conditional
 (`false && cd src`, `cd src || ...`), backgrounded (`cd src &`) or piped (`cd src | ...`) `cd`, a `cd` that
 fails, and `popd` are not modelled, so a later relative path may resolve elsewhere than the guard thinks. An
 MCP server with its own index of the legacy tree takes no path, so only its name can refuse it. Neither the
