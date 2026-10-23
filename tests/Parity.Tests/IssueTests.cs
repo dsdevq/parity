@@ -349,6 +349,23 @@ public sealed class IssueTests
         var h3 = Bound();
         Assert.Equal(ManifestHash.Of(current), h3);
 
+        // a rule that cites only the handler still depends on the callee's body: a changed callee blocks the rebind and names the path
+        var text6 = File.ReadAllText(spec)
+            .Replace("handler:PolicyWizardStep3/btnNext_Click, method:SampleLegacy.Forms.PolicyWizardController.Next(), method:SampleLegacy.Forms.PolicyWizardController.Show(int)", "handler:PolicyWizardStep3/btnNext_Click")
+            .Replace("then: svc:IPolicyService.SavePolicyStep is called", "then: `svc:IPolicyService.SavePolicyStep` is called");
+        File.WriteAllText(spec, text6);
+        File.Copy(current, prev, overwrite: true);
+        var callee = ManifestDiff.Load(current);
+        callee = callee with { Methods = callee.Methods.Select(x => x.Id == "method:SampleLegacy.Forms.PolicyWizardController.Next()" ? x with { Source = x.Source + " /* changed */" } : x).ToList() };
+        File.WriteAllText(current, System.Text.Json.JsonSerializer.Serialize(callee, Json.Options) + "\n");
+        Assert.Equal("source", Assert.Single(ManifestDiff.Compare(ManifestDiff.Load(prev), callee)).Fields.Single());
+        r = Rebind.Run(spec, null);
+        Assert.False(r.Rebound, r.Text);
+        Assert.Equal(h3, Bound());
+        Assert.Contains("R-PolicyWizardStep3-006 via handler:PolicyWizardStep3/btnNext_Click -> method:SampleLegacy.Forms.PolicyWizardController.Next()\n  method:SampleLegacy.Forms.PolicyWizardController.Next()  changed: source", r.Text.Replace("\r\n", "\n"));
+        File.Copy(prev, current, overwrite: true);
+        Assert.Equal(h3, ManifestHash.Of(current));
+
         // a change to what rules cite (IPolicyService no longer a service boundary): handlers changed, svc: ids removed; the hash stays
         cfg.ServiceBoundary.Remove("SampleLegacy.Services.IPolicyService");
         Extractor.Run(cfg, "M", "PolicyWizardStep3", new StringWriter());
@@ -359,6 +376,8 @@ public sealed class IssueTests
         Assert.Equal(h3, Bound());
         Assert.Contains("R-PolicyWizardStep3-003\n  cite handler:PolicyWizardStep3/cboProduct_EditValueChanged  changed: calls, serviceCalls\n  then svc:IPolicyService.GetAvailableRiders  removed\n  then svc:IPolicyService.GetPremiumLimits  removed\n", r.Text);
         Assert.Contains("Service calls\n  row svc:IPolicyService.GetAvailableRiders  removed\n", r.Text);
+        Assert.Contains("R-PolicyWizardStep3-006\n", r.Text);
+        Assert.Contains("  then svc:IPolicyService.SavePolicyStep  removed\n", r.Text);               // a backtick-quoted id resolves
         Assert.DoesNotContain("R-PolicyWizardStep3-004", r.Text);                           // cites nothing that changed
         Assert.Contains($"then set 'manifest: {ManifestHash.Of(current)}'", r.Text);
 

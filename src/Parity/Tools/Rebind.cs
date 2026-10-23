@@ -11,8 +11,9 @@ public sealed record RebindResult(bool Rebound, string Text);
 /// Moves a STALE spec to the re-extracted manifest when nothing it cites changed (issue #25). The diff runs between
 /// the manifest the spec was written against (<c>manifests/&lt;Form&gt;.prev.json</c>, or <c>--prev</c>) and the one on
 /// disk. A citation is affected when its id vanished or changed in more than its location: a rule's covers, cite and
-/// the ctrl:/dyn:/svc: ids in its then, and the ids of the Fields, No behavior and Service calls rows. Nothing affected:
-/// the manifest line is rewritten in place. Anything affected: the hash stays and the work list is printed.
+/// the ctrl:/dyn:/svc: ids in its then, and the ids of the Fields, No behavior and Service calls rows. A cited handler or
+/// method is also affected when anything it reaches through the manifest calls edges (transitively) changed or vanished.
+/// Nothing affected: the manifest line is rewritten in place. Anything affected: the hash stays and the work list is printed.
 /// New evt:/dyn: ids the spec does not mention are listed either way; the gate asks for them.
 /// </summary>
 public static partial class Rebind
@@ -39,7 +40,10 @@ public static partial class Rebind
         var prev = ManifestHash.Of(prevPath);
         if (prev != mv.Value) throw new InvalidOperationException($"refusing to rebind: the spec was written against {mv.Value} but {Rel(prevPath)} is {prev} (extracted more than once since the spec was bound?); {how}");
 
-        var changes = ManifestDiff.Compare(ManifestDiff.Load(prevPath), ManifestDiff.Load(currentPath));
+        var prevManifest = ManifestDiff.Load(prevPath);
+        var currentManifest = ManifestDiff.Load(currentPath);
+        var changes = ManifestDiff.Compare(prevManifest, currentManifest);
+        var edges = Edges(prevManifest, currentManifest);
         var hit = changes.Where(c => c.Significant).GroupBy(c => c.Id, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
 
         // work list: per rule, then per table, every cited id that vanished or changed
@@ -49,10 +53,11 @@ public static partial class Rebind
         {
             var cites = SpecParser.SplitIds(r.Get("covers")).Select(id => ("covers", id))
                 .Concat(SpecParser.SplitIds(r.Get("cite")).Select(id => ("cite", id)))
-                .Concat(ThenId().Matches(r.Get("then") ?? "").Select(m => ("then", m.Value.TrimEnd('.', ')', ':', '"'))))
+                .Concat(ThenId().Matches(r.Get("then") ?? "").Select(m => ("then", m.Value.TrimEnd('.', ')', ':', '"', '\'', '`', ']', '!', '?'))))
                 .Distinct().ToList();
             foreach (var (_, id) in cites) mentioned.Add(id);
             Collect(r.Id, cites, hit, work);
+            CollectReached(r.Id, cites, edges, hit, work);
         }
         foreach (var (table, rows) in new[] { ("Fields", spec.Fields), ("No behavior", spec.NoBehavior), ("Service calls", spec.ServiceCalls) })
         {
@@ -73,7 +78,7 @@ public static partial class Rebind
         }
         else
         {
-            sb.AppendLine($"not rebound {Rel(specPath)}: {work.Count} rule(s) or table(s) cite ids that changed or vanished between {mv.Value} and {current}.");
+            sb.AppendLine($"not rebound {Rel(specPath)}: {work.Count} work-list entr(ies): ids cited, or reached from a cited handler or method, that changed or vanished between {mv.Value} and {current}.");
             sb.AppendLine($"Re-read each in manifests/{formName}.md, update the spec, then set 'manifest: {current}'. parity diff {Rel(prevPath)} {Rel(currentPath)} shows every difference.");
             foreach (var (owner, ls) in work)
             {
@@ -94,6 +99,43 @@ public static partial class Rebind
         var lines = cites.Where(c => hit.ContainsKey(c.Id)).OrderBy(c => c.Id, StringComparer.Ordinal)
             .Select(c => $"  {c.Where} {c.Id}  " + (hit[c.Id].Kind == '-' ? "removed" : "changed: " + string.Join(", ", hit[c.Id].Fields))).ToList();
         if (lines.Count > 0) work.Add((owner, lines));
+    }
+
+    private static Dictionary<string, HashSet<string>> Edges(params FormManifest[] manifests)
+    {
+        var edges = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        foreach (var m in manifests)
+            foreach (var (id, calls) in m.Handlers.Select(h => (h.Id, h.Calls)).Concat(m.Methods.Select(x => (x.Id, x.Calls))))
+            {
+                if (!edges.TryGetValue(id, out var set)) edges[id] = set = new HashSet<string>(StringComparer.Ordinal);
+                set.UnionWith(calls);
+            }
+        return edges;
+    }
+
+    private static void CollectReached(string owner, List<(string Where, string Id)> cites, Dictionary<string, HashSet<string>> edges, Dictionary<string, EntryChange> hit, List<(string, List<string>)> work)
+    {
+        var direct = cites.Select(c => c.Id).ToHashSet(StringComparer.Ordinal);
+        var listed = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var start in cites.Select(c => c.Id).Where(id => edges.ContainsKey(id)).Distinct().OrderBy(id => id, StringComparer.Ordinal))
+        {
+            var path = new Dictionary<string, string> { [start] = start };
+            var queue = new Queue<string>();
+            queue.Enqueue(start);
+            while (queue.Count > 0)
+            {
+                var from = queue.Dequeue();
+                if (!edges.TryGetValue(from, out var next)) continue;
+                foreach (var to in next.OrderBy(id => id, StringComparer.Ordinal))
+                {
+                    if (path.ContainsKey(to)) continue;
+                    path[to] = path[from] + " -> " + to;
+                    queue.Enqueue(to);
+                    if (!hit.TryGetValue(to, out var change) || direct.Contains(to) || !listed.Add(to)) continue;
+                    work.Add(($"{owner} via {path[to]}", new List<string> { $"  {to}  " + (change.Kind == '-' ? "removed" : "changed: " + string.Join(", ", change.Fields)) }));
+                }
+            }
+        }
     }
 
     private static string Rel(string p) => Path.GetRelativePath(Environment.CurrentDirectory, p).Replace('\\', '/');

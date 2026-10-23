@@ -22,7 +22,10 @@ before anything else. It diffs the manifest the spec was written against (`manif
 or `--prev <old.json>` recovered from git) with the one on disk and checks every id the spec cites: each
 rule's `covers`, `cite` and the `ctrl:`/`dyn:`/`svc:` ids in its `then`, and the ids of the Fields,
 No behavior and Service calls rows. An id is affected when it vanished or changed in more than its
-location (`loc` alone moving is not a change to what the spec says).
+location (`loc` alone moving is not a change to what the spec says). A cited `handler:` or `method:`
+is also affected when any method reachable from it through the manifest `calls` edges (transitive,
+cycle-safe, edges taken from both manifests) vanished or changed, even if the rule does not cite that
+method; the work list names the path as `<rule> via handler:X -> method:Y`.
 
 - Nothing affected: the `manifest:` line is rewritten in place to the new hash, exit 0.
 - Something affected: the hash is left alone and the work list is printed grouped by rule (and table),
