@@ -2,14 +2,15 @@
 
 `parity lint <spec.md>` runs the structure checks. `--gate` adds coverage and readiness.
 `--implement <dir>` adds `COV-TEST` and `COV-TODO`. Output: `path:line CODE message`, sorted; warnings are suffixed
-`[warning]`; exit 1 when any error exists. The manifest is found at `<spec dir>/../manifests/<Form>.json`,
+`[warning]`; then a summary line on stderr, `E error(s), W warning(s), fixtures: N (M synthetic)`, counting the
+fixtures the spec lists that exist; exit 1 when any error exists. The manifest is found at `<spec dir>/../manifests/<Form>.json`,
 fixtures at `<spec dir>/../fixtures/`, debt at `<spec dir>/../extractor-debt.md`, evidence at
 `<spec dir>/../evidence/<Class>.json`. Resolving an `ev:` id reads the legacy source: the phase guard
 keeps the agent out of it, not the tool.
 
 | Code | Level | Meaning |
 |---|---|---|
-| GRAMMAR | lint | front matter, section, table or rule-block shape is wrong; unknown kind or disposition; `then` names no observable outcome; event both covered and no-behavior |
+| GRAMMAR | lint | front matter, section, table or rule-block shape is wrong; unknown kind or disposition; `then` names no observable outcome; event both covered and no-behavior; an empty or repeated `outcomes` entry, an `outcome-gap` that is not `<outcome> - <reason>`, names an undeclared outcome or repeats one |
 | STALE | lint | front-matter hash differs from the manifest on disk, or the manifest is missing. Nothing else is checked. Remedy: `parity rebind <spec.md>` rewrites the hash when nothing the spec cites changed, else prints the rules to re-read (`docs/spec.md`). |
 | CITE-UNKNOWN | lint | an id in `covers`, `cite`, Fields, No behavior or Service calls is not in the manifest; an `ev:` id has no record in `evidence/<Class>.json` |
 | CITE-KIND | lint | `covers` holds something other than `evt:`/`dyn:`; `cite` something other than `handler:`/`method:`/`ev:`, or only `ev:` ids |
@@ -26,7 +27,10 @@ keeps the agent out of it, not the tool.
 | COV-METHOD | gate, warning | a sliced transitive method is cited by no rule |
 | COV-SERVICE | gate | a `svc:` id has no Service calls row or no fixtures listed |
 | FIXTURE-MISSING | gate | a named fixture file does not exist or records a different service |
-| FIXTURE-INVALID | gate | a fixture file is not valid JSON |
+| FIXTURE-INVALID | gate | a fixture file is not valid JSON; a listed fixture has no `service`, a `recorded` that is neither a `YYYY-MM-DD` date nor `synthetic`, or a field of the wrong type |
+| FIXTURE-SYNTHETIC | gate | a listed synthetic fixture lacks `shapeVerified: true` or a non-empty `note` |
+| FIXTURE-SYNTHETIC | gate, warning | every fixture of a service a rule touches (its Service calls row, its `fixtures:`, a `svc:` in `then`) is synthetic; a test built on them must say so |
+| FIXTURE-OUTCOME | gate | a rule's declared outcome has no fixture with that `variant` and no `outcome-gap` line |
 | COV-RAW | gate | the manifest has raw statements or diagnostics not acknowledged in `extractor-debt.md`. A raw statement is acknowledged by a line carrying its `file:line`; a diagnostic by a line carrying `CODE: Form.member` (the message's subject) or, for diagnostics without a subject, the full message. The line also needs an owner and a `YYYY-MM-DD`. A bare code acknowledges nothing; one line covers one entry. |
 | OPEN | gate | Open questions, less the lines closed by evidence, is not exactly `- none` |
 | STATUS | gate | status is not `reviewed`, or reviewed-by lacks a name and date |

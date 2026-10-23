@@ -1,6 +1,11 @@
 {
   "service": "svc:<IService>.<Method>",
-  "recorded": "<YYYY-MM-DD>",
+  "recorded": "<YYYY-MM-DD, or synthetic for a reply the host cannot be made to return>",
+  "variant": "<optional: the outcome this reply stands for, as named in a rule's outcomes>",
+  "scenario": "<optional: the business scenario id>",
+  "source": "<optional: host, environment or tool run that produced it>",
+  "shapeVerified": "<synthetic only: true once its shape was checked against a real reply>",
+  "note": "<synthetic only: what the reply stands for and why it cannot be recorded>",
   "request": {},
   "response": {}
 }

@@ -25,6 +25,9 @@ public static partial class SpecLinter
     [GeneratedRegex(@"\b\d{4}-\d{2}-\d{2}\b")] private static partial Regex DateRx();
     [GeneratedRegex(@"^closed by evidence\b")] private static partial Regex ClosedByEvidence();
     [GeneratedRegex(@"\bev:[A-Za-z_]\w*/\d+")] private static partial Regex EvIdRx();
+    [GeneratedRegex(@"\bsvc:[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*")] private static partial Regex SvcIdRx();
+    [GeneratedRegex(@"\bR-\w+-\d+\b")] private static partial Regex RuleIdRx();
+    [GeneratedRegex(@"^(\S+)\s+-\s+(\S.*)$")] private static partial Regex OutcomeGapRx();
 
     /// <summary>
     /// What a debt line must contain to acknowledge a diagnostic: the code plus the message's subject
@@ -37,8 +40,19 @@ public static partial class SpecLinter
         return m.Success ? code + ": " + m.Groups[1].Value : code + ": " + message;
     }
 
-    public static List<Finding> Lint(string specPath, bool gate, string? implementDir)
+    public static List<Finding> Lint(string specPath, bool gate, string? implementDir) => Lint(specPath, gate, implementDir, out _);
+
+    /// <summary>The line printed after the findings: error and warning counts, then the fixture tally when lint got that far.</summary>
+    public static string Summary(IReadOnlyCollection<Finding> findings, FixtureTally? fixtures)
     {
+        var errors = findings.Count(x => x.Severity == "error");
+        return $"{errors} error(s), {findings.Count - errors} warning(s)" + (fixtures == null ? "" : $", {fixtures}");
+    }
+
+    /// <param name="fixtures">the fixtures the spec lists that exist, and how many of them are synthetic; null when lint stopped before reading the spec.</param>
+    public static List<Finding> Lint(string specPath, bool gate, string? implementDir, out FixtureTally? fixtures)
+    {
+        fixtures = null;
         var file = Path.GetRelativePath(Environment.CurrentDirectory, specPath).Replace('\\', '/');
         var f = new List<Finding>();
         void E(int line, string code, string msg) => f.Add(new Finding(file, line, code, "error", msg));
@@ -117,6 +131,19 @@ public static partial class SpecLinter
                 if (!Decided().IsMatch(q)) E(r.LineOf("quirk"), "DROP-REASON", $"{r.Id}: quirk needs 'decided-by <name> <YYYY-MM-DD>'");
             }
             foreach (var fx in SpecParser.SplitIds(r.Get("fixtures"))) ruleFixtures.Add((fx, r.LineOf("fixtures")));
+
+            // outcomes are declared, never inferred from prose; each one is a fixture variant or a stated gap
+            var outcomes = SpecParser.SplitIds(r.Get("outcomes"));
+            if (r.Get("outcomes") != null && outcomes.Count == 0) E(r.LineOf("outcomes"), "GRAMMAR", $"{r.Id}: outcomes lists nothing");
+            foreach (var dup in outcomes.GroupBy(x => x, StringComparer.Ordinal).Where(g => g.Count() > 1)) E(r.LineOf("outcomes"), "GRAMMAR", $"{r.Id}: outcome '{dup.Key}' is listed twice");
+            var gapped = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var (gap, line) in r.OutcomeGaps)
+            {
+                var gm = OutcomeGapRx().Match(gap);
+                if (!gm.Success) E(line, "GRAMMAR", $"{r.Id}: outcome-gap must be '<outcome> - <reason>'");
+                else if (!outcomes.Contains(gm.Groups[1].Value)) E(line, "GRAMMAR", $"{r.Id}: outcome-gap names '{gm.Groups[1].Value}', which is not in outcomes");
+                else if (!gapped.Add(gm.Groups[1].Value)) E(line, "GRAMMAR", $"{r.Id}: outcome '{gm.Groups[1].Value}' has two outcome-gap lines");
+            }
         }
 
         var fieldRows = new Dictionary<string, SpecRow>(StringComparer.Ordinal);
@@ -159,6 +186,16 @@ public static partial class SpecLinter
             foreach (var id in evIds) Ev(line, "Open questions", id);
         }
 
+        // the fixtures this spec lists, each with the first line that lists it; counted with or without --gate
+        var fixturesDir = Path.Combine(moduleDir, "fixtures");
+        var unreadable = new List<(string File, string Message)>();
+        var fixtureFiles = Fixtures.Load(fixturesDir, unreadable);
+        var listed = new SortedDictionary<string, int>(StringComparer.Ordinal);
+        foreach (var (name, line) in svcRows.Values.SelectMany(row => SpecParser.SplitIds(row.Cell(2)).Select(n => (n, row.Line))).Concat(ruleFixtures))
+            listed[name] = listed.TryGetValue(name, out var first) ? Math.Min(first, line) : line;
+        var present = listed.Keys.Where(fixtureFiles.ContainsKey).Select(n => fixtureFiles[n]).ToList();
+        fixtures = new FixtureTally(present.Count, present.Count(x => x.Synthetic));
+
         if (!gate) return f.OrderBy(x => x.Line).ThenBy(x => x.Code, StringComparer.Ordinal).ToList();
 
         // ---- gate: coverage against the manifest ----
@@ -186,19 +223,15 @@ public static partial class SpecLinter
         foreach (var x in m.Methods.Where(x => x.Source != null))
             if (!cited.Contains(x.Id)) W(0, "COV-METHOD", $"{x.Id} (depth {x.Depth}) is reached from a handler but cited by no rule");
 
-        var fixturesDir = Path.Combine(moduleDir, "fixtures");
-        var fixtureService = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (Directory.Exists(fixturesDir))
-            foreach (var fx in Directory.EnumerateFiles(fixturesDir, "*.json"))
-            {
-                try
-                {
-                    using var doc = JsonDocument.Parse(File.ReadAllText(fx));
-                    if (doc.RootElement.TryGetProperty("service", out var sv) && sv.ValueKind == JsonValueKind.String)
-                        fixtureService[Path.GetFileNameWithoutExtension(fx)] = sv.GetString() ?? "";
-                }
-                catch (JsonException ex) { E(0, "FIXTURE-INVALID", $"{Path.GetFileName(fx)}: {ex.Message}"); }
-            }
+        foreach (var (name, msg) in unreadable) E(0, "FIXTURE-INVALID", $"{name}: {msg}");
+        foreach (var (name, line) in listed)
+        {
+            if (!fixtureFiles.TryGetValue(name, out var fx)) continue;                          // FIXTURE-MISSING below
+            foreach (var p in fx.Problems) E(line, "FIXTURE-INVALID", $"{name}.json {p}");
+            if (!fx.Synthetic) continue;
+            var lacks = new[] { fx.ShapeVerified == true ? null : "shapeVerified: true", string.IsNullOrWhiteSpace(fx.Note) ? "a note" : null }.OfType<string>().ToList();
+            if (lacks.Count > 0) E(line, "FIXTURE-SYNTHETIC", $"{name}.json is synthetic but lacks {string.Join(" and ", lacks)}; check its shape against a real reply of {fx.Service} and say in the note what it stands for");
+        }
         foreach (var s in m.ServiceCalls)
         {
             if (!svcRows.TryGetValue(s.Id, out var row)) { E(0, "COV-SERVICE", $"{s.Id} has no row under Service calls"); continue; }
@@ -206,12 +239,34 @@ public static partial class SpecLinter
             if (fxs.Count == 0) E(row.Line, "COV-SERVICE", $"{s.Id} lists no fixtures");
             foreach (var fx in fxs)
             {
-                if (!fixtureService.TryGetValue(fx, out var svc)) E(row.Line, "FIXTURE-MISSING", $"fixture '{fx}' not found at fixtures/{fx}.json");
-                else if (svc != s.Id) E(row.Line, "FIXTURE-MISSING", $"fixture '{fx}' records {svc}, not {s.Id}");
+                if (!fixtureFiles.TryGetValue(fx, out var ff)) E(row.Line, "FIXTURE-MISSING", $"fixture '{fx}' not found at fixtures/{fx}.json");
+                else if (ff.Service != null && ff.Service != s.Id) E(row.Line, "FIXTURE-MISSING", $"fixture '{fx}' records {ff.Service}, not {s.Id}");
             }
         }
         foreach (var (name, line) in ruleFixtures)
-            if (!fixtureService.ContainsKey(name)) E(line, "FIXTURE-MISSING", $"fixture '{name}' not found at fixtures/{name}.json");
+            if (!fixtureFiles.ContainsKey(name)) E(line, "FIXTURE-MISSING", $"fixture '{name}' not found at fixtures/{name}.json");
+
+        // per rule: the fixtures of every service it touches (its Service calls rows, its own fixtures:, a svc: in then)
+        foreach (var r in spec.Rules)
+        {
+            var own = SpecParser.SplitIds(r.Get("fixtures")).Where(fixtureFiles.ContainsKey).Select(n => fixtureFiles[n]).ToList();
+            var services = new SortedSet<string>(own.Select(x => x.Service).OfType<string>().Where(svcIds.Contains), StringComparer.Ordinal);
+            foreach (var (id, row) in svcRows) if (RuleIdRx().Matches(row.Cell(1)).Any(x => x.Value == r.Id)) services.Add(id);
+            foreach (Match sm in SvcIdRx().Matches(r.Get("then") ?? "")) if (svcIds.Contains(sm.Value)) services.Add(sm.Value);
+            var usable = new List<FixtureFile>(own);
+            foreach (var svc in services)
+            {
+                var forSvc = (svcRows.TryGetValue(svc, out var row) ? SpecParser.SplitIds(row.Cell(2)) : new())
+                    .Where(fixtureFiles.ContainsKey).Select(n => fixtureFiles[n]).Concat(own).Where(x => x.Service == svc).DistinctBy(x => x.Name).ToList();
+                if (forSvc.Count > 0 && forSvc.All(x => x.Synthetic))
+                    W(r.Line, "FIXTURE-SYNTHETIC", $"{r.Id}: every fixture for {svc} is synthetic ({string.Join(", ", forSvc.Select(x => x.Name))}); a test built on them must say it runs on synthetic replies");
+                usable.AddRange(forSvc);
+            }
+            var gapped = r.OutcomeGaps.Select(g => OutcomeGapRx().Match(g.Value)).Where(x => x.Success).Select(x => x.Groups[1].Value).ToHashSet(StringComparer.Ordinal);
+            foreach (var o in SpecParser.SplitIds(r.Get("outcomes")).Distinct(StringComparer.Ordinal))
+                if (!gapped.Contains(o) && !usable.Any(x => x.Variant == o))
+                    E(r.LineOf("outcomes"), "FIXTURE-OUTCOME", $"{r.Id}: outcome '{o}' has no listed fixture with variant '{o}' and no 'outcome-gap: {o} - <reason>'");
+        }
 
         if (m.Raw.Count > 0 || m.Diagnostics.Count > 0)
         {

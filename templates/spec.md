@@ -33,6 +33,7 @@ Purpose: one or two sentences. This is the only free text in the file.
 <!-- kind: validation | enablement | navigation | data | calculation | ui | service | lifecycle
      covers: evt: ids this rule accounts for (required, at least one)
      cite: handler: / method: ids the rule is read from (required)
+     outcomes: valid, invalid, ... (optional) - each needs a fixture with that "variant", or "- outcome-gap: <outcome> - <reason>"
      No hedging words: probably, likely, assume, should, seems, typically, usually, maybe, might.
      Unsure? Put it under Open questions; the gate stays closed until it is answered. -->
 

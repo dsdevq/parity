@@ -20,6 +20,8 @@ material for ids only; behavior comes from the spec.
    The `then` clause is the assertion. A `quirk: preserve` is implemented as written, with the quirk
    noted in the test name.
 4. Service calls go through the repo's existing gateway client; fixtures are the mocked responses.
+   A test driven by a fixture with `"recorded": "synthetic"` says so in its name (`FIXTURE-SYNTHETIC`
+   warns where a rule has nothing else).
 5. Run the repo's tests. Then `parity lint legacy/<Module>/spec/<Form>.md --gate --implement <src dir>`.
    Fix `COV-TEST` by adding the missing test, never by editing the spec.
 6. If the spec is wrong or incomplete, stop: report the rule id and the problem. The spec is changed in
