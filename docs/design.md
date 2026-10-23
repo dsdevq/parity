@@ -115,6 +115,42 @@ base and the configured subclass are diagnosed, not described.
 **Duplicates.** Token streams with identifiers and literals replaced; exact hash clusters, and for
 same-named handlers across forms a 3-gram Jaccard similarity above 0.6 as a near cluster.
 
+## Adoption: `init`, `doctor` and the embedded kit
+
+Adoption used to be a checklist (copy hooks, skills and templates, merge a hooks block, put the binary on PATH,
+create folders), and every step was a place to get it subtly wrong: a skill pointing at `templates/spec.md` that
+the consuming repo does not have, hooks ordered after a repo's own. `parity init` does the layout and
+`parity doctor` checks it; `docs/adopt.md` ("Setup") is the user-facing description. Decisions:
+
+- **The kit is embedded in the binary.** `adopt/` and `templates/` are compiled in as resources. The release is one
+  self-contained file used on a machine without a parity checkout, and the installed skills and hooks always
+  match the version of the tool that reads their output (`"${PARITY_BIN:-parity}"` calls, hook behaviour, the spec
+  template the lint expects). `adopt/` and `templates/` stay the single source; a test compares the embedded copy
+  with the files in the repo and fails on a kit file the binary does not carry.
+- **`init` is data-driven.** `adopt/kit.json` says which folders and files go where, which are the repo's own after
+  the first write (config, control categories, `.phase`), which `settings.json` block is merged, and what the phases
+  are (name, prompt, pause message). A new skill folder, hook script or template, or a new phase, is a kit change; `init`
+  and `doctor` iterate the manifest and need no code change.
+- **Ownership decides overwriting.** Tool-owned files are created, then reported as `would-update` when they differ
+  and rewritten only by `--merge`; repo-owned files are written once. A second `init` is a no-op that exits 0; a
+  pending change exits 1, so a script can tell.
+- **`settings.json` is merged, never replaced.** Parity's entries are appended after the repo's own for each event
+  (hooks run in order, and the repo's hooks may depend on running first), nothing foreign is reordered or
+  rewritten, and an entry already wired (same command or same script) is not added twice. A file with comments is
+  refused, because rewriting it would lose them; the same strictness is needed by `jq` in the guard.
+- **The config skeleton comes from the csproj**, using the same reader as `extract`, so what `init` writes is what
+  `extract` resolves. What is a decision of the adopter (`serviceBoundary`, `variants`) is emptied, not guessed.
+- **`doctor` looks tools up instead of running them** (`sh`, `jq`, `parity` on PATH or `PARITY_BIN`) and reuses
+  `CompilationBuilder.BuildReferences` for the reference count and `REF-MISSING`, so it reports exactly what
+  `extract` will see, including the >200 DLL warning (the per-run cost is the antivirus scanning each DLL).
+- **The phase driver is a process per phase.** "A fresh session per phase" is only true if the agent is a new
+  process with the phase file already set, so the script writes `.phase` and starts `PARITY_AGENT` (default
+  `claude -p`) once per phase with that phase's prompt. It is generated from the kit's phases so it cannot drift.
+  Phases that need a person end the run by default (a headless session cannot record fixtures or review a spec).
+  The script is POSIX `sh`, like the hooks, so the Windows file is a `.cmd` that hands over to `sh` (Git for Windows,
+  already required by the hooks), following the `bin/parity.cmd` convention.
+- Not in `init`: what the phases do, the guard's matching rules (issue 22), and a map phase (issue 17).
+
 ## What it deliberately does not do
 
 - Load the solution or run MSBuild.

@@ -8,9 +8,9 @@ description: Extract one legacy WinForms module into parity manifests. Use when 
 Deterministic phase. You run scripts and read their output; you do not interpret the legacy code.
 
 1. Ensure `legacy/.phase` contains `extract`.
-2. If this module was never probed: `parity probe <csproj from legacy/extract.config.json> --forms '<glob>'`.
+2. If this module was never probed: `"${PARITY_BIN:-parity}" probe <csproj from legacy/extract.config.json> --forms '<glob>'`.
    Read the shapes list once. Do not analyse it further; it exists for issue reports.
-3. Run `parity extract --config legacy/extract.config.json --module <Module> --forms '<glob>'`.
+3. Run `"${PARITY_BIN:-parity}" extract --config legacy/extract.config.json --module <Module> --forms '<glob>'`.
 4. Read the summary table. For every form:
    - `raw > 0` or `diag > 0`: open `legacy/<Module>/manifests/<Form>.md`, sections Raw and Diagnostics.
      - `REF-MISSING` / `TYPE-UNRESOLVED`: the config lacks a reference; fix `references` or `selfAssembly` and rerun.

@@ -1207,6 +1207,382 @@ public sealed class IssueTests
         var problem = Assert.Single(order.Diagnostics, d => d.Code == "VARIANT-CONFIG");
         Assert.Equal("variant Heron: subclass 'HeronInvoiceForm' derives from no form of the main project (its base chain stops at 'InvoiceForm')", problem.Message);
     }
+
+    // ---- issue 23: parity init / doctor / self-contained skills / phase driver ------------------------------
+
+    static Dictionary<string, string> InitActions(string stdout) =>
+        stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries))
+            .ToDictionary(p => p[1].Trim().Split("  (")[0].Trim(), p => p[0]);
+
+    static Dictionary<string, string> Snapshot(ConsumingRepo repo) =>
+        Directory.EnumerateFiles(repo.Dir, "*", SearchOption.AllDirectories).Where(f => !f.Contains(Path.DirectorySeparatorChar + ".git" + Path.DirectorySeparatorChar))
+            .ToDictionary(f => Path.GetRelativePath(repo.Dir, f).Replace('\\', '/'), f => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(f))));
+
+    static string Norm(string s) => s.Replace("\r\n", "\n");
+
+    [Fact]
+    public void issue_23_init_lays_out_the_consuming_repo_and_merges_settings_without_clobbering()
+    {
+        // input: a consuming repo that already has .claude/settings.json (a foreign PreToolUse and Stop hook, a permission)
+        // and a skill of its own, next to a legacy csproj. Expected: parity init lays out legacy/ and the skills from the
+        // kit, leaves the settings for --merge, and --merge adds parity's hooks after the repo's own, in order.
+        using var repo = new ConsumingRepo(_f.RepoRoot);
+        var settingsBefore = repo.Read(".claude/settings.json");
+        var foreignSkill = repo.Read(".claude/skills/house-style/SKILL.md");
+
+        var first = repo.Parity("init", "--module", "Orders");
+        Assert.Equal(1, first.Code);   // the settings are waiting for --merge
+        var acts = InitActions(first.Out);
+        Assert.Equal("would-merge", acts[".claude/settings.json"]);
+        Assert.Equal(settingsBefore, repo.Read(".claude/settings.json"));   // untouched without --merge
+        Assert.Equal(foreignSkill, repo.Read(".claude/skills/house-style/SKILL.md"));
+
+        // the layout, from the kit: every kit file is where adopt/kit.json says
+        foreach (var f in new[] { "legacy/extract.config.json", "legacy/control-categories.json", "legacy/.phase", "legacy/hooks/guard-legacy.sh", "legacy/hooks/lint-on-stop.sh",
+                     "legacy/templates/spec.md", "legacy/templates/fixture.json", ".claude/skills/parity-extract/SKILL.md", ".claude/skills/parity-specify/SKILL.md",
+                     ".claude/skills/parity-implement/SKILL.md", ".claude/skills/parity-bug/SKILL.md", "legacy/Orders/spec/.gitkeep", "legacy/Orders/fixtures/.gitkeep" })
+            Assert.True(repo.Exists(f), f);
+        Assert.Equal("extract\n", repo.Read("legacy/.phase"));
+        Assert.Equal(Norm(File.ReadAllText(Path.Combine(_f.RepoRoot, "adopt", "hooks", "guard-legacy.sh"))), Norm(repo.Read("legacy/hooks/guard-legacy.sh")));
+        Assert.Equal(Norm(File.ReadAllText(Path.Combine(_f.RepoRoot, "templates", "control-categories.json"))), Norm(repo.Read("legacy/control-categories.json")));
+
+        // the config skeleton comes from the detected csproj, is strict JSON (the guard's jq reads it) and loads
+        using (var doc = System.Text.Json.JsonDocument.Parse(repo.Read("legacy/extract.config.json")))
+        {
+            var root = doc.RootElement;
+            Assert.Equal("../LegacyApp/SampleLegacy/SampleLegacy.csproj", root.GetProperty("project").GetString());
+            Assert.Equal("../LegacyApp/SampleLegacy/bin/Debug/SampleLegacy.exe", root.GetProperty("selfAssembly").GetString());
+            Assert.Equal("../LegacyApp/SampleLegacy/bin/Debug", root.GetProperty("referenceDirs")[0].GetString());
+            Assert.False(root.GetProperty("includeRuntimeReferences").GetBoolean());   // the csproj is .NET Framework 4.8
+            Assert.Contains("/v4.8/", root.GetProperty("references")[0].GetString());
+            Assert.Equal(0, root.GetProperty("serviceBoundary").GetArrayLength());     // the adopter's decision, not a template's invented name
+        }
+        var loaded = ExtractConfig.Load(repo.Path_("legacy/extract.config.json"));
+        Assert.True(File.Exists(loaded.Resolve(loaded.Project)));
+        Assert.Contains("note: serviceBoundary is empty", first.Err);
+
+        // the kit shipped inside the binary is the kit in this repo, byte for byte, and nothing in it is forgotten
+        var kit = Kit.Load();
+        foreach (var (key, bytes) in kit.Files)
+            Assert.Equal(Norm(File.ReadAllText(Path.Combine(_f.RepoRoot, key))), Norm(System.Text.Encoding.UTF8.GetString(bytes)));
+        var onDisk = Directory.EnumerateFiles(Path.Combine(_f.RepoRoot, "adopt"), "*", SearchOption.AllDirectories).Concat(Directory.EnumerateFiles(Path.Combine(_f.RepoRoot, "templates"), "*", SearchOption.AllDirectories))
+            .Select(x => Path.GetRelativePath(_f.RepoRoot, x).Replace('\\', '/')).Where(x => x != "adopt/README.md").ToList();
+        Assert.Empty(onDisk.Except(kit.Files.Keys));
+
+        // --merge: parity's entries after the repo's own, the repo's entries and permission exactly as they were
+        var merged = repo.Parity("init", "--merge");
+        Assert.Equal(0, merged.Code);
+        Assert.Equal("merge", InitActions(merged.Out)[".claude/settings.json"]);
+        var settings = repo.Settings();
+        var kitSettings = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(_f.RepoRoot, "adopt", ".claude", "settings.json")))!;
+        var before = System.Text.Json.Nodes.JsonNode.Parse(settingsBefore)!;
+        Assert.True(System.Text.Json.Nodes.JsonNode.DeepEquals(before["permissions"], settings["permissions"]));
+        foreach (var ev in new[] { "PreToolUse", "Stop" })
+        {
+            var entries = settings["hooks"]![ev]!.AsArray();
+            Assert.Equal(2, entries.Count);
+            Assert.True(System.Text.Json.Nodes.JsonNode.DeepEquals(before["hooks"]![ev]![0], entries[0]));          // the foreign hook, first and unchanged
+            Assert.True(System.Text.Json.Nodes.JsonNode.DeepEquals(kitSettings["hooks"]![ev]![0], entries[1]));     // issue 22's matcher and the guard command, exactly as on main
+        }
+        Assert.Equal(ConsumingRepo.ForeignCommand, settings["hooks"]!["PreToolUse"]![0]!["hooks"]![0]!["command"]!.GetValue<string>());
+
+        // a second init is a no-op that says so, with and without --merge
+        var snap = Snapshot(repo);
+        foreach (var args in new[] { new[] { "init", "--merge", "--module", "Orders" }, new[] { "init" } })
+        {
+            var again = repo.Parity(args);
+            Assert.Equal(0, again.Code);
+            Assert.All(InitActions(again.Out).Values, a => Assert.Contains(a, new[] { "unchanged", "skip" }));
+            Assert.Equal(snap, Snapshot(repo));
+        }
+
+        // a kit file the repo changed is reported, not overwritten, until --merge; the repo's own files are never touched
+        File.WriteAllText(repo.Path_("legacy/hooks/lint-on-stop.sh"), "#!/bin/sh\nexit 0\n");
+        File.AppendAllText(repo.Path_("legacy/extract.config.json"), "\n");
+        File.WriteAllText(repo.Path_("legacy/.phase"), "specify\n");
+        var drift = repo.Parity("init");
+        Assert.Equal(1, drift.Code);
+        Assert.Equal("would-update", InitActions(drift.Out)["legacy/hooks/lint-on-stop.sh"]);
+        Assert.Equal("#!/bin/sh\nexit 0\n", repo.Read("legacy/hooks/lint-on-stop.sh"));
+        Assert.Equal(0, repo.Parity("init", "--merge").Code);
+        Assert.Equal(Norm(File.ReadAllText(Path.Combine(_f.RepoRoot, "adopt", "hooks", "lint-on-stop.sh"))), Norm(repo.Read("legacy/hooks/lint-on-stop.sh")));
+        Assert.Equal("specify\n", repo.Read("legacy/.phase"));
+        Assert.Equal(foreignSkill, repo.Read(".claude/skills/house-style/SKILL.md"));
+
+        // a repo with no settings.json gets the kit's, as is
+        using var fresh = new ConsumingRepo(_f.RepoRoot, foreignSetup: false);
+        Assert.Equal(0, fresh.Parity("init").Code);
+        Assert.True(System.Text.Json.Nodes.JsonNode.DeepEquals(kitSettings, fresh.Settings()));
+
+        // settings.json with comments is refused, untouched: rewriting it would drop them
+        using var commented = new ConsumingRepo(_f.RepoRoot, foreignSetup: false);
+        Directory.CreateDirectory(commented.Path_(".claude"));
+        File.WriteAllText(commented.SettingsPath, "{\n  // keep me\n  \"hooks\": {}\n}\n");
+        var refused = commented.Parity("init", "--merge");
+        Assert.Equal(3, refused.Code);
+        Assert.Contains("not strict JSON", refused.Err);
+        Assert.Contains("// keep me", commented.Read(".claude/settings.json"));
+    }
+
+    [Fact]
+    public void issue_23_the_installed_skills_are_self_contained()
+    {
+        // input: the skills as init installs them. Expected: the spec template sits beside the specify skill and equals
+        // templates/spec.md, no skill names a path the consuming repo lacks, and every command goes through PARITY_BIN
+        // with the PATH lookup as the fallback (run here through sh both ways).
+        using var repo = new ConsumingRepo(_f.RepoRoot);
+        repo.Parity("init", "--merge");
+
+        var template = repo.Read(".claude/skills/parity-specify/spec.md");
+        Assert.Equal(Norm(File.ReadAllText(Path.Combine(_f.RepoRoot, "templates", "spec.md"))), Norm(template));
+        var spans = new List<string>();
+        foreach (var skill in repo.Files(".claude/skills").Where(f => f.EndsWith("/SKILL.md") && f.Contains("/parity-")))
+        {
+            var text = repo.Read(skill);
+            Assert.DoesNotContain("templates/", text);
+            var mine = System.Text.RegularExpressions.Regex.Matches(text, "`([^`]+)`").Select(m => m.Groups[1].Value).ToList();
+            spans.AddRange(mine);
+            // a command with arguments never starts at a bare `parity`
+            Assert.DoesNotContain(mine, sp => System.Text.RegularExpressions.Regex.IsMatch(sp, @"^parity \w+ "));
+            // a repo-relative path into the skills folder exists in the consuming repo
+            foreach (var path in mine.Where(sp => sp.StartsWith(".claude/skills/")))
+                Assert.True(repo.Exists(path.Split(' ')[0]), $"{skill} names {path}");
+        }
+        Assert.Contains(".claude/skills/parity-specify/spec.md", repo.Read(".claude/skills/parity-specify/SKILL.md"));
+        foreach (var verb in new[] { "extract", "probe", "lint", "rebind" })
+            Assert.Contains(spans, sp => sp.StartsWith("\"${PARITY_BIN:-parity}\" " + verb + " "));
+
+        if (OperatingSystem.IsWindows() || GuardHookTests.Sh() == null) return;
+        // the same spelling runs: through PARITY_BIN, and, with it unset, through parity on PATH
+        var wrapper = Path.Combine(repo.Dir, "..", "tools");
+        Directory.CreateDirectory(wrapper);
+        var script = Path.Combine(wrapper, "parity");
+        File.WriteAllText(script, $"#!/bin/sh\nexec '{Environment.ProcessPath}' '{Path.Combine(AppContext.BaseDirectory, "parity.dll")}' \"$@\"\n");
+        if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var command = "\"${PARITY_BIN:-parity}\" lint legacy/Orders/spec/Missing.md";
+        foreach (var (name, env) in new (string, Dictionary<string, string>)[]
+        {
+            ("PARITY_BIN", new() { ["PARITY_BIN"] = script }),
+            ("PATH", new() { ["PATH"] = wrapper + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH") }),
+        })
+        {
+            var psi = new ProcessStartInfo(GuardHookTests.Sh()!) { WorkingDirectory = repo.Dir, UseShellExecute = false, RedirectStandardError = true, RedirectStandardOutput = true };
+            psi.ArgumentList.Add("-c"); psi.ArgumentList.Add(command);
+            psi.Environment.Remove("PARITY_BIN");
+            foreach (var (k, v) in env) psi.Environment[k] = v;
+            using var p = Process.Start(psi)!;
+            var err = p.StandardError.ReadToEnd(); p.StandardOutput.ReadToEnd(); p.WaitForExit();
+            Assert.True(p.ExitCode == 3 && err.StartsWith("parity:"), $"via {name}: exit {p.ExitCode}: {err}");   // the binary ran: it refused the missing spec itself
+        }
+    }
+
+    static string StatusOf(List<(string Status, string Line)> lines, string name) => lines.Single(l => l.Line.StartsWith(name + " ")).Status;
+    static string DetailOf(List<(string Status, string Line)> lines, string name) => lines.Single(l => l.Line.StartsWith(name + " ")).Line;
+
+    [Fact]
+    public void issue_23_doctor_prints_a_line_per_check_and_exits_non_zero_on_a_fail()
+    {
+        // input: an init-ed consuming repo whose legacy project is not built, then the same repo set up properly, then
+        // one thing broken at a time. Expected: one pass/warn/fail line per check, exit 1 on any fail, 0 otherwise.
+        using var repo = new ConsumingRepo(_f.RepoRoot);
+        Assert.Equal(0, repo.Parity("init", "--merge").Code);
+        if (OperatingSystem.IsWindows() || GuardHookTests.Sh() == null) return;   // the checks look tools up on a controlled PATH
+
+        Dictionary<string, string?> Env(string bin, string? parityBin = "") => new() { ["PATH"] = bin, ["PARITY_BIN"] = parityBin == "" ? Path.Combine(bin, "parity") : parityBin, ["PARITY_LEGACY_ROOT"] = null };
+        var bin = repo.Path_Only("jq", "sh", "parity");
+
+        // not built, reference assemblies missing: fails, each on its own line, and a non-zero exit
+        var first = repo.Doctor(Env(bin));
+        Assert.Equal(1, first.Code);
+        Assert.All(first.Lines, l => Assert.Contains(l.Status, new[] { "pass", "warn", "fail" }));
+        foreach (var name in new[] { ".net sdk", "parity binary", "sh", "jq", "config", "legacy root", "legacy project", "reference assemblies", "output path", "built", "references",
+                     "skills", "hooks", "templates", "spec template", "hook PreToolUse guard-legacy.sh", "hook Stop lint-on-stop.sh", "phase", "git ignore" })
+            Assert.Single(first.Lines, l => l.Line.StartsWith(name + " "));
+        Assert.Equal("fail", StatusOf(first.Lines, "output path"));
+        Assert.Equal("fail", StatusOf(first.Lines, "built"));
+        Assert.Equal("fail", StatusOf(first.Lines, "reference assemblies"));
+        Assert.Equal("warn", StatusOf(first.Lines, ".net sdk"));   // no dotnet on this PATH: fine with a release binary
+        Assert.Equal("pass", StatusOf(first.Lines, "parity binary"));
+        Assert.Equal("pass", StatusOf(first.Lines, "hook PreToolUse guard-legacy.sh"));
+        Assert.Equal("pass", StatusOf(first.Lines, "git ignore"));
+        Assert.Matches(@"\d+ pass, \d+ warn, [1-9]\d* fail", first.Err);
+
+        // set up properly: built, reference assemblies present. Some csproj References are not in the output: a warn, exit 0
+        repo.Build();
+        var refs = repo.References(3);
+        repo.EditConfig(c => c["references"] = new System.Text.Json.Nodes.JsonArray(refs + "/*.dll"));
+        var ok = repo.Doctor(Env(bin));
+        Assert.True(ok.Code == 0, string.Join("\n", ok.Lines.Where(l => l.Status == "fail").Select(l => l.Line)));
+        Assert.DoesNotContain(ok.Lines, l => l.Status == "fail");
+        Assert.Equal("warn", StatusOf(ok.Lines, "references"));
+        Assert.Contains("not found", DetailOf(ok.Lines, "references"));
+
+        // each of these breaks one check
+        var noJq = repo.Path_Only("sh", "parity");
+        var r = repo.Doctor(Env(noJq));
+        Assert.Equal(1, r.Code); Assert.Equal("fail", StatusOf(r.Lines, "jq"));
+        r = repo.Doctor(Env(bin, parityBin: null));   // PATH has parity, PARITY_BIN unset: still fine
+        Assert.Equal("pass", StatusOf(r.Lines, "parity binary"));
+        var empty = repo.Path_Only("jq", "sh");
+        r = repo.Doctor(Env(empty, parityBin: null));
+        Assert.Equal(1, r.Code); Assert.Equal("fail", StatusOf(r.Lines, "parity binary"));
+        r = repo.Doctor(Env(bin, parityBin: "/nowhere/parity"));
+        Assert.Equal("fail", StatusOf(r.Lines, "parity binary"));
+        var env = Env(bin); env["PARITY_LEGACY_ROOT"] = Path.Combine(repo.Dir, "no-such-root");
+        Assert.Equal("fail", StatusOf(repo.Doctor(env).Lines, "legacy root"));
+
+        // above ~200 reference DLLs: a warn that says how many
+        repo.References(201);
+        r = repo.Doctor(Env(bin));
+        Assert.True(r.Code == 0, string.Join("\n", r.Lines.Where(l => l.Status == "fail").Select(l => l.Line)));
+        Assert.Equal("warn", StatusOf(r.Lines, "references"));
+        Assert.Contains("202 DLLs", DetailOf(r.Lines, "references"));   // 201 references plus the project's own
+        repo.EditConfig(c => c["includeRuntimeReferences"] = true);
+        Assert.Equal("warn", StatusOf(repo.Doctor(Env(bin)).Lines, "reference assemblies"));   // .NET Framework project with the embedded .NET references
+        repo.EditConfig(c => c["includeRuntimeReferences"] = false);
+
+        // hooks: wiring and script
+        File.Delete(repo.Path_("legacy/hooks/guard-legacy.sh"));
+        r = repo.Doctor(Env(bin));
+        Assert.Equal(1, r.Code);
+        Assert.Equal("fail", StatusOf(r.Lines, "hooks"));
+        Assert.Equal("fail", StatusOf(r.Lines, "hook PreToolUse guard-legacy.sh"));
+        Assert.Equal(0, repo.Parity("init").Code);   // restored
+        File.WriteAllText(repo.SettingsPath, "{ \"hooks\": { \"Stop\": [ { \"hooks\": [ { \"type\": \"command\", \"command\": \"sh legacy/hooks/lint-on-stop.sh\" } ] } ] } }");
+        r = repo.Doctor(Env(bin));
+        Assert.Equal("fail", StatusOf(r.Lines, "hook PreToolUse guard-legacy.sh"));
+        Assert.Equal("pass", StatusOf(r.Lines, "hook Stop lint-on-stop.sh"));
+        repo.Parity("init", "--merge");
+        // a guard wired with a narrower matcher than the kit's is a warn
+        var kitMatcher = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(_f.RepoRoot, "adopt", ".claude", "settings.json")))!["hooks"]!["PreToolUse"]![0]!["matcher"]!.GetValue<string>();
+        Assert.Equal(0, repo.Parity("init", "--merge").Code);
+        var s = repo.Settings();
+        var guard = s["hooks"]!["PreToolUse"]!.AsArray().Single(e => e!["matcher"]!.GetValue<string>() == kitMatcher)!;
+        guard["matcher"] = "Bash";
+        File.WriteAllText(repo.SettingsPath, s.ToJsonString());
+        Assert.Equal("warn", StatusOf(repo.Doctor(Env(bin)).Lines, "hook PreToolUse guard-legacy.sh"));
+        guard["matcher"] = kitMatcher;
+        File.WriteAllText(repo.SettingsPath, s.ToJsonString());
+        Assert.Equal("pass", StatusOf(repo.Doctor(Env(bin)).Lines, "hook PreToolUse guard-legacy.sh"));
+
+        // skills, templates, phase, config
+        Directory.Delete(repo.Path_(".claude/skills/parity-bug"), true);
+        r = repo.Doctor(Env(bin));
+        Assert.Equal("fail", StatusOf(r.Lines, "skills"));
+        repo.Parity("init");
+        File.WriteAllText(repo.Path_("legacy/.phase"), "ponder\n");
+        Assert.Equal("fail", StatusOf(repo.Doctor(Env(bin)).Lines, "phase"));
+        File.WriteAllText(repo.Path_("legacy/.phase"), "specify\n");
+        var cfgText = repo.Read("legacy/extract.config.json");
+        File.WriteAllText(repo.Path_("legacy/extract.config.json"), "// a comment parity accepts and jq does not\n" + cfgText);
+        r = repo.Doctor(Env(bin));
+        Assert.Equal("fail", StatusOf(r.Lines, "config"));
+        Assert.Contains("not strict JSON", DetailOf(r.Lines, "config"));
+        File.WriteAllText(repo.Path_("legacy/extract.config.json"), cfgText);
+
+        // git: an ignored legacy/ or module folder is a fail
+        Directory.CreateDirectory(repo.Path_("legacy/Orders/spec"));
+        File.WriteAllText(repo.Path_("legacy/Orders/spec/x.md"), "x");
+        File.WriteAllText(repo.Path_(".gitignore"), "legacy/Orders/\n");
+        r = repo.Doctor(Env(bin));
+        Assert.Equal("fail", StatusOf(r.Lines, "git ignore"));
+        Assert.Contains("legacy/Orders", DetailOf(r.Lines, "git ignore"));
+        File.WriteAllText(repo.Path_(".gitignore"), "legacy/\n");
+        Assert.Equal("fail", StatusOf(repo.Doctor(Env(bin)).Lines, "git ignore"));
+        File.Delete(repo.Path_(".gitignore"));
+        Assert.Equal("pass", StatusOf(repo.Doctor(Env(bin)).Lines, "git ignore"));
+
+        // not a git repo: a warn, not a fail
+        using var plain = new ConsumingRepo(_f.RepoRoot, foreignSetup: false, git: false);
+        plain.Parity("init");
+        var pbin = plain.Path_Only("jq", "sh", "parity");
+        var pr = plain.Doctor(new Dictionary<string, string?> { ["PATH"] = pbin, ["PARITY_BIN"] = null, ["PARITY_LEGACY_ROOT"] = null, ["GIT_CEILING_DIRECTORIES"] = Path.GetDirectoryName(plain.Dir) });
+        Assert.Equal("warn", StatusOf(pr.Lines, "git ignore"));
+    }
+
+    [Fact]
+    public void issue_23_phase_driver_runs_each_phase_in_a_fresh_session_with_its_prompt_and_phase()
+    {
+        // input: parity init --phase-driver, then the generated script with a stand-in for the headless agent that logs its
+        // process id, legacy/.phase and prompt. Expected: one process per phase, in order, each with the phase file set and
+        // that phase's prompt; a phase that needs a person ends the run; a failing session stops it.
+        using var repo = new ConsumingRepo(_f.RepoRoot, foreignSetup: false);
+        var shOnly = repo.Parity("init", "--phase-driver", "sh");
+        Assert.Equal(0, shOnly.Code);
+        Assert.True(repo.Exists("legacy/run-phases.sh"));
+        Assert.False(repo.Exists("legacy/run-phases.cmd"));
+        var both = repo.Parity("init", "--phase-driver", "cmd");
+        Assert.Equal(0, both.Code);
+        var cmd = repo.Read("legacy/run-phases.cmd");
+        Assert.Contains("sh \"%~dp0run-phases.sh\" %*", cmd);
+        Assert.DoesNotContain("\n", cmd.Replace("\r\n", ""));   // CRLF only
+        Assert.Equal("unchanged", InitActions(repo.Parity("init", "--phase-driver", "cmd").Out)["legacy/run-phases.sh"]);
+        Assert.Equal(2, repo.Parity("init", "--phase-driver", "bat").Code);
+
+        // generated from the kit: every driven phase is in the script, the human-only one is not
+        var driver = repo.Read("legacy/run-phases.sh");
+        var phases = Kit.Load().Manifest.Phases;
+        foreach (var p in phases.Where(p => p.Driven)) Assert.Contains($"    {p.Name}) printf", driver);
+        foreach (var p in phases.Where(p => !p.Driven)) Assert.DoesNotContain($"    {p.Name}) printf", driver);
+
+        if (OperatingSystem.IsWindows() || GuardHookTests.Sh() == null) return;
+        var log = Path.Combine(repo.Dir, "..", "agent.log");
+        var agent = Path.Combine(repo.Dir, "..", "agent.sh");
+        File.WriteAllText(agent, "#!/bin/sh\nprintf '%s|%s|%s\\n' \"$$\" \"$(cat legacy/.phase)\" \"$1\" >> \"$AGENT_LOG\"\n[ -z \"${AGENT_FAIL:-}\" ] || [ \"$(cat legacy/.phase)\" != \"$AGENT_FAIL\" ]\n");
+        (int Code, string Out, string Err) Drive(Dictionary<string, string?> env, params string[] args)
+        {
+            var psi = new ProcessStartInfo(GuardHookTests.Sh()!) { WorkingDirectory = Path.GetDirectoryName(repo.Dir)!, UseShellExecute = false, RedirectStandardError = true, RedirectStandardOutput = true };
+            psi.ArgumentList.Add(Path.Combine(repo.Dir, "legacy", "run-phases.sh"));
+            foreach (var a in args) psi.ArgumentList.Add(a);
+            psi.Environment["PARITY_AGENT"] = "sh " + agent; psi.Environment["AGENT_LOG"] = log;
+            psi.Environment.Remove("PARITY_NO_PAUSE"); psi.Environment.Remove("AGENT_FAIL");
+            foreach (var (k, v) in env) { if (v == null) psi.Environment.Remove(k); else psi.Environment[k] = v; }
+            using var pr = Process.Start(psi)!;
+            var err = pr.StandardError.ReadToEndAsync(); var o = pr.StandardOutput.ReadToEnd(); pr.WaitForExit();
+            return (pr.ExitCode, o, err.Result);
+        }
+        string[] Log() => File.Exists(log) ? File.ReadAllLines(log) : Array.Empty<string>();
+        string Prompt(string phase, string form, string module) => phase switch
+        {
+            "extract" => $"Run the parity-extract skill for form {form} of module {module}.",
+            "specify" => $"Run the parity-specify skill for form {form} of module {module}.",
+            _ => $"Run the parity-implement skill for form {form} of module {module}.",
+        };
+
+        // run from outside the repo: the script finds its own repo. The module name has a space: the prompt stays one argument
+        var straight = Drive(new() { ["PARITY_NO_PAUSE"] = "1" }, "Order Entry", "OrderForm");
+        Assert.Equal(0, straight.Code);
+        var lines = Log().Select(l => l.Split('|')).ToList();
+        Assert.Equal(new[] { "extract", "specify", "implement" }, lines.Select(l => l[1]));
+        Assert.Equal(3, lines.Select(l => l[0]).Distinct().Count());                         // three processes: three fresh sessions
+        Assert.Equal(new[] { "extract", "specify", "implement" }.Select(p => Prompt(p, "OrderForm", "Order Entry")), lines.Select(l => l[2]));
+        Assert.Equal("implement\n", repo.Read("legacy/.phase"));
+
+        // by default a phase that needs a person ends the run and says what to do and how to go on
+        File.Delete(log);
+        var paused = Drive(new(), "Orders", "OrderForm", "extract", "specify", "implement");
+        Assert.Equal(0, paused.Code);
+        Assert.Equal(new[] { "extract" }, Log().Select(l => l.Split('|')[1]));
+        Assert.Contains("record a fixture for every service call", paused.Out);
+        Assert.Contains("sh legacy/run-phases.sh Orders OrderForm specify implement", paused.Out);
+        Assert.Equal("extract\n", repo.Read("legacy/.phase"));
+        // the last requested phase does not pause
+        File.Delete(log);
+        Assert.Equal(0, Drive(new(), "Orders", "OrderForm", "specify").Code);
+        Assert.Equal(new[] { Prompt("specify", "OrderForm", "Orders") }, Log().Select(l => l.Split('|')[2]));
+
+        // a failing session stops the run; an unknown phase and missing arguments are refused before anything runs
+        File.Delete(log);
+        var failed = Drive(new() { ["PARITY_NO_PAUSE"] = "1", ["AGENT_FAIL"] = "specify" }, "Orders", "OrderForm");
+        Assert.Equal(1, failed.Code);
+        Assert.Equal(new[] { "extract", "specify" }, Log().Select(l => l.Split('|')[1]));
+        File.Delete(log);
+        var phaseBefore = repo.Read("legacy/.phase");
+        Assert.Equal(2, Drive(new(), "Orders", "OrderForm", "extract", "bug").Code);
+        Assert.Equal(2, Drive(new(), "Orders").Code);
+        Assert.Empty(Log());
+        Assert.Equal(phaseBefore, repo.Read("legacy/.phase"));
+    }
 }
 
 /// <summary>The guard hook, run through sh. Skipped where no POSIX shell exists (plain Windows without Git Bash).</summary>

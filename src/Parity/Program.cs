@@ -10,6 +10,10 @@ using Parity.Tools;
 const string Usage = """
 parity - reverse-engineer a legacy WinForms module into a citable manifest and gate its spec.
 
+  parity init     [--merge] [--project <legacy.csproj>] [--module <Name>] [--phase-driver [sh|cmd]]
+                                                       lay the adopt kit out in this repo (skills, hooks, templates, config skeleton, settings);
+                                                       without --merge, files that differ or need merging are reported, not changed
+  parity doctor   [--config <extract.config.json>]     one line per setup check (pass, warn, fail); exit 1 on any fail
   parity extract  --config <extract.config.json> --module <Name> --forms <glob>
   parity render   <manifest.json>                      rewrite the .md next to it
   parity lint     <spec.md> [--gate] [--implement <dir>]
@@ -23,7 +27,7 @@ parity - reverse-engineer a legacy WinForms module into a citable manifest and g
   parity diff     <old.json> <new.json>                entries added, removed and changed, by id per section
   parity rebind   <spec.md> [--prev <old.json>]        move a STALE spec to the new manifest when nothing it cites changed
 
-Exit codes: 0 ok, 1 lint errors / manifests differ / rebind left a work list, 2 usage, 3 failure (a refused rebind or fixture scaffold too).
+Exit codes: 0 ok, 1 lint errors / manifests differ / rebind left a work list / init has changes waiting for --merge / doctor failed a check, 2 usage, 3 failure (a refused rebind or fixture scaffold too).
 """;
 
 try
@@ -32,6 +36,23 @@ try
     var opts = ParseOpts(args.Skip(1).ToArray());
     switch (args[0])
     {
+        case "init":
+        {
+            var phaseDriver = opts.TryGetValue("phase-driver", out var pd) ? pd : null;
+            var r = Init.Run(Kit.Load(), new InitOptions(Directory.GetCurrentDirectory(), opts.ContainsKey("merge"), Opt(opts, "project"), Opt(opts, "module"), phaseDriver));
+            foreach (var l in r.Lines) Console.WriteLine(l);
+            foreach (var n in r.Notes) Console.Error.WriteLine($"note: {n}");
+            if (!r.Pending) Console.Error.WriteLine("next: parity doctor");
+            return r.Pending ? 1 : 0;
+        }
+        case "doctor":
+        {
+            var checks = Doctor.Run(Kit.Load(), Directory.GetCurrentDirectory(), Opt(opts, "config"));
+            foreach (var c in checks) Console.WriteLine(c);
+            var fails = checks.Count(c => c.Status == "fail");
+            Console.Error.WriteLine($"{checks.Count(c => c.Status == "pass")} pass, {checks.Count(c => c.Status == "warn")} warn, {fails} fail");
+            return fails > 0 ? 1 : 0;
+        }
         case "extract":
         {
             var cfg = ExtractConfig.Load(Opt(opts, "config") ?? "extract.config.json");
