@@ -105,8 +105,9 @@ Then delete a rule and run it again to see what the gate says.
 5. **Specify** from `manifests/<Form>.md` only, using `templates/spec.md`. Run `parity lint` until
    green, get the spec reviewed by someone who knows the business, set `status: reviewed`.
 6. **Gate**: `parity lint spec/<Form>.md --gate`. Every control, event, handler and service call is
-   accounted for or the gate is red. `--implement <dir>` additionally wants every rule id in the title of an active test
-   (`it`, `test`, `describe`, `[Fact]`); `it.todo`, `.skip`, comments and constants do not count (`COV-TODO` says where).
+   accounted for or the gate is red. `--implement <dir>` additionally wants every rule id in the
+   title of an active test (`it`, `test`, `describe`, `[Fact]`); `it.todo`, `.skip`, comments and
+   constants do not count (`COV-TODO` says where). See `docs/lint.md`.
 
 The work-side pieces that make the phases stick for an agent (skills, a hook that locks the legacy
 path during specify and implement, a hook that lints on stop) are in `adopt/`. See `docs/adopt.md`.
