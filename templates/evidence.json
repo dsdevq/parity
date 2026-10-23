@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "1",
+  "unit": "<Class>",
+  "root": "<legacy root, relative to this file's directory>",
+  "records": [
+    {
+      "id": "ev:<Class>/<n>",
+      "file": "<path relative to the legacy root>",
+      "start": 1,
+      "end": 1,
+      "quoteHash": "sha256:<16 hex of the quoted lines joined by \\n>",
+      "revision": "git:<HEAD sha>[+dirty] | manifest:sha256:<16 hex>",
+      "created": "<YYYY-MM-DD>",
+      "note": "<what the lines show that the manifest does not>",
+      "quote": ["<line start>", "...", "<line end>"]
+    }
+  ]
+}

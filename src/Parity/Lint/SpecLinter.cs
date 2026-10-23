@@ -23,6 +23,8 @@ public static partial class SpecLinter
 
     [GeneratedRegex(@"decided-by\s+\S+.*\b\d{4}-\d{2}-\d{2}\b")] private static partial Regex Decided();
     [GeneratedRegex(@"\b\d{4}-\d{2}-\d{2}\b")] private static partial Regex DateRx();
+    [GeneratedRegex(@"^closed by evidence\b")] private static partial Regex ClosedByEvidence();
+    [GeneratedRegex(@"\bev:[A-Za-z_]\w*/\d+")] private static partial Regex EvIdRx();
 
     /// <summary>
     /// What a debt line must contain to acknowledge a diagnostic: the code plus the message's subject
@@ -65,6 +67,9 @@ public static partial class SpecLinter
         var methodIds = m.Methods.Select(x => x.Id).ToHashSet(StringComparer.Ordinal);
         var svcIds = m.ServiceCalls.Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
         var allIds = controlIds.Concat(dynIds).Concat(eventIds).Concat(handlerIds).Concat(methodIds).Concat(svcIds).ToHashSet(StringComparer.Ordinal);
+        // ev: ids live outside the manifest, in evidence/<Unit>.json; each is re-read from the legacy source
+        var evidence = new EvidenceSet(moduleDir);
+        void Ev(int line, string who, string id) { if (evidence.Check(id) is { } bad) E(line, bad.Code, $"{who}: '{id}' {bad.Message}"); }
 
         // ---- structure ----
         foreach (var s in new[] { "Fields", "Rules", "No behavior", "Service calls", "Open questions" })
@@ -86,14 +91,19 @@ public static partial class SpecLinter
             if (covers.Count == 0 && r.Get("covers") != null) E(r.LineOf("covers"), "ORPHAN-RULE", $"{r.Id} covers nothing");
             foreach (var id in covers)
             {
-                if (!allIds.Contains(id)) E(r.LineOf("covers"), "CITE-UNKNOWN", $"{r.Id}: '{id}' is not in the manifest");
+                if (id.StartsWith("ev:", StringComparison.Ordinal)) E(r.LineOf("covers"), "CITE-KIND", $"{r.Id}: covers must list evt: (or dyn:) ids, got '{id}'");
+                else if (!allIds.Contains(id)) E(r.LineOf("covers"), "CITE-UNKNOWN", $"{r.Id}: '{id}' is not in the manifest");
                 else if (!id.StartsWith("evt:", StringComparison.Ordinal) && !id.StartsWith("dyn:", StringComparison.Ordinal)) E(r.LineOf("covers"), "CITE-KIND", $"{r.Id}: covers must list evt: (or dyn:) ids, got '{id}'");
                 else covered.Add(id);
             }
-            foreach (var id in SpecParser.SplitIds(r.Get("cite")))
+            var cites = SpecParser.SplitIds(r.Get("cite"));
+            if (cites.Count > 0 && cites.All(id => id.StartsWith("ev:", StringComparison.Ordinal)))
+                E(r.LineOf("cite"), "CITE-KIND", $"{r.Id}: cite needs a handler: or method: id beside its ev: ids");
+            foreach (var id in cites)
             {
-                if (!allIds.Contains(id)) E(r.LineOf("cite"), "CITE-UNKNOWN", $"{r.Id}: '{id}' is not in the manifest");
-                else if (!id.StartsWith("handler:", StringComparison.Ordinal) && !id.StartsWith("method:", StringComparison.Ordinal)) E(r.LineOf("cite"), "CITE-KIND", $"{r.Id}: cite must list handler: or method: ids, got '{id}'");
+                if (id.StartsWith("ev:", StringComparison.Ordinal)) Ev(r.LineOf("cite"), r.Id, id);
+                else if (!allIds.Contains(id)) E(r.LineOf("cite"), "CITE-UNKNOWN", $"{r.Id}: '{id}' is not in the manifest");
+                else if (!id.StartsWith("handler:", StringComparison.Ordinal) && !id.StartsWith("method:", StringComparison.Ordinal)) E(r.LineOf("cite"), "CITE-KIND", $"{r.Id}: cite must list handler:, method: or ev: ids, got '{id}'");
                 else cited.Add(id);
             }
             if (r.Get("then") is { } then && then.Length > 0 && !Regex.IsMatch(then, @"\b(ctrl|dyn|svc|form):\S+") && !Regex.IsMatch(then, @"\b[a-z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*\b"))
@@ -137,6 +147,16 @@ public static partial class SpecLinter
             var id = row.Cell(0).Trim('`');
             if (!svcIds.Contains(id)) E(row.Line, "CITE-UNKNOWN", $"Service calls: '{id}' is not a svc: id in the manifest");
             else svcRows[id] = row;
+        }
+
+        // a question closed by evidence stays listed and links the record that answers it; only the rest are open
+        var open = new List<(string Text, int Line)>();
+        foreach (var (text, line) in spec.OpenQuestions)
+        {
+            if (!ClosedByEvidence().IsMatch(text)) { open.Add((text, line)); continue; }
+            var evIds = EvIdRx().Matches(text).Select(x => x.Value).Distinct().ToList();
+            if (evIds.Count == 0) E(line, "EV-UNLINKED", $"Open questions: closed by evidence but links no ev: id: {text}");
+            foreach (var id in evIds) Ev(line, "Open questions", id);
         }
 
         if (!gate) return f.OrderBy(x => x.Line).ThenBy(x => x.Code, StringComparer.Ordinal).ToList();
@@ -207,10 +227,10 @@ public static partial class SpecLinter
             }
         }
 
-        if (spec.OpenQuestions.Count != 1 || !string.Equals(spec.OpenQuestions[0].Text, "none", StringComparison.OrdinalIgnoreCase))
-            foreach (var (text, line) in spec.OpenQuestions.Where(q => !string.Equals(q.Text, "none", StringComparison.OrdinalIgnoreCase)))
+        if (open.Count != 1 || !string.Equals(open[0].Text, "none", StringComparison.OrdinalIgnoreCase))
+            foreach (var (text, line) in open.Where(q => !string.Equals(q.Text, "none", StringComparison.OrdinalIgnoreCase)))
                 E(line, "OPEN", $"open question blocks the gate: {text}");
-        if (spec.OpenQuestions.Count == 0) E(0, "OPEN", "Open questions must contain '- none' to pass the gate");
+        if (open.Count == 0) E(0, "OPEN", "Open questions must contain '- none' to pass the gate");
 
         if (!spec.Front.TryGetValue("status", out var st) || st.Value != "reviewed") E(st.Line, "STATUS", "status must be 'reviewed' (set by the human reviewer, with reviewed-by)");
         else if (!spec.Front.TryGetValue("reviewed-by", out var rb) || !DateRx().IsMatch(rb.Value)) E(st.Line, "STATUS", "reviewed needs 'reviewed-by: <name> YYYY-MM-DD'");

@@ -36,12 +36,15 @@ from the manifest, which the agent cannot shrink.
 | `manifests/<Form>.json` | `parity extract` | control tree (incl. DevExpress layout items and grid columns), resx captions, event wiring from designer, code-behind, lambdas, overrides and constructors, per-handler source slice with controls read and written, calls, service-boundary calls with argument text, transitive methods to a bounded depth with their slices, bindings, provider validation rules, controls created at runtime, and everything it could not interpret under `raw` and `diagnostics` |
 | `manifests/<Form>.md` | same run | the same, rendered for an agent to read instead of the legacy file |
 | `module.json` | same run | forms, every service call id, exact and near duplicate handlers across forms |
+| `evidence/<Form>.json` | `parity evidence add` | quoted legacy lines the manifest lacks (a model class, a config value), each an `ev:` id with its file, range, quote hash and source revision |
 | `spec/<Form>.md` | you + agent | field inventory, rules with citations, no-behavior list, service calls with fixtures, open questions |
 | lint findings | `parity lint` | `file:line CODE message`, exit 1 on errors |
 
 Every id is stable and citeable: `ctrl:Form/field`, `dyn:Form/handler/local`, `evt:Form/field.Event`,
 `handler:Form/method`, `method:Namespace.Type.Method(params)`, `svc:IService.Method`. Every item
 carries `file:start-end`. The spec cites ids, never line numbers, so a citation either resolves or fails.
+A fact outside the manifest is cited the same way, through an `ev:Form/n` record whose quoted lines lint
+re-reads and re-hashes, so evidence either still matches the source or is `EV-STALE`.
 
 ## Install
 
@@ -103,7 +106,10 @@ Then delete a rule and run it again to see what the gate says.
    `parity report manifests/<Form>.json` prints the raw statements, diagnostics and unresolved calls
    with identifiers removed, which is what goes into the issue.
 5. **Specify** from `manifests/<Form>.md` only, using `templates/spec.md`. Run `parity lint` until
-   green, get the spec reviewed by someone who knows the business, set `status: reviewed`.
+   green, get the spec reviewed by someone who knows the business, set `status: reviewed`. When a rule
+   needs a fact the manifest lacks, record it before specifying:
+   `parity evidence add <Form> <file>:<start>-<end> --note <text>` prints an `ev:<Form>/<n>` the rule
+   cites beside its handler (`docs/spec.md`, Evidence).
 6. **Gate**: `parity lint spec/<Form>.md --gate`. Every control, event, handler and service call is
    accounted for or the gate is red. `--implement <dir>` additionally wants every rule id in the
    title of an active test (`it`, `test`, `describe`, `[Fact]`); `it.todo`, `.skip`, comments and
@@ -211,6 +217,10 @@ manifests and specs are meant to be committed and reviewed.
   own runner into `legacy/<Module>/fixtures/<name>.json`, shape per `templates/fixture.json`, the
   `service` field set to the id.
 - Check: `ls legacy/<Module>/fixtures` has a file for every id.
+- While `.phase` is still `extract`, quote any legacy fact a rule will need that the manifest lacks:
+  `parity evidence add <Form> <file>:<start>-<end> --note <text>` (file relative to the legacy root)
+  writes `legacy/<Module>/evidence/<Form>.json` and prints the `ev:` id. It refuses in `specify` and
+  `implement`. Commit the evidence file with the manifests.
 
 **6. Specify, then implement, each in a fresh session**
 
@@ -255,6 +265,7 @@ Use `referencesFromProject` or list the project's own output folder.
 |---|---|
 | Nothing is dropped silently | an uninterpreted designer statement lands in `raw`; an unresolved type, missing resource or unreached method is a diagnostic; the gate refuses both unless acknowledged with an owner and a date in `extractor-debt.md` |
 | An agent cannot cite what does not exist | `CITE-UNKNOWN`, `CITE-KIND` |
+| Evidence outside the manifest is checkable | `EV-STALE` when the quoted lines moved or changed, `EV-INVALID`, `EV-UNLINKED` for a question closed without an `ev:` id |
 | Done is computed, not asserted | `COV-CONTROL`, `COV-EVENT`, `COV-HANDLER`, `COV-SERVICE`, `COV-DYNAMIC`, `COV-RAW`, all computed from the manifest |
 | A spec is bound to one manifest | `STALE` on hash mismatch |
 | Facts, not guesses | `HEDGE` rejects probably / likely / assume / should / seems / typically / usually / maybe / might; uncertainty goes under Open questions, which keeps the gate closed |
@@ -294,7 +305,7 @@ stable ids, locations, a service boundary, or a coverage lint, and those are the
 src/Parity/          the CLI: Project/ (csproj, index, compilation), Passes/ (designer, handlers, duplicates, extractor), Render/, Lint/
 fixtures/            WinFormsStubs (stand-ins for WinForms + DevExpress), SampleLegacy (synthetic mess), SampleLegacy.Build (its DLL)
 examples/            a complete module folder: spec + recorded fixtures
-templates/           spec.md, extractor-debt.md, fixture.json, extract.config.json, control-categories.json
+templates/           spec.md, extractor-debt.md, fixture.json, evidence.json, extract.config.json, control-categories.json
 adopt/               what goes into the consuming repo: skills, hooks, settings
 docs/                design, manifest schema, spec grammar, lint codes, adoption, prior art
 tests/               xunit over the fixture
