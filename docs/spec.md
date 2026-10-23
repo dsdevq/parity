@@ -45,6 +45,14 @@ Ids containing commas (method parameter lists) are split on top-level commas onl
 Hedging words anywhere in given/when/then are errors: probably, likely, assume(d), should, seem(s),
 typically, usually, maybe, might, presumably, appears to, "I think".
 
+Literal values come from the rendered manifest's **Constants and resource texts** table, `| kind | name |
+value | type | declared | other cultures | first use | used by |`, and from the comment the renderer appends
+to the first line in each slice that reads one (`// PolicyLimits.ReasonMaxLength = 40`,
+`// Captions.lsReasons = "Reasons are kept for audit"`). Write the value in `then` text (the message shown,
+the limit checked); never ask it as an Open question. A row is a fact, not an id: the rule still cites
+the handler or method that reads it. A value marked "not found in the project's default-culture resx" is
+an Open question (and a `RESOURCE-KEY-MISSING` diagnostic).
+
 ### No behavior
 
 `| event | reason |`: events whose handler needs no port (selects text, cosmetic paint). An event is

@@ -90,6 +90,20 @@ public static class MarkdownRenderer
             sb.AppendLine();
         }
 
+        var constants = m.Constants ?? new List<ConstantInfo>(); // absent in manifests written before #19
+        if (constants.Count > 0)
+        {
+            sb.AppendLine("## Constants and resource texts");
+            sb.AppendLine();
+            sb.AppendLine("Static facts the slices and the bound model read by name, with their values. Facts, not ids: cite the handler or method that uses them.");
+            sb.AppendLine();
+            sb.AppendLine("| kind | name | value | type | declared | other cultures | first use | used by |");
+            sb.AppendLine("|---|---|---|---|---|---|---|---|");
+            foreach (var c in constants)
+                sb.AppendLine($"| {c.Kind} | `{c.Type}.{c.Member}` | {(c.Value == null ? NotFound(c) : $"`{Esc(Literal(c))}`")} | {c.ValueType} | {LocStr(c.Declared)} | {string.Join(", ", c.Cultures)} | {LocStr(c.FirstUse)} | {Ids(c.UsedBy)} |");
+            sb.AppendLine();
+        }
+
         sb.AppendLine("## Service calls");
         sb.AppendLine();
         if (m.ServiceCalls.Count == 0) sb.AppendLine("none found behind the configured service boundary");
@@ -118,7 +132,7 @@ public static class MarkdownRenderer
             sb.AppendLine($"- loc: {LocStr(h.Loc)}");
             sb.AppendLine();
             sb.AppendLine("```csharp");
-            sb.AppendLine(h.Source);
+            sb.AppendLine(Annotate(h.Source, h.Loc, constants));
             sb.AppendLine("```");
             sb.AppendLine();
         }
@@ -142,7 +156,7 @@ public static class MarkdownRenderer
                     sb.AppendLine($"- loc: {LocStr(x.Loc)}");
                     sb.AppendLine();
                     sb.AppendLine("```csharp");
-                    sb.AppendLine(x.Source);
+                    sb.AppendLine(Annotate(x.Source, x.Loc, constants));
                     sb.AppendLine("```");
                 }
                 else sb.AppendLine($"- source: not loaded (assembly `{x.Assembly}`); raise maxCallDepth or add the file if a rule needs it");
@@ -162,6 +176,23 @@ public static class MarkdownRenderer
         else foreach (var d in m.Diagnostics) sb.AppendLine($"- {d.Code}: {Esc(d.Message)}{(d.Loc == null ? "" : " (" + LocStr(d.Loc) + ")")}");
         sb.AppendLine();
         return sb.ToString();
+    }
+
+    private static string Literal(ConstantInfo c) => c.ValueType is "string" or "char" ? System.Text.Json.JsonSerializer.Serialize(c.Value) : c.Value!;
+
+    private static string NotFound(ConstantInfo c) => c.Kind == "resource" ? "not found in the project's default-culture resx" : "unknown";
+
+    /// <summary>The slice with each constant's value beside its first use (md only; the JSON source stays verbatim).</summary>
+    private static string Annotate(string source, Loc? loc, List<ConstantInfo> constants)
+    {
+        if (loc == null) return source;
+        var notes = constants.Where(c => c.FirstUse != null && c.FirstUse.File == loc.File && c.FirstUse.Start >= loc.Start && c.FirstUse.Start <= loc.End)
+            .GroupBy(c => c.FirstUse!.Start - loc.Start).ToList();
+        if (notes.Count == 0) return source;
+        var lines = source.Split('\n');
+        foreach (var g in notes.Where(g => g.Key < lines.Length))
+            lines[g.Key] += "  // " + string.Join("; ", g.Select(c => $"{Simple(c.Type)}.{c.Member}" + (c.Value == null ? ": " + NotFound(c) : " = " + Literal(c))));
+        return string.Join('\n', lines);
     }
 
     private static bool IsInterestingProp(string key) =>

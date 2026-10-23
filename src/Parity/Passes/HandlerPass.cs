@@ -18,6 +18,8 @@ public sealed class HandlerResult
     public List<ValidationRuleInfo> Rules = new();
     public List<Diagnostic> Diagnostics = new();
     public HashSet<string> WantedFiles = new(StringComparer.Ordinal);
+    public List<(string Field, ITypeSymbol Type)> ModelTypes = new();
+    public List<(string Target, string Source)> DataSourceRefs = new();
 }
 
 /// <summary>
@@ -36,14 +38,15 @@ public sealed class HandlerPass
     private readonly HashSet<string> _loadedFiles;
     private readonly string _baseDir;
     private readonly string _formName;
+    private readonly ConstantCollector _k;
     private readonly HandlerResult _r = new();
     private readonly Queue<(IMethodSymbol Method, int Depth)> _work = new();
     private readonly Dictionary<SyntaxTree, SemanticModel> _models = new();
 
     public HandlerPass(FormClass form, CSharpCompilation compilation, HashSet<string> controls, ExtractConfig cfg,
-        ControlCategories cats, FileIndex index, HashSet<string> loadedFiles, string baseDir)
+        ControlCategories cats, FileIndex index, HashSet<string> loadedFiles, string baseDir, ConstantCollector constants)
     {
-        _form = form; _compilation = compilation; _controls = controls; _cfg = cfg; _cats = cats;
+        _form = form; _compilation = compilation; _controls = controls; _cfg = cfg; _cats = cats; _k = constants;
         _index = index; _loadedFiles = loadedFiles; _baseDir = baseDir; _formName = form.Symbol.Name;
     }
 
@@ -252,6 +255,7 @@ public sealed class HandlerPass
         var model = Model(body.SyntaxTree);
         var ownerName = ownerId[(ownerId.LastIndexOf('/') + 1)..];
         var dynamicLocals = new Dictionary<string, string>(StringComparer.Ordinal); // local/field name -> dyn id
+        _k.Visit(body, model, ownerId, slice: true);
 
         // reads / writes of designer controls
         foreach (var id in body.DescendantNodes().OfType<IdentifierNameSyntax>())
@@ -334,14 +338,19 @@ public sealed class HandlerPass
                 {
                     var rp = Syntax.RootAndPath(asg.Left);
                     if (rp is { } v && _controls.Contains(v.Root) && v.Path is "DataSource" or "Properties.DataSource")
+                    {
                         _r.Bindings.Add(new BindingInfo($"bind:{_formName}/{v.Root}.{v.Path}", $"ctrl:{_formName}/{v.Root}", v.Path, Syntax.Text(asg.Right), "", "code", Syntax.LocOf(asg, _baseDir)));
+                        if (Syntax.FieldRef(asg.Right) is { } src && _controls.Contains(src)) _r.DataSourceRefs.Add((v.Root, src));
+                        else if (ModelFacts.RowType(asg.Right, model) is { } rowType) _r.ModelTypes.Add((v.Root, rowType));
+                    }
                     break;
                 }
                 case MemberAccessExpressionSyntax pma when pma.Parent is not InvocationExpressionSyntax:
                 {
-                    // property getters with a body in source (e.g. controller.CanGoBack) carry logic too
+                    // property getters with a body in source (e.g. controller.CanGoBack) carry logic too; a generated
+                    // resource class's getters are resource texts (constants[]), not logic
                     if (model.GetSymbolInfo(pma).Symbol is IPropertySymbol p && p.GetMethod != null && p.GetMethod.DeclaringSyntaxReferences.Length > 0
-                        && !SymbolEqualityComparer.Default.Equals(p.ContainingType, _form.Symbol))
+                        && !SymbolEqualityComparer.Default.Equals(p.ContainingType, _form.Symbol) && !ConstantCollector.IsResourceClass(p.ContainingType))
                     {
                         var decl = p.GetMethod.DeclaringSyntaxReferences[0].GetSyntax();
                         var hasBody = decl is AccessorDeclarationSyntax ad ? (ad.Body != null || ad.ExpressionBody != null) : decl is ArrowExpressionClauseSyntax;
