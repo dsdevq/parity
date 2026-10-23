@@ -21,6 +21,7 @@ public static class Report
     {
         msg = Regex.Replace(msg, @"^[A-Za-z_]\w*\.[A-Za-z_]\w*:", "$form.$id:");
         msg = Regex.Replace(msg, @"'([^']*)'", mm => Framework(mm.Groups[1].Value) ? mm.Value : "'$id'");
+        msg = Regex.Replace(msg, @"\b(method|handler|ctrl|dyn|evt|svc|form|bind|rule):\S+", "$1:$id");
         msg = Regex.Replace(msg, @"(?:[A-Za-z_][\w.-]*[/\\])*[A-Za-z_][\w.-]*\.(?:designer\.)?cs:(\d+)", mm => "<path>.cs:" + mm.Groups[1].Value, RegexOptions.IgnoreCase);
         msg = Regex.Replace(msg, @"\bon ([\w.]+(?: -> [\w.]+)*)", mm => "on " + string.Join(" -> ", mm.Groups[1].Value.Split(" -> ").Select(t => Framework(t) || t == "object" ? t : "$type")));
         return msg;

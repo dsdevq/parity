@@ -20,7 +20,7 @@ byte-stable for the same input, so `git diff` is meaningful and the spec binds t
 | `serviceCalls[]` | ServiceCallInfo | aggregated per `svc:` id with callers and argument texts seen |
 | `dynamicUi[]` | DynamicUiInfo | controls created in code |
 | `raw[]` | RawStatement | designer statements not interpreted |
-| `diagnostics[]` | Diagnostic | `REF-MISSING`, `REF-LOAD`, `BASE-UNRESOLVED`, `NO-DESIGNER`, `TYPE-UNRESOLVED`, `RESX-MISSING`, `MEMBER-UNRESOLVED`, `HANDLER-MISSING`, `WIRING-UNKNOWN`, `UNREACHED-METHOD` (says what it checked and where else the name appears) |
+| `diagnostics[]` | Diagnostic | `REF-MISSING`, `REF-LOAD`, `BASE-UNRESOLVED`, `NO-DESIGNER`, `TYPE-UNRESOLVED`, `RESX-MISSING`, `MEMBER-UNRESOLVED`, `HANDLER-MISSING`, `WIRING-UNKNOWN`, `UNREACHED-METHOD` (says what it checked and where else the name appears), `GRID-NO-COLUMNS` (a grid view, tree list, list view or DataGridView with no designer column, naming the loaded code that touches its `Columns`) |
 
 ## Ids
 
@@ -58,8 +58,10 @@ byte-stable for the same input, so `git diff` is meaningful and the spec binds t
 
 `id, name, kind, events, reads, writes, calls, serviceCalls, unresolved, loc, source`
 
-- `kind`: validation, action, change, lifecycle, timer, ui, ctor. Validation also when the body sets or
-  clears provider errors.
+- `kind`: validation, action, change, lifecycle, timer, ui, ctor, entry. Validation also when the body sets or
+  clears provider errors. `entry` is a public, internal or protected method of the form that nothing wires:
+  the way hosting forms hand the form its inputs. It gets a pseudo-event `evt:Form/$this.<Method>` (source
+  `entry`) so a rule can cover it, and its callees are sliced like a handler's.
 - `calls` lists `method:` ids including those beyond `maxCallDepth` (which then have no `methods[]` entry).
 
 ## MethodInfo
@@ -69,3 +71,13 @@ byte-stable for the same input, so `git diff` is meaningful and the spec binds t
 ## module.json
 
 `schemaVersion, module, project, forms[], serviceCalls[], duplicates[] { hash, kind: exact|near, tokens, members[] }`
+
+## Grid columns: what is extracted
+
+Columns are controls of category `column` whose `parent` is the view (DevExpress `GridView`/`BandedGridView`
+under its `GridControl`, `TreeList`, `ListView`, `DataGridView`). They are found when the designer declares
+them: `this.colX = new GridColumn()` plus `view.Columns.AddRange(new[] { this.colX, ... })`, with `FieldName`,
+`Caption`, `Visible`, `VisibleIndex`, `ColumnEdit` and `OptionsColumn.*` as props. Columns created in code
+(`Columns.AddVisible(...)`, `Columns.Add(...)`) are not controls; the view then carries `GRID-NO-COLUMNS`
+naming the method that builds them, whose slice is in the manifest to cite. Columns restored from a layout
+XML or a base class are invisible to the tool and the diagnostic says so.

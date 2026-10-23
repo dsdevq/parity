@@ -15,7 +15,7 @@ public sealed class ExtractTests
         var expected = new Dictionary<string, string[]>
         {
             ["BaseDialogForm"] = new[] { "NO-DESIGNER" },             // a base class without InitializeComponent
-            ["BeneficiarySearchForm"] = new[] { "UNREACHED-METHOD" }, // btnExport_Click is deliberately never wired
+            ["BeneficiarySearchForm"] = new[] { "GRID-NO-COLUMNS", "UNREACHED-METHOD" }, // gvHistory's columns are built in code; btnExport_Click is never wired
         };
         foreach (var s in _f.Summaries)
         {
@@ -56,8 +56,7 @@ public sealed class ExtractTests
     public void unreached_method_diagnostic_says_what_was_checked()
     {
         // issue #5
-        var d = Assert.Single(_f.Manifest("BeneficiarySearchForm").Diagnostics);
-        Assert.Equal("UNREACHED-METHOD", d.Code);
+        var d = Assert.Single(_f.Manifest("BeneficiarySearchForm").Diagnostics, x => x.Code == "UNREACHED-METHOD");
         Assert.Contains("btnExport_Click", d.Message);
         Assert.Contains("checked: designer wiring", d.Message);
         Assert.Contains("handler-shaped signature", d.Message);

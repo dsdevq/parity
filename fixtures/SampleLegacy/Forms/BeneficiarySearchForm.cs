@@ -7,6 +7,23 @@ namespace SampleLegacy.Forms
     public partial class BeneficiarySearchForm : BaseDialogForm
     {
         public ClientDto Selected { get; private set; }
+        private bool _allowDeceased;
+        private int _policyId;
+
+        // Entry point: hosting forms call this to hand the dialog its inputs. Never wired to an event.
+        public void Setup(int policyId, bool allowDeceased, ClientDto preselected)
+        {
+            _policyId = policyId;
+            _allowDeceased = allowDeceased;
+            if (preselected != null) txtName.EditValue = preselected.Surname;
+            InitHistoryColumns();
+        }
+
+        private void InitHistoryColumns()
+        {
+            gvHistory.Columns.AddVisible("EventDate", "Date");
+            gvHistory.Columns.AddVisible("Description");
+        }
 
         public BeneficiarySearchForm()
         {
@@ -19,7 +36,7 @@ namespace SampleLegacy.Forms
         private void txtName_ButtonClick(object sender, EventArgs e)
         {
             lstResults.Columns[0].Text = "Name";
-            var results = ServiceLocator.Client.SearchClients(new ClientSearchCriteria { Surname = txtName.EditValue as string });
+            var results = ServiceLocator.Client.SearchClients(new ClientSearchCriteria { Surname = txtName.EditValue as string, IncludeDeceased = _allowDeceased });
             btnOK.Enabled = results.Count > 0;
         }
 

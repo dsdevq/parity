@@ -11,7 +11,16 @@ namespace SampleLegacy.Forms
             this.imgIcons = new System.Windows.Forms.ImageList(this.components);
             this.lstResults = new System.Windows.Forms.ListView();
             this.txtName = new DevExpress.XtraEditors.ButtonEdit();
+            this.grdHistory = new DevExpress.XtraGrid.GridControl();
+            this.gvHistory = new DevExpress.XtraGrid.Views.Grid.GridView();
             this.SuspendLayout();
+            // 
+            // grdHistory (columns are added in code, see InitHistoryColumns)
+            // 
+            this.grdHistory.MainView = this.gvHistory;
+            this.grdHistory.Name = "grdHistory";
+            this.gvHistory.GridControl = this.grdHistory;
+            this.gvHistory.Name = "gvHistory";
             // 
             // imgIcons
             // 
@@ -43,6 +52,7 @@ namespace SampleLegacy.Forms
             this.btnCancel.Text = "Close";
             this.pnlMain.Controls.Add(this.lstResults);
             this.pnlMain.Controls.Add(this.txtName);
+            this.pnlMain.Controls.Add(this.grdHistory);
             this.Appearance.BackColor = System.Drawing.Color.White;
             this.IconOptions.ShowIcon = false;
             // 
@@ -59,5 +69,7 @@ namespace SampleLegacy.Forms
         private System.Windows.Forms.ColumnHeader _lstResults_ColumnHeader_1;
         private System.Windows.Forms.ColumnHeader _lstResults_ColumnHeader_2;
         private DevExpress.XtraEditors.ButtonEdit txtName;
+        private DevExpress.XtraGrid.GridControl grdHistory;
+        private DevExpress.XtraGrid.Views.Grid.GridView gvHistory;
     }
 }

@@ -139,6 +139,19 @@ public sealed class HandlerPass
             handled.Add(name);
         }
 
+        // non-private methods nobody wired are entry points: hosting forms call them to hand the form its inputs (#14)
+        foreach (var m in members.OfType<MethodDeclarationSyntax>())
+        {
+            var name = m.Identifier.Text;
+            if (handled.Contains(name) || name is "InitializeComponent" or "Dispose") continue;
+            if (!m.Modifiers.Any(x => x.IsKind(SyntaxKind.PublicKeyword) || x.IsKind(SyntaxKind.InternalKeyword) || x.IsKind(SyntaxKind.ProtectedKeyword))) continue;
+            if (m.Modifiers.Any(SyntaxKind.OverrideKeyword)) continue;
+            var evId = $"evt:{_formName}/$this.{name}";
+            _r.Events.Add(new EventWiring(evId, $"ctrl:{_formName}/$this", name, $"handler:{_formName}/{name}", "entry", Syntax.LocOf(m, _baseDir)));
+            EmitHandler($"handler:{_formName}/{name}", name, "entry", new List<string> { evId }, m, (SyntaxNode?)m.Body ?? m.ExpressionBody);
+            handled.Add(name);
+        }
+
         // 3. transitive methods
         while (_work.Count > 0)
         {

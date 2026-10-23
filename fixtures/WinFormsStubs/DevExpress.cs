@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Drawing;
+using System.Linq;
 using System.Windows.Forms;
 
 namespace DevExpress.Utils
@@ -137,7 +138,14 @@ namespace DevExpress.XtraGrid
             public OptionsColumn OptionsColumn { get; } = new OptionsColumn();
         }
         public class OptionsColumn { public bool AllowEdit { get; set; } public bool ReadOnly { get; set; } }
-        public class GridColumnCollection : List<GridColumn> { public void AddRange(GridColumn[] columns) => base.AddRange(columns); }
+        public class GridColumnCollection : List<GridColumn>
+        {
+            public void AddRange(GridColumn[] columns) => base.AddRange(columns);
+            public GridColumn AddVisible(string fieldName) { var c = new GridColumn { FieldName = fieldName, Visible = true }; Add(c); return c; }
+            public GridColumn AddVisible(string fieldName, string caption) { var c = AddVisible(fieldName); c.Caption = caption; return c; }
+            public GridColumn AddField(string fieldName) { var c = new GridColumn { FieldName = fieldName }; Add(c); return c; }
+            public GridColumn this[string fieldName] => this.FirstOrDefault(c => c.FieldName == fieldName);
+        }
     }
 
     namespace Views

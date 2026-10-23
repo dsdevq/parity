@@ -26,6 +26,8 @@ form with invented names, then the extractor is changed until the test passes.
 | #11 `Controls.SetChildIndex` raw | `ClientSearchForm.Designer.cs` z-order lines | `IssueTests.issue_11_set_child_index_is_the_control_s_z_order_not_raw` |
 | #12 module.json overwritten per run | - | `IssueTests.issue_12_module_json_accumulates_across_runs_and_globs_take_a_comma_list` |
 | #13 one debt line acknowledged a whole code | - | `IssueTests.issue_13_a_debt_line_acknowledges_one_diagnostic_not_a_whole_code` |
+| #14 public setup methods not sliced | `BeneficiarySearchForm.Setup(...)` calling a private helper | `IssueTests.issue_14_non_private_methods_are_entry_points_with_slices_and_their_callees_are_reached` |
+| #15 grid without designer columns is silent | `gvHistory`, columns built in `InitHistoryColumns` | `IssueTests.issue_15_a_grid_view_without_designer_columns_is_a_named_diagnostic_pointing_at_the_code_that_builds_them` |
 
 ## Adding a pattern
 

@@ -24,7 +24,7 @@ public sealed class IssueTests
         var r = Probe.Run(Path.Combine(_f.RepoRoot, "fixtures", "SampleLegacy", "SampleLegacy.csproj"), "BeneficiarySearchForm");
         Assert.Equal(2, r.MatchedFiles);
         Assert.Equal(1, r.DesignerFiles);
-        Assert.Equal(28, r.InitStatements);
+        Assert.Equal(35, r.InitStatements);
         Assert.Contains("this.$id.$id.$id($lit, $lit)", r.Shapes.Keys);   // the SetKeyName shape from issue #1
         Assert.Contains("outputPath: ", r.Text);                              // issue #10.8: where the bin folder is
         Assert.Contains("references: 5 (0 with HintPath)  projectReferences: 1", r.Text);
@@ -44,7 +44,8 @@ public sealed class IssueTests
         foreach (var name in privateNames)
             Assert.False(text.Contains(name, StringComparison.Ordinal), $"report leaks '{name}':\n{text}");
         Assert.Contains("UNREACHED-METHOD: $form.$id: not wired and not called", text);
-        Assert.Contains("(<path>.cs:39)", text);
+        Assert.Contains("GRID-NO-COLUMNS: $form.$id: no column declared in the designer; columns are touched in code: method:$id (<path>.cs:", text);
+        Assert.Matches(@"\(<path>\.cs:\d+\)", text);
         Assert.Contains("DevExpress.XtraEditors.XtraForm", text); // framework vocabulary is kept on purpose
     }
 
@@ -155,12 +156,46 @@ public sealed class IssueTests
             Assert.Contains(SpecLinter.Lint(spec, gate: true, implementDir: null), f => f.Code == "COV-RAW" && f.Message.Contains("UNREACHED-METHOD: BeneficiarySearchForm.btnExport_Click"));
 
             File.WriteAllText(debt, "- UNREACHED-METHOD: BeneficiarySearchForm.btnExport_Click - export button never wired, owner someone - until 2026-12-31\n");
+            var remaining = SpecLinter.Lint(spec, gate: true, implementDir: null).Where(f => f.Code == "COV-RAW").ToList();
+            Assert.Single(remaining);                                                   // one line, one diagnostic: the grid one is still open
+            Assert.Contains("GRID-NO-COLUMNS: BeneficiarySearchForm.gvHistory", remaining[0].Message);
+            File.AppendAllText(debt, "- GRID-NO-COLUMNS: BeneficiarySearchForm.gvHistory - columns built in InitHistoryColumns, owner someone - until 2026-12-31\n");
             Assert.DoesNotContain(SpecLinter.Lint(spec, gate: true, implementDir: null), f => f.Code == "COV-RAW");
 
             Assert.Equal("TYPE-UNRESOLVED: Form.txtX", SpecLinter.DebtKey("TYPE-UNRESOLVED", "Form.txtX: type 'A.B' not resolved (missing reference?)"));
             Assert.Equal("REF-MISSING: reference not found: C:/x.dll", SpecLinter.DebtKey("REF-MISSING", "reference not found: C:/x.dll"));
         }
         finally { File.Delete(debt); File.Delete(spec); }
+    }
+
+    [Fact]
+    public void issue_14_non_private_methods_are_entry_points_with_slices_and_their_callees_are_reached()
+    {
+        // input: BeneficiarySearchForm.Setup(int, bool, ClientDto) is public and called by no loaded file; it calls private InitHistoryColumns
+        var m = _f.Manifest("BeneficiarySearchForm");
+        var setup = Assert.Single(m.Handlers, h => h.Name == "Setup");
+        Assert.Equal("entry", setup.Kind);
+        Assert.Equal(new[] { "evt:BeneficiarySearchForm/$this.Setup" }, setup.Events);
+        Assert.StartsWith("public void Setup(int policyId, bool allowDeceased, ClientDto preselected)", setup.Source);
+        Assert.Contains("ctrl:BeneficiarySearchForm/txtName", setup.Writes);
+        Assert.Contains("method:SampleLegacy.Forms.BeneficiarySearchForm.InitHistoryColumns()", setup.Calls);
+        Assert.Contains(m.Methods, x => x.Id == "method:SampleLegacy.Forms.BeneficiarySearchForm.InitHistoryColumns()" && x.Source != null);
+        Assert.Contains(m.Events, e => e.Id == "evt:BeneficiarySearchForm/$this.Setup" && e.Source == "entry");
+        Assert.DoesNotContain(m.Diagnostics, d => d.Code == "UNREACHED-METHOD" && (d.Message.Contains("Setup") || d.Message.Contains("InitHistoryColumns")));
+        // the private, never-called handler-shaped method is still diagnosed
+        Assert.Contains(m.Diagnostics, d => d.Code == "UNREACHED-METHOD" && d.Message.Contains("btnExport_Click"));
+    }
+
+    [Fact]
+    public void issue_15_a_grid_view_without_designer_columns_is_a_named_diagnostic_pointing_at_the_code_that_builds_them()
+    {
+        var m = _f.Manifest("BeneficiarySearchForm");
+        var d = Assert.Single(m.Diagnostics, x => x.Code == "GRID-NO-COLUMNS");
+        Assert.StartsWith("BeneficiarySearchForm.gvHistory: no column declared in the designer; columns are touched in code: method:SampleLegacy.Forms.BeneficiarySearchForm.InitHistoryColumns() (Forms/BeneficiarySearchForm.cs:", d.Message);
+        Assert.Equal("ctrl:BeneficiarySearchForm/gvHistory", m.Controls.Single(c => c.Field == "gvHistory").Id);
+        // grids with designer columns are silent
+        Assert.DoesNotContain(_f.Manifest("PolicyWizardStep3").Diagnostics, x => x.Code == "GRID-NO-COLUMNS");
+        Assert.DoesNotContain(_f.Manifest("ClientSearchForm").Diagnostics, x => x.Code == "GRID-NO-COLUMNS");
     }
 
     [Fact]

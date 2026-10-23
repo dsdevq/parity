@@ -146,7 +146,19 @@ public static class Extractor
             .OrderBy(m => m.Depth).ThenBy(m => m.Id, StringComparer.Ordinal).ToList();
         var svcs = h.ServiceCalls.Values.OrderBy(s => s.Id, StringComparer.Ordinal).ToList();
         var dyn = h.DynamicUi.OrderBy(x => x.Id, StringComparer.Ordinal).ToList();
-        var diags = buildDiags.Concat(d.Diagnostics).Concat(h.Diagnostics).DistinctBy(x => x.Code + x.Message).OrderBy(x => x.Code, StringComparer.Ordinal).ThenBy(x => x.Message, StringComparer.Ordinal).ToList();
+        // a grid view without designer columns is a visible gap: say so, and say where code touches its columns (#15)
+        var gridDiags = new List<Diagnostic>();
+        var columnParents = controls.Where(c => c.Category == "column" && c.Parent != null).Select(c => c.Parent!).ToHashSet(StringComparer.Ordinal);
+        var allSources = handlers.Select(x => (Id: x.Id, Source: x.Source, Loc: x.Loc)).Concat(methods.Where(x => x.Source != null).Select(x => (Id: x.Id, Source: x.Source!, Loc: x.Loc!))).ToList();
+        foreach (var g in controls.Where(c => c.Category == "grid" && IsColumnOwner(c.Type) && !columnParents.Contains(c.Id)))
+        {
+            var touches = allSources.Where(x => System.Text.RegularExpressions.Regex.IsMatch(x.Source, $@"\b{System.Text.RegularExpressions.Regex.Escape(g.Field)}\.Columns\b"))
+                .Select(x => $"{x.Id} ({x.Loc.File}:{x.Loc.Start})").Take(4).ToList();
+            var hint = touches.Count > 0 ? "columns are touched in code: " + string.Join(", ", touches)
+                     : "no code in the loaded files touches its Columns either: a layout XML, a base class, a data-driven grid, or a file outside the loaded set";
+            gridDiags.Add(new Diagnostic("GRID-NO-COLUMNS", $"{name}.{g.Field}: no column declared in the designer; {hint}", g.Loc));
+        }
+        var diags = buildDiags.Concat(d.Diagnostics).Concat(h.Diagnostics).Concat(gridDiags).DistinctBy(x => x.Code + x.Message).OrderBy(x => x.Code, StringComparer.Ordinal).ThenBy(x => x.Message, StringComparer.Ordinal).ToList();
         var files = form.Declarations.Select(x => Path.GetRelativePath(project.Dir, x.SyntaxTree.FilePath).Replace('\\', '/')).Distinct().OrderBy(x => x, StringComparer.Ordinal).ToList();
 
         return new FormManifest(Extractor.SchemaVersion, $"form:{name}", name, form.Symbol.ContainingNamespace.ToDisplayString(), form.Bases, files, d.FormCaption,
@@ -154,6 +166,10 @@ public static class Extractor
     }
 
     /// <summary>One or more globs separated by commas: 'PolicyWizard*,ClientSearchForm'.</summary>
+    private static bool IsColumnOwner(string type) =>
+        type.EndsWith("GridView", StringComparison.Ordinal) || type.EndsWith("ColumnView", StringComparison.Ordinal) || type.EndsWith("BandedGridView", StringComparison.Ordinal)
+        || type.EndsWith("TreeList", StringComparison.Ordinal) || type.EndsWith("DataGridView", StringComparison.Ordinal) || type == "System.Windows.Forms.ListView";
+
     public static Func<string, bool> Glob(string pattern)
     {
         var res = pattern.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
