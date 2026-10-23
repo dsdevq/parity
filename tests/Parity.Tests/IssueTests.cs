@@ -245,13 +245,20 @@ public sealed class IssueTests
                 ("mcp__docs__search_docs", new { query = "angular signals" }, work),
                 ("Bash", new { command = "grep \"Rule.*\" 'legacy/M/spec/X.md' && echo \"it's fine\"" }, work),               // quoted arguments and whole-token quoted paths are not splices
                 ("Bash", new { command = "cat legacy/M/manifests/*.md" }, work),                                                 // a wildcard in the last segment only
+                ("Bash", new { command = "npx eslint \"src/**/*.ts\" && cat src/*/x.ts" }, work),                                // wildcard segments that cannot match ..
+                ("Bash", new { command = "sed -i 's/a.*b/c/' src/x.ts" }, work),                                                 // regexes
+                ("Bash", new { command = "grep -E \"foo|.*bar\" src && grep -E \"foo|[a-z]+\" src" }, work),
+                ("Bash", new { command = "git commit -m \"fix user's/admin's\"" }, work),                                         // apostrophes inside a message
+                ("mcp__filesystem__read_text_file", new { path = "legacy/M/spec/X.md" }, work),
             };
             // calls it must refuse
             var denied = new (string Tool, object Input, string Cwd, string Why)[]
             {
                 ("PowerShell", new { command = "Get-Content " + legacyForm.Replace('/', '\\') }, work, "outside"),                     // the shell tool on Windows, root named
                 ("Bash", new { command = "cat " + legacyForm }, work, "outside"),
-                ("mcp__docs__search_docs", new { query = "x", path = legacyForm }, work, "off limits"),                        // a tool we cannot parse, the root named anyway (second net)
+                ("mcp__docs__search_docs", new { query = "x", path = legacyForm }, work, "outside"),                           // a path value in an MCP tool's input
+                ("mcp__filesystem__read_text_file", new { path = "../Legacy/App/X.cs" }, work, "outside"),                       // relative, the root never named
+                ("mcp__filesystem__read_multiple_files", new { paths = new[] { "legacy/M/spec/X.md", "..\\Legacy\\AcmeAdmin\\Forms\\X.cs" } }, work, "outside"),
                 ("mcp__codegraph__get_symbol", new { symbol = "PolicyForm" }, work, "code-index"),                               // no path at all
                 ("mcp__serena__find_symbol", new { name_path = "Save" }, work, "code-index"),
                 ("Read", new { file_path = "../Legacy/AcmeAdmin/Forms/X.cs" }, work, "outside"),                                 // relative path
@@ -282,6 +289,12 @@ public sealed class IssueTests
                 ("Monitor", new { command = "tail -f .''./Legacy/AcmeAdmin/Forms/X.cs" }, work, "resolve"),
                 ("PowerShell", new { command = "Get-Content .`.\\Legacy\\AcmeAdmin\\Forms\\X.cs" }, work, "resolve"),             // backtick escape
                 ("PowerShell", new { command = "Get-Content .?\\Legacy\\AcmeAdmin\\Forms\\X.cs" }, work, "resolve"),
+                ("Bash", new { command = "powershell -Command \"gc ..\\Legacy\\AcmeAdmin\\Forms\\X.cs\"" }, work, "outside"),       // backslash path through a Bash call
+                ("Bash", new { command = "powershell -c \"cd ..\\Legacy; gc AcmeAdmin\\Forms\\X.cs\"" }, work, "directory"),
+                ("Bash", new { command = "gcc -I../Legacy/AcmeAdmin x.c" }, work, "outside"),                                    // path glued to a short option
+                ("Bash", new { command = "cat src/*/../../../Legacy/AcmeAdmin/Forms/X.cs" }, work, "resolve"),                   // .. after a wildcard
+                ("Bash", new { command = "cat " + work.Replace('\\', '/') + "*/x" }, work, "outside"),                          // a wildcard on the repo name reaches its siblings
+                ("Glob", new { pattern = "legacy/*/../../../Legacy/**/*.cs" }, work, "resolve"),
                 ("Read", new { }, work, "path"),                                                                                  // nothing to decide on
                 ("NotAKnownTool", new { x = 1 }, work, "tool"),
             };
@@ -310,7 +323,7 @@ public sealed class IssueTests
             var lines = File.ReadAllLines(log);
             Assert.Equal(denials, lines.Length);
             Assert.All(lines, l => { var f = l.Split('\t'); Assert.Equal(4, f.Length); Assert.Matches(@"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$", f[0]); Assert.Contains(f[1], new[] { "specify", "implement" }); Assert.NotEmpty(f[2]); Assert.NotEmpty(f[3]); });
-            Assert.Contains(lines, l => l.Split('\t')[2] == "mcp__docs__search_docs" && l.Contains("off limits"));
+            Assert.Contains(lines, l => l.Split('\t')[2] == "mcp__filesystem__read_text_file" && l.Contains("outside"));
             Assert.Contains(lines, l => l.Split('\t')[2] == "mcp__codegraph__get_symbol");
 
             // the settings command, run from a session cwd below the repo root: CLAUDE_PROJECT_DIR keeps the phase readable

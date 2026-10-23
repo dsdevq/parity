@@ -82,9 +82,9 @@ refused, even when an allowed root contains it.
 | Tool | What is checked |
 |---|---|
 | `Read`, `Edit`, `Write`, `MultiEdit`, `NotebookEdit` | the file path, resolved against the `cwd` in the hook input, must be allowed |
-| `Grep`, `Glob` | the search path (the `cwd` when omitted) and the literal prefix of the glob must be allowed |
-| `Bash`, `PowerShell`, `Monitor` | the `cwd`; every path-like token (contains a slash, is `.` or `..`, a drive path); a `cd`, `pushd`, `Set-Location` and friends must stay inside the allowed roots. `~` and `$VAR/...` paths, brace expansion, and a token that splices a path from quotes, backslashes (Bash) or wildcards (`.''./x`, `.\./x`, `.?/x`, `.*/x`, `[.]*`) cannot be resolved and are refused. Quotes around a whole token and wildcards in the last segment (`legacy/M/*.md`) are fine |
-| `mcp__*` | refused when the tool name matches the deny-list (below) |
+| `Grep`, `Glob` | the search path (the `cwd` when omitted) and the glob up to its first wildcard segment must be allowed; a `..` after a wildcard segment is refused |
+| `Bash`, `PowerShell`, `Monitor` | the `cwd`; every path-like token (contains `/` or `\`, is `.` or `..`, a drive path), also when glued to a short option (`-I../x`); a `cd`, `pushd`, `Set-Location` and friends must stay inside the allowed roots. Each path segment is judged: a segment a wildcard or a quote/backslash splice can turn into `..` (`.''./x`, `.\./x`, `.?/x`, `.*/x`, `[.]*`), a `..` after a wildcard segment (`src/*/../..`), brace expansion, `~` and `$VAR/...` cannot be resolved and are refused. Other wildcards (`src/**/*.ts`), regexes (`s/a.*b/c/`, `[a-z]+`) and quoted arguments are fine; the path is checked up to its first wildcard segment |
+| `mcp__*` | refused when the tool name matches the deny-list (below); otherwise every string value in the input that contains `/` or `\` must be an allowed path |
 | anything else | refused: the hook cannot decide |
 
 Paths are compared case-insensitively with `/` and `\` equal and `C:\x`, `/c/x`, `/mnt/c/x` and
@@ -142,5 +142,7 @@ absent or empty file after a specify or implement session says the agent never a
 through a guarded tool. This is a guard for a cooperative agent, not a sandbox: it does not follow
 symlinks or junctions, cannot see inside a script or program the agent runs, and does not expand shell
 variables or command substitutions. It reads a command as tokens, so what a program does with a name it was
-handed (a tool that opens its own wildcards, a path assembled by `eval` or `xargs`) is outside it.
+handed (a tool that opens its own wildcards, a path assembled by `eval` or `xargs`) is outside it, and a
+token that starts with `\` (a drive-rooted Windows path or a regex escape) is not resolved. An MCP server with
+its own index of the legacy tree takes no path, so only its name can refuse it.
 Enforce a hard guarantee with file permissions or a separate machine user.

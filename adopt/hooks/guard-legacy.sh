@@ -6,12 +6,14 @@
 # (date, phase, tool, reason; tab separated).
 #   path tools (Read Edit Write MultiEdit NotebookEdit Grep Glob): every path, resolved against the hook's cwd, must be allowed
 #   shell tools (Bash PowerShell Monitor): every path-like token must be allowed, no cd may leave the allowed roots
-#   mcp__* tools: refused when the name matches the code-index deny-list below or "guard.denyTools"
+#   mcp__* tools: refused when the name matches the code-index deny-list below or "guard.denyTools"; every string
+#     value in the input that contains / or \ must be an allowed path
 #   any other tool, or any input that cannot be decided: refused (fail closed)
 # After those checks the legacy root is still looked for as a plain substring of the whole input (second net).
 # The hook works from CLAUDE_PROJECT_DIR (else its cwd), so a session cwd below the repo root cannot hide the phase.
-# Shell tokens are never normalised: a token with a quote, backslash or wildcard in a path segment that could
-# name another place (.''./x  .\./x  .?/x  .*/x  .{.,}/x) is refused, since the guard cannot see where it resolves.
+# Shell tokens are judged per path segment, with \ both as an escape and as a separator: a segment a wildcard or a
+# quote/backslash splice can turn into '..' (.''./x  .\./x  .?/x  .*/x  [.]*), a '..' after a wildcard segment and
+# brace expansion are refused, since the guard cannot see where they resolve. A wildcard segment cuts the path checked.
 # Phase: legacy/.phase. Legacy root: PARITY_LEGACY_ROOT, else the directory of "project" in the config.
 # jq is required to read tool input; without it a restricted phase refuses every call. The sed fallback below
 # only finds the legacy root (and a label for the log) so the refusal can say what is wrong.
@@ -30,28 +32,29 @@ default_deny='*code?index* *codeindex* *code?graph* *codegraph* *code?search* *c
 lc() { printf '%s' "$1" | tr 'A-Z' 'a-z'; }
 fwd() { printf '%s' "$1" | sed 's#\\\\#/#g; s#\\#/#g'; }
 
-# clean TOKEN: drop the quotes around a shell token and refuse one whose path part cannot be resolved; result in C
+# segs PATH: refuse a segment that a wildcard or a quote/backslash splice can turn into '..', and a '..' after a wildcard
+segs() {
+  _w=0; _ifs=$IFS; IFS=/
+  for _g in $1; do
+    IFS=$_ifs
+    case $_g in *[\'\"\`\\]*) _s=$(printf '%s' "$_g" | tr -d "\"'\`\\\\") ;; *) _s=$_g ;; esac
+    # shellcheck disable=SC2194,SC2254
+    case $_g in
+      *[\'\"\`\\\?\*\[]*) case $_s in [.[]*) case .. in $_s) deny "the path '$1' has a segment ('$_g') that can stand for '..' and cannot be resolved, so it may be outside the allowed roots" ;; esac ;; esac ;;
+    esac
+    case $_s in ..) [ "$_w" = 0 ] || deny "the path '$1' climbs with '..' after a wildcard and cannot be resolved, so it may be outside the allowed roots" ;; esac
+    case $_s in *[\?\*\[]*) _w=1 ;; esac
+  done
+  IFS=$_ifs
+}
+
+# clean TOKEN: drop the quotes around a shell token, check its segments as written and with \ as a separator; result in C
 clean() {
-  _t=$1; _q=0
-  case $_t in [\'\"\`]*) _q=1 ;; esac
+  _t=$1
   while :; do case $_t in [\'\"\`]*) _t=${_t#?} ;; *) break ;; esac; done
   while :; do case $_t in *[\'\"\`]) _t=${_t%?} ;; *) break ;; esac; done
-  case $_t in
-    *[\'\"\`\\]*)
-      _s=$(printf '%s' "$_t" | tr -d "\"'\`\\\\")
-      case $_s in */*|.|..|\~*|*'$'*|*[\?\*\[]*) deny "the path '$1' uses quotes, escapes or wildcards the guard cannot resolve, so it may be outside the allowed roots" ;; esac
-      ;;
-  esac
-  case $_t in
-    */*) _dir=${_t%/*}; _last=${_t##*/}; _slash=1 ;;
-    *) _dir=; _last=$_t; _slash=0 ;;
-  esac
-  case $_dir in *[\?\*\[]*) deny "the path '$1' has a wildcard before its last segment and cannot be resolved, so it may be outside the allowed roots" ;; esac
-  if [ "$_slash" = 1 ] || [ "$_q" = 0 ]; then
-    case $_last in
-      .[\?\*\[]*|..*[\?\*\[]*|\[*\]*) deny "the wildcard '$1' may match '..' and cannot be resolved, so it may be outside the allowed roots" ;;
-    esac
-  fi
+  segs "$_t"
+  case $_t in *\\*) segs "$(fwd "$_t")" ;; esac
   C=$_t
 }
 
@@ -203,7 +206,8 @@ case $tool in
     if [ -n "$base" ]; then need_allowed "$base" "$cwd" "the search path"; base=$N; else base=$cwd; fi
     # a glob may climb out of the search path (../ or an absolute prefix): check its literal prefix
     if [ "$tool" = Glob ]; then g=$(jget '.tool_input.pattern // empty | strings'); else g=$(jget '.tool_input.glob // empty | strings'); fi
-    g=$(printf '%s' "$g" | sed 's/[*?[{].*//')
+    segs "$g"
+    g=$(printf '%s' "$g" | sed 's#[^/]*[*?[{].*##')
     [ -z "$g" ] || need_allowed "$g" "$base" "the glob prefix"
     ;;
   Bash|PowerShell|Monitor)
@@ -216,7 +220,7 @@ case $tool in
     cmd=$(printf '%s' "$cmd" | sed 's/[;|&]/ ; /g; s/[(){}<>,=]/ /g')
     set -- $cmd
     while [ $# -gt 0 ]; do
-      t=$1; shift
+      clean "$1"; t=$C; shift
       case $t in
         ';') continue ;;
         cd|chdir|pushd|set-location|sl|push-location)
@@ -226,12 +230,12 @@ case $tool in
               \;) break ;;
               -) tgt=-; shift; break ;;
               -*:*) tgt=${1#*:}; shift; break ;;
+              -[a-z]*[./\\]*) tgt=${1#-?}; shift; break ;;
               -*) shift ;;
               *) tgt=$1; shift; break ;;
             esac
           done
-          [ -n "$tgt" ] || deny "a directory change without a target goes to the home directory, which is outside the allowed roots"
-          clean "$tgt"; tgt=$C
+          [ -n "$tgt" ] && clean "$tgt" && tgt=$C
           [ -n "$tgt" ] || deny "a directory change without a target goes to the home directory, which is outside the allowed roots"
           case $tgt in
             -|~*|*'$'*|*%*%*) deny "the directory change to '$tgt' cannot be resolved, so it may leave the allowed roots" ;;
@@ -242,18 +246,19 @@ case $tool in
           continue
           ;;
       esac
-      clean "$t"; t=$C
       case $t in
-        -[a-z]/*|-[a-z]:/*) t=${t#-?} ;;
+        -[a-z][a-z]:/*|-[a-z][a-z]:) t=${t#-?} ;;
         -[a-z]*:*) t=${t#*:} ;;
+        -[a-z]?*) t=${t#-?} ;;
       esac
+      case $t in \\*) ;; *\\*) t=$(fwd "$t") ;; esac
       case $t in
         ~*) deny "the path '$t' (the home directory) is outside the allowed roots" ;;
         *'$'*/*|*%*%*/*|*/*'$'*|*/*%*%*) deny "the path '$t' cannot be resolved (shell expansion), so it may be outside the allowed roots" ;;
         */*|.|..|[a-z]:/*|[a-z]:) ;;
         *) continue ;;
       esac
-      t=$(printf '%s' "$t" | sed 's/[*?[{].*//')
+      t=$(printf '%s' "$t" | sed 's#[^/]*[*?[].*##')
       [ -n "$t" ] || continue
       need_allowed "$t" "$cwd" "the path"
     done
@@ -271,6 +276,12 @@ $deny_extra"
       # shellcheck disable=SC2254
       case $name in $pat) deny "'$tool' is a code-index tool (matches '$pat'; guard.denyTools in $cfg extends the list) and could read the legacy source" ;; esac
     done
+    vals=$(jget '.tool_input | .. | strings | select(test("[/\\\\]")) | gsub("[\r\n]+"; " ")')
+    _ifs=$IFS; IFS='
+'
+    set -- $vals
+    IFS=$_ifs
+    for v in "$@"; do need_allowed "$v" "$cwd" "the path"; done
     ;;
   *) deny "unrecognised tool '$tool' in a restricted phase" "Only path tools, shell tools and MCP tools are checked; narrow the hook matcher or extend the guard" ;;
 esac
