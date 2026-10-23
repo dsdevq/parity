@@ -84,7 +84,7 @@ refused, even when an allowed root contains it.
 | `Read`, `Edit`, `Write`, `MultiEdit`, `NotebookEdit` | the file path, resolved against the `cwd` in the hook input, must be allowed |
 | `Grep`, `Glob` | the search path (the `cwd` when omitted) and the glob up to its first wildcard segment must be allowed; a `..` after a wildcard segment is refused |
 | `Bash`, `PowerShell`, `Monitor` | the `cwd`; every path-like token (contains `/` or `\`, is `.` or `..`, a drive path), also when glued to a short option (`-I../x`); a `cd`, `pushd`, `Set-Location` and friends must stay inside the allowed roots. Each path segment is judged: a segment a wildcard or a quote/backslash splice can turn into `..` (`.''./x`, `.\./x`, `.?/x`, `.*/x`, `[.]*`), a `..` after a wildcard segment (`src/*/../..`), brace expansion, `~` and `$VAR/...` cannot be resolved and are refused. Other wildcards (`src/**/*.ts`), regexes (`s/a.*b/c/`, `[a-z]+`) and quoted arguments are fine; the path is checked up to its first wildcard segment |
-| `mcp__*` | refused when the tool name matches the deny-list (below); otherwise every string value in the input that contains `/` or `\` must be an allowed path |
+| `mcp__*` | refused when the tool name matches the deny-list (below); otherwise every string value in the input that contains `/` or `\`, or is `.`, `..` or `~`, must be an allowed path |
 | anything else | refused: the hook cannot decide |
 
 Paths are compared case-insensitively with `/` and `\` equal and `C:\x`, `/c/x`, `/mnt/c/x` and

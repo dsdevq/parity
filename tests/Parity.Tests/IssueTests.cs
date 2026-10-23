@@ -250,6 +250,7 @@ public sealed class IssueTests
                 ("Bash", new { command = "grep -E \"foo|.*bar\" src && grep -E \"foo|[a-z]+\" src" }, work),
                 ("Bash", new { command = "git commit -m \"fix user's/admin's\"" }, work),                                         // apostrophes inside a message
                 ("mcp__filesystem__read_text_file", new { path = "legacy/M/spec/X.md" }, work),
+                ("mcp__fs__search", new { path = "legacy/M", pattern = "x" }, work),
             };
             // calls it must refuse
             var denied = new (string Tool, object Input, string Cwd, string Why)[]
@@ -258,6 +259,8 @@ public sealed class IssueTests
                 ("Bash", new { command = "cat " + legacyForm }, work, "outside"),
                 ("mcp__docs__search_docs", new { query = "x", path = legacyForm }, work, "outside"),                           // a path value in an MCP tool's input
                 ("mcp__filesystem__read_text_file", new { path = "../Legacy/App/X.cs" }, work, "outside"),                       // relative, the root never named
+                ("mcp__fs__search", new { path = "..", pattern = "x" }, work, "outside"),                                       // a bare .. with no separator
+                ("mcp__fs__list_directory", new { path = "~" }, work, "home directory"),
                 ("mcp__filesystem__read_multiple_files", new { paths = new[] { "legacy/M/spec/X.md", "..\\Legacy\\AcmeAdmin\\Forms\\X.cs" } }, work, "outside"),
                 ("mcp__codegraph__get_symbol", new { symbol = "PolicyForm" }, work, "code-index"),                               // no path at all
                 ("mcp__serena__find_symbol", new { name_path = "Save" }, work, "code-index"),

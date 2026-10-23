@@ -7,7 +7,7 @@
 #   path tools (Read Edit Write MultiEdit NotebookEdit Grep Glob): every path, resolved against the hook's cwd, must be allowed
 #   shell tools (Bash PowerShell Monitor): every path-like token must be allowed, no cd may leave the allowed roots
 #   mcp__* tools: refused when the name matches the code-index deny-list below or "guard.denyTools"; every string
-#     value in the input that contains / or \ must be an allowed path
+#     value in the input that contains / or \, or is . .. or ~, must be an allowed path
 #   any other tool, or any input that cannot be decided: refused (fail closed)
 # After those checks the legacy root is still looked for as a plain substring of the whole input (second net).
 # The hook works from CLAUDE_PROJECT_DIR (else its cwd), so a session cwd below the repo root cannot hide the phase.
@@ -276,12 +276,15 @@ $deny_extra"
       # shellcheck disable=SC2254
       case $name in $pat) deny "'$tool' is a code-index tool (matches '$pat'; guard.denyTools in $cfg extends the list) and could read the legacy source" ;; esac
     done
-    vals=$(jget '.tool_input | .. | strings | select(test("[/\\\\]")) | gsub("[\r\n]+"; " ")')
+    vals=$(jget '.tool_input | .. | strings | select(test("[/\\\\]") or test("^(\\.\\.?|~)$")) | gsub("[\r\n]+"; " ")')
     _ifs=$IFS; IFS='
 '
     set -- $vals
     IFS=$_ifs
-    for v in "$@"; do need_allowed "$v" "$cwd" "the path"; done
+    for v in "$@"; do
+      case $v in \~|\~/*|\~\\*) deny "the path '$v' (the home directory) is outside the allowed roots" ;; esac
+      need_allowed "$v" "$cwd" "the path"
+    done
     ;;
   *) deny "unrecognised tool '$tool' in a restricted phase" "Only path tools, shell tools and MCP tools are checked; narrow the hook matcher or extend the guard" ;;
 esac
