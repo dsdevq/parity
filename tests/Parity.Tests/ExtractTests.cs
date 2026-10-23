@@ -186,7 +186,7 @@ public sealed class ExtractTests
     [Fact]
     public void only_the_files_the_module_needs_are_loaded()
     {
-        Assert.Contains("files loaded: 24 of 25", _f.Log);
+        Assert.Contains("files loaded: 27 of 28 (+1 from variant projects)", _f.Log);
         Assert.Contains("references: ", _f.Log);
         Assert.Contains("round 1:", _f.Log);
     }

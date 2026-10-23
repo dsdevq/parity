@@ -89,7 +89,52 @@ public sealed record FormManifest(
     List<DynamicUiInfo> DynamicUi,
     List<ConstantInfo> Constants,
     List<RawStatement> Raw,
+    List<Diagnostic> Diagnostics,
+    List<VariantInfo>? Variants = null,
+    List<FactoryInfo>? Factories = null);
+
+/// <summary>One property a variant sets differently from the base unit. Base is null when the base never sets it.</summary>
+public sealed record VariantChange(string Property, string? Base, string? Value, Loc? Loc, string? Control = null);
+
+/// <summary>
+/// One difference between a variant and its base unit, keyed var:&lt;Variant&gt;/&lt;kind&gt;/&lt;name&gt;.
+/// Kinds: added, removed, retagged (controls); event (a wiring the variant adds); override, handler, ctor (code);
+/// service-added, service-removed (the service boundary). Target names what the entry changes in the base.
+/// </summary>
+public sealed record VariantDelta(
+    string Id,
+    string Kind,
+    string? Target,
+    string? Detail,
+    string? Type,
+    string? Category,
+    List<VariantChange>? Changes,
+    List<string>? Events,
+    List<string>? Reads,
+    List<string>? Writes,
+    List<string>? Calls,
+    List<string>? ServiceCalls,
+    string? Source,
+    Loc? Loc);
+
+/// <summary>A tenant or customer variant of the unit: a subclass, possibly in another project, described as a delta on the base.</summary>
+public sealed record VariantInfo(
+    string Id,
+    string Name,
+    string? Project,
+    string Class,
+    List<string> Bases,
+    List<string> Files,
+    List<VariantDelta> Delta,
+    List<VariantChange> Layout,
+    List<MethodInfo> Methods,
+    List<RawStatement> Raw,
     List<Diagnostic> Diagnostics);
+
+/// <summary>Which class a factory hands out for which key. Variant is "base" for the unit itself, the variant name, or null for another class.</summary>
+public sealed record FactoryCase(string Key, string Class, string? Variant, Loc Loc);
+
+public sealed record FactoryInfo(string Id, string On, List<FactoryCase> Cases, Loc Loc);
 
 public sealed record ModuleIndex(
     string SchemaVersion,

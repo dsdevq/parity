@@ -14,6 +14,7 @@ namespace SampleLegacy.Services
     public class ClientServiceClient : IClientService
     {
         public List<ClientDto> SearchClients(ClientSearchCriteria criteria) { return new List<ClientDto>(); }
+        public List<ClientDto> SearchLoyaltyClients(ClientSearchCriteria criteria, bool membersOnly) { return new List<ClientDto>(); }
         public ClientDto GetClient(int clientId) { return new ClientDto(); }
     }
 

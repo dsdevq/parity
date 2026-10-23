@@ -639,6 +639,137 @@ public sealed class IssueTests
         Assert.DoesNotContain(m.Diagnostics, d => d.Code == "RESOURCE-KEY-MISSING" && d.Message.Contains("Policy_log", StringComparison.Ordinal));
         Assert.Single(m.Diagnostics, d => d.Code == "RESOURCE-KEY-MISSING"); // only lsArchiveReasonTooLong
     }
+
+    [Fact]
+    public void issue_20_tenant_variants_fold_into_the_base_manifest_with_a_delta_and_factories()
+    {
+        // input: ClientSearchForm plus two tenant subclasses (Larkspur in the base project, Thistle in its own csproj) and
+        // ClientSearchFormFactory; extract.config.json declares both variants. output: one base unit carrying both deltas.
+        var dir = Path.Combine(_f.ModuleDir, "manifests");
+        Assert.False(File.Exists(Path.Combine(dir, "LarkspurClientSearchForm.json")), "a variant is not a unit of its own");
+        Assert.DoesNotContain(_f.Summaries, s => s.Form is "LarkspurClientSearchForm" or "ThistleClientSearchForm");
+        var m = _f.Manifest("ClientSearchForm");
+        Assert.NotNull(m.Variants);
+        Assert.Equal(new[] { "var:Larkspur", "var:Thistle" }, m.Variants!.Select(v => v.Id));
+        var lrk = m.Variants[0];
+        var ths = m.Variants[1];
+        Assert.Equal("SampleLegacy.Tenants.Larkspur.LarkspurClientSearchForm", lrk.Class);
+        Assert.Null(lrk.Project);
+        Assert.Equal("SampleLegacy.Thistle/SampleLegacy.Thistle.csproj", ths.Project);
+        Assert.All(m.Variants, v => { Assert.Empty(v.Raw); Assert.Empty(v.Diagnostics); });
+
+        Assert.Equal(new[]
+        {
+            "var:Larkspur/added/chkLoyaltyOnly",
+            "var:Larkspur/event/chkLoyaltyOnly.CheckedChanged",
+            "var:Larkspur/handler/chkLoyaltyOnly_CheckedChanged",
+            "var:Larkspur/override/btnSearch_Click",
+            "var:Larkspur/retagged/$this",
+            "var:Larkspur/retagged/lblPostcode",
+            "var:Larkspur/service-added/IClientService.SearchLoyaltyClients",
+            "var:Larkspur/service-removed/IClientService.SearchClients",
+        }, lrk.Delta.Select(d => d.Id));
+        Assert.Equal(new[]
+        {
+            "var:Thistle/added/ctor/lblTenant",
+            "var:Thistle/event/txtPostcode.KeyDown",
+            "var:Thistle/handler/txtPostcode_KeyDown",
+            "var:Thistle/override/btnSearch_Click",
+            "var:Thistle/removed/dtDob",
+            "var:Thistle/retagged/btnSelect",
+            "var:Thistle/retagged/lblSurname",
+        }, ths.Delta.Select(d => d.Id));
+        VariantDelta D(VariantInfo v, string id) => v.Delta.Single(d => d.Id == id);
+
+        // every entry cites the variant's own file:line; Thistle's project sits next to the base one
+        Assert.All(m.Variants.SelectMany(v => v.Delta), d => Assert.NotNull(d.Loc));
+        Assert.All(ths.Delta, d => Assert.StartsWith("../SampleLegacy.Thistle/Forms/ThistleClientSearchForm.cs", d.Loc!.File));
+        var postcode = D(lrk, "var:Larkspur/retagged/lblPostcode");
+        Assert.Equal("ctrl:ClientSearchForm/lblPostcode", postcode.Target);
+        var text = Assert.Single(postcode.Changes!);
+        Assert.Equal(("Text", "Postcode", "Zip code"), (text.Property, text.Base, text.Value));
+        Assert.Equal(new Loc("Tenants/Larkspur/LarkspurClientSearchForm.Designer.cs", 13, 13), postcode.Loc);
+        Assert.Equal(("Visible", (string?)null, "false"), D(ths, "var:Thistle/retagged/btnSelect").Changes!.Select(c => (c.Property, c.Base, c.Value)).Single());
+        Assert.Equal("ctrl:ClientSearchForm/dtDob", D(ths, "var:Thistle/removed/dtDob").Target);
+        Assert.Equal("ctrl:ClientSearchForm/$this", D(ths, "var:Thistle/added/ctor/lblTenant").Target);
+
+        // an override either replaces the base handler or extends it; only a replacement drops the base's service call
+        var lo = D(lrk, "var:Larkspur/override/btnSearch_Click");
+        Assert.Equal(("handler:ClientSearchForm/btnSearch_Click", "replaces base"), (lo.Target, lo.Detail));
+        Assert.Equal("calls base", D(ths, "var:Thistle/override/btnSearch_Click").Detail);
+        Assert.Equal(new[] { "var:Larkspur/override/btnSearch_Click" }, D(lrk, "var:Larkspur/service-added/IClientService.SearchLoyaltyClients").Calls);
+        Assert.Equal("svc:IClientService.SearchClients", D(lrk, "var:Larkspur/service-removed/IClientService.SearchClients").Target);
+        Assert.DoesNotContain(ths.Delta, d => d.Kind.StartsWith("service", StringComparison.Ordinal));
+        Assert.Equal(new[] { "var:Larkspur/handler/chkLoyaltyOnly_CheckedChanged" }, new[] { D(lrk, "var:Larkspur/event/chkLoyaltyOnly.CheckedChanged").Detail });
+
+        // which class a tenant code actually gets is a cited fact
+        Assert.NotNull(m.Factories);
+        var create = m.Factories!.Single(x => x.Id == "method:SampleLegacy.Forms.ClientSearchFormFactory.Create(string)");
+        Assert.Equal("tenantCode", create.On);
+        Assert.Equal(new[] { ("LRK", "Larkspur"), ("THS", "Thistle"), ("THS-NORTH", "Thistle"), ("default", "base") },
+            create.Cases.Select(c => (c.Key, c.Variant!)));
+        Assert.All(create.Cases, c => Assert.Equal("Forms/ClientSearchFormFactory.cs", c.Loc!.File));
+        var region = m.Factories.Single(x => x.Id.Contains("ForRegion", StringComparison.Ordinal));
+        Assert.Equal("ByRegion", region.On);
+        Assert.Equal(new[] { "Larkspur", "Thistle", "base" }, region.Cases.Select(c => c.Variant!).Distinct().OrderBy(x => x, StringComparer.Ordinal));
+        // a unit without variants keeps its manifest shape
+        Assert.Null(_f.Manifest("PolicyWizardStep3").Variants);
+        Assert.Null(_f.Manifest("PolicyWizardStep3").Factories);
+
+        // a re-extract that changes a delta is a diff entry, so rebind does not move a spec citing it
+        var relabeled = m with { Variants = new() { lrk with { Delta = lrk.Delta.Select(d => d.Id == postcode.Id ? d with { Changes = new() { text with { Value = "ZIP" } } } : d).ToList() }, ths } };
+        var change = Assert.Single(ManifestDiff.Compare(m, relabeled));
+        Assert.Equal(("delta", postcode.Id, '~', "changes"), (change.Section, change.Id, change.Kind, string.Join(",", change.Fields)));
+
+        var md = File.ReadAllText(Path.Combine(dir, "ClientSearchForm.md"));
+        Assert.Contains("### Variant Larkspur", md);
+        Assert.Contains("### Variant Thistle", md);
+        Assert.Contains("## Factories", md);
+        Assert.Contains("| `var:Thistle/removed/dtDob` | removed | `ctrl:ClientSearchForm/dtDob` |", md);
+
+        // lint: a delta no rule scoped to its variant describes, and no 'Variant deltas without a rule' row accounts for, fails the gate
+        var specDir = Path.Combine(_f.ModuleDir, "spec");
+        Directory.CreateDirectory(specDir);
+        var spec = Path.Combine(specDir, "ClientSearchForm.md");
+        string Spec(string rules, string noRule) =>
+            "---\nform: form:ClientSearchForm\nmanifest: " + ManifestHash.Of(Path.Combine(dir, "ClientSearchForm.json")) + "\nstatus: reviewed\nreviewed-by: example-reviewer 2026-10-23\n---\n\n" +
+            "# ClientSearchForm\n\n## Rules\n\n" + rules + "\n## Variant deltas without a rule\n\n| delta | reason |\n|---|---|\n" + noRule + "\n## Open questions\n\n- none\n";
+        const string Rule = "### {0}\n- kind: data\n{1}- covers: {2}\n- cite: {3}\n- given: any state\n- when: the user acts\n- then: ctrl:ClientSearchForm/grdResults is refilled\n\n";
+        string R(string id, string? variants, string covers, string cite) => string.Format(Rule, id, variants == null ? "" : $"- variants: {variants}\n", covers, cite);
+        List<Finding> Var(string rules, string noRule)
+        {
+            File.WriteAllText(spec, Spec(rules, noRule));
+            return SpecLinter.Lint(spec, gate: true, implementDir: null).Where(x => x.Code.StartsWith("VAR", StringComparison.Ordinal)).ToList();
+        }
+        try
+        {
+            var all = string.Join("\n", lrk.Delta.Concat(ths.Delta).Select(d => $"| {d.Id} | no rule needed in this test |"));
+            Assert.Empty(Var(R("R-ClientSearchForm-001", "base, Thistle", "evt:ClientSearchForm/btnSearch.Click", "handler:ClientSearchForm/btnSearch_Click"), all));
+
+            // dropping one row surfaces exactly that delta
+            var f = Var("", string.Join("\n", all.Split('\n').Where(l => !l.Contains("var:Thistle/removed/dtDob"))));
+            Assert.Equal("VAR-UNCOVERED", Assert.Single(f).Code);
+            Assert.Contains("var:Thistle/removed/dtDob", f[0].Message);
+
+            // a rule scoped to Larkspur accounts for its entries; the rest stay uncovered
+            f = Var(R("R-ClientSearchForm-002", "Larkspur", "var:Larkspur/event/chkLoyaltyOnly.CheckedChanged, var:Larkspur/added/chkLoyaltyOnly",
+                "var:Larkspur/handler/chkLoyaltyOnly_CheckedChanged, var:Larkspur/override/btnSearch_Click"), "| var:Larkspur/retagged/lblPostcode | caption only |");
+            Assert.All(f, x => Assert.Equal("VAR-UNCOVERED", x.Code));
+            Assert.Equal(new[] { "var:Larkspur/retagged/$this", "var:Larkspur/service-added/IClientService.SearchLoyaltyClients", "var:Larkspur/service-removed/IClientService.SearchClients" }
+                .Concat(ths.Delta.Select(d => d.Id)), f.Select(x => x.Message.Split(' ')[0]));
+
+            // scope errors: an unscoped rule cites a base handler Larkspur replaces; a Larkspur rule names a Thistle delta; an unknown variant
+            f = Var(R("R-ClientSearchForm-003", null, "evt:ClientSearchForm/btnSearch.Click", "handler:ClientSearchForm/btnSearch_Click")
+                + R("R-ClientSearchForm-004", "Larkspur", "var:Thistle/event/txtPostcode.KeyDown", "var:Larkspur/override/btnSearch_Click")
+                + R("R-ClientSearchForm-005", "Ivy", "evt:ClientSearchForm/txtSurname.KeyDown", "handler:ClientSearchForm/txtSurname_KeyDown")
+                + R("R-ClientSearchForm-006", "base, Thistle", "evt:ClientSearchForm/txtSurname.KeyDown", "handler:ClientSearchForm/txtSurname_KeyDown"), all);
+            Assert.Equal(new[] { "VAR-SCOPE", "VAR-SCOPE", "VAR-UNKNOWN" }, f.Select(x => x.Code));
+            Assert.Contains("which Larkspur replaces (var:Larkspur/override/btnSearch_Click)", f[0].Message);
+            Assert.Contains("var:Thistle/event/txtPostcode.KeyDown exists only in Thistle", f[1].Message);
+            Assert.Contains("variant 'Ivy'", f[2].Message);
+        }
+        finally { File.Delete(spec); }
+    }
 }
 
 /// <summary>The guard hook, run through sh. Skipped where no POSIX shell exists (plain Windows without Git Bash).</summary>

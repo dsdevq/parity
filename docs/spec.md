@@ -20,11 +20,11 @@ reviewed-by: <name> <YYYY-MM-DD>
 A re-extract that changes the manifest makes the spec `STALE`. Run `parity rebind spec/<Class>.md`
 before anything else. It diffs the manifest the spec was written against (`manifests/<Class>.prev.json`,
 or `--prev <old.json>` recovered from git) with the one on disk and checks every id the spec cites: each
-rule's `covers`, `cite` and the `ctrl:`/`dyn:`/`svc:` ids in its `then`, and the ids of the Fields,
-No behavior and Service calls rows. An id is affected when it vanished or changed in more than its
+rule's `covers`, `cite` and the `ctrl:`/`dyn:`/`svc:`/`var:` ids in its `then`, and the ids of the Fields,
+No behavior, Service calls and Variant deltas without a rule rows. An id is affected when it vanished or changed in more than its
 location (`loc` alone moving is not a change to what the spec says). A cited `handler:` or `method:`
 is also affected when any method reachable from it through the manifest `calls` edges (transitive,
-cycle-safe, edges taken from both manifests) vanished or changed, even if the rule does not cite that
+cycle-safe, edges taken from both manifests; a `var:` override, handler or ctor entry's calls count) vanished or changed, even if the rule does not cite that
 method; the work list names the path as `<rule> via handler:X -> method:Y`.
 
 - Nothing affected: the `manifest:` line is rewritten in place to the new hash, exit 0.
@@ -38,7 +38,8 @@ method; the work list names the path as `<rule> via handler:X -> method:Y`.
 ## Sections, in this order
 
 `# <title>` and a `Purpose:` line. Then exactly these `##` sections: **Fields**, **Rules**,
-**No behavior**, **Service calls**, **Open questions**.
+**No behavior**, **Service calls**, **Open questions**. A form with variants may add **Variant deltas
+without a rule** before Open questions.
 
 ### Fields
 
@@ -52,8 +53,9 @@ category input, action, grid, column, display or unknown, per container that has
 ```
 ### R-<Class>-NNN
 - kind: validation | enablement | navigation | data | calculation | ui | service | lifecycle
-- covers: evt:..., evt:...          at least one; dyn: ids also allowed
-- cite: handler:..., method:..., ev:...   at least one handler: or method:; ev: optional
+- variants: base, A, B               optional; absent means base and every variant
+- covers: evt:..., evt:...          at least one; dyn: ids also allowed, var: event/added/removed/retagged/service ids
+- cite: handler:..., method:..., ev:...   at least one handler: or method:; ev: optional; var: override/handler/ctor ids also allowed
 - given: ...
 - when: ...
 - then: ...                         must name a control (ctrl:/dyn: id or control name), a svc: or a form:
@@ -69,6 +71,13 @@ outcome, or an `outcome-gap` line saying why there is none (`FIXTURE-OUTCOME` ot
 repeat, and it must name a declared outcome.
 
 Ids containing commas (method parameter lists) are split on top-level commas only.
+
+`variants:` scopes a rule to the tenants it holds for. `base` is the form itself; the other names are the
+variant names in the manifest. A rule without the field holds everywhere, so it may not cite a base handler
+or method that some variant replaces, nor cover an event on a control some variant removes (`VAR-SCOPE`):
+scope it to the variants where it is true and write the replacement's rule separately. A `var:` id is
+described only by a rule whose `variants:` names its variant and not `base`. Base coverage
+(`COV-EVENT`, `COV-HANDLER`) counts only rules whose scope includes `base`.
 Hedging words anywhere in given/when/then are errors: probably, likely, assume(d), should, seem(s),
 typically, usually, maybe, might, presumably, appears to, "I think".
 
@@ -89,6 +98,12 @@ either here or in some rule's `covers`, never both.
 
 `| service | called from | fixtures |`: one row per `svc:` id in the manifest, with at least one fixture
 whose `service` field equals the id.
+
+### Variant deltas without a rule
+
+`| delta | reason |`: optional. `var:` delta ids that need no rule of their own (a caption change already
+in the Fields note, a removed control nothing depended on). A reason is required; an id is either here or in
+a rule, never both. Every delta entry of every variant must be in one of the two (`VAR-UNCOVERED`).
 
 ### Open questions
 

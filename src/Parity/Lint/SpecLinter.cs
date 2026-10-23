@@ -80,7 +80,16 @@ public static partial class SpecLinter
         var handlerIds = m.Handlers.Select(h => h.Id).ToHashSet(StringComparer.Ordinal);
         var methodIds = m.Methods.Select(x => x.Id).ToHashSet(StringComparer.Ordinal);
         var svcIds = m.ServiceCalls.Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
-        var allIds = controlIds.Concat(dynIds).Concat(eventIds).Concat(handlerIds).Concat(methodIds).Concat(svcIds).ToHashSet(StringComparer.Ordinal);
+        // variants (#20): each delta id belongs to one variant; a rule's scope is base plus every variant unless it says 'variants:'
+        var variants = m.Variants ?? new List<VariantInfo>();
+        var deltaOf = variants.SelectMany(v => v.Delta.Select(d => (v, d))).ToDictionary(x => x.d.Id, x => x, StringComparer.Ordinal);
+        var replacedIn = variants.ToDictionary(v => v.Name, v => v.Delta.Where(d => d.Kind == "override" && d.Detail?.StartsWith("replaces base", StringComparison.Ordinal) == true && d.Target != null)
+            .ToDictionary(d => d.Target!, d => d.Id, StringComparer.Ordinal), StringComparer.Ordinal);
+        var removedIn = variants.ToDictionary(v => v.Name, v => v.Delta.Where(d => d.Kind == "removed" && d.Target != null).ToDictionary(d => d.Target!, d => d.Id, StringComparer.Ordinal), StringComparer.Ordinal);
+        foreach (var x in variants.SelectMany(v => v.Delta).Where(d => d.Kind == "service-added" && d.Target != null)) svcIds.Add(x.Target!);
+        var allIds = controlIds.Concat(dynIds).Concat(eventIds).Concat(handlerIds).Concat(methodIds).Concat(svcIds)
+            .Concat((m.Factories ?? new()).Select(x => x.Id)).ToHashSet(StringComparer.Ordinal);
+        var variantCovered = variants.ToDictionary(v => v.Name, _ => new HashSet<string>(StringComparer.Ordinal), StringComparer.Ordinal);
         // ev: ids live outside the manifest, in evidence/<Unit>.json; each is re-read from the legacy source
         var evidence = new EvidenceSet(moduleDir);
         void Ev(int line, string who, string id) { if (evidence.Check(id) is { } bad) E(line, bad.Code, $"{who}: '{id}' {bad.Message}"); }
@@ -101,14 +110,36 @@ public static partial class SpecLinter
                 if (r.Get(key) is null or "") E(r.Line, "GRAMMAR", $"{r.Id}: missing '- {key}:'");
             if (r.Get("kind") is { } kind && kind.Length > 0 && !RuleKinds.Contains(kind)) E(r.LineOf("kind"), "GRAMMAR", $"{r.Id}: kind '{kind}' is not one of {string.Join("|", RuleKinds)}");
 
+            var scope = new HashSet<string>(StringComparer.Ordinal);
+            if (r.Get("variants") is { } vs)
+            {
+                foreach (var name in SpecParser.SplitIds(vs))
+                {
+                    if (name != "base" && !variantCovered.ContainsKey(name))
+                        E(r.LineOf("variants"), "VAR-UNKNOWN", variants.Count == 0 ? $"{r.Id}: {formName} has no variants; drop 'variants:'" : $"{r.Id}: variant '{name}' is not one of base, {string.Join(", ", variants.Select(v => v.Name))}");
+                    else scope.Add(name);
+                }
+                if (scope.Count == 0) E(r.LineOf("variants"), "GRAMMAR", $"{r.Id}: 'variants:' lists nothing (omit it for base and every variant)");
+            }
+            else { scope.Add("base"); foreach (var v in variants) scope.Add(v.Name); }
+            var inBase = scope.Contains("base");
+
             var covers = SpecParser.SplitIds(r.Get("covers"));
             if (covers.Count == 0 && r.Get("covers") != null) E(r.LineOf("covers"), "ORPHAN-RULE", $"{r.Id} covers nothing");
             foreach (var id in covers)
             {
                 if (id.StartsWith("ev:", StringComparison.Ordinal)) E(r.LineOf("covers"), "CITE-KIND", $"{r.Id}: covers must list evt: (or dyn:) ids, got '{id}'");
+                else if (id.StartsWith("var:", StringComparison.Ordinal)) VarRef(r, "covers", id, scope);
                 else if (!allIds.Contains(id)) E(r.LineOf("covers"), "CITE-UNKNOWN", $"{r.Id}: '{id}' is not in the manifest");
                 else if (!id.StartsWith("evt:", StringComparison.Ordinal) && !id.StartsWith("dyn:", StringComparison.Ordinal)) E(r.LineOf("covers"), "CITE-KIND", $"{r.Id}: covers must list evt: (or dyn:) ids, got '{id}'");
-                else covered.Add(id);
+                else
+                {
+                    if (inBase) covered.Add(id);
+                    var ctl = m.Events.FirstOrDefault(e => e.Id == id)?.Control;
+                    foreach (var v in scope.Where(n => n != "base"))
+                        if (ctl != null && removedIn[v].TryGetValue(ctl, out var rid))
+                            E(r.LineOf("covers"), "VAR-SCOPE", $"{r.Id}: covers {id}, but {v} removes that control ({rid}); scope the rule without {v}");
+                }
             }
             var cites = SpecParser.SplitIds(r.Get("cite"));
             if (cites.Count > 0 && cites.All(id => id.StartsWith("ev:", StringComparison.Ordinal)))
@@ -116,11 +147,18 @@ public static partial class SpecLinter
             foreach (var id in cites)
             {
                 if (id.StartsWith("ev:", StringComparison.Ordinal)) Ev(r.LineOf("cite"), r.Id, id);
+                else if (id.StartsWith("var:", StringComparison.Ordinal)) VarRef(r, "cite", id, scope);
                 else if (!allIds.Contains(id)) E(r.LineOf("cite"), "CITE-UNKNOWN", $"{r.Id}: '{id}' is not in the manifest");
                 else if (!id.StartsWith("handler:", StringComparison.Ordinal) && !id.StartsWith("method:", StringComparison.Ordinal)) E(r.LineOf("cite"), "CITE-KIND", $"{r.Id}: cite must list handler:, method: or ev: ids, got '{id}'");
-                else cited.Add(id);
+                else
+                {
+                    if (inBase) cited.Add(id);
+                    foreach (var v in scope.Where(n => n != "base"))
+                        if (replacedIn[v].TryGetValue(id, out var oid))
+                            E(r.LineOf("cite"), "VAR-SCOPE", $"{r.Id}: cites {id}, which {v} replaces ({oid}); scope the rule without {v} and describe {v} in a rule citing {oid}");
+                }
             }
-            if (r.Get("then") is { } then && then.Length > 0 && !Regex.IsMatch(then, @"\b(ctrl|dyn|svc|form):\S+") && !Regex.IsMatch(then, @"\b[a-z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*\b"))
+            if (r.Get("then") is { } then && then.Length > 0 && !Regex.IsMatch(then, @"\b(ctrl|dyn|svc|form|var):\S+") && !Regex.IsMatch(then, @"\b[a-z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*\b"))
                 E(r.LineOf("then"), "GRAMMAR", $"{r.Id}: 'then' must name an observable outcome: a control (ctrl:/dyn: id or control name), a service (svc:) or a form shown (form:)");
             foreach (var key in new[] { "given", "when", "then" })
                 if (r.Get(key) is { } v && HedgeWords.Any(h => Regex.IsMatch(v, $@"\b{Regex.Escape(h)}\b", RegexOptions.IgnoreCase)))
@@ -144,6 +182,30 @@ public static partial class SpecLinter
                 else if (!outcomes.Contains(gm.Groups[1].Value)) E(line, "GRAMMAR", $"{r.Id}: outcome-gap names '{gm.Groups[1].Value}', which is not in outcomes");
                 else if (!gapped.Add(gm.Groups[1].Value)) E(line, "GRAMMAR", $"{r.Id}: outcome '{gm.Groups[1].Value}' has two outcome-gap lines");
             }
+        }
+
+        // a var: id names one variant's delta: it is described only by a rule scoped to that variant, never the base
+        void VarRef(SpecRule r, string key, string id, HashSet<string> scope)
+        {
+            if (!deltaOf.TryGetValue(id, out var hit)) { E(r.LineOf(key), "VAR-UNKNOWN", $"{r.Id}: '{id}' is not a delta id of any variant in the manifest"); return; }
+            var code = hit.d.Kind is "override" or "handler" or "ctor";
+            if (code != (key == "cite")) { E(r.LineOf(key), "CITE-KIND", $"{r.Id}: {id} is a {hit.d.Kind} delta; it belongs in {(code ? "cite" : "covers")}"); return; }
+            if (!scope.Contains(hit.v.Name) || scope.Contains("base"))
+            {
+                E(r.LineOf(key), "VAR-SCOPE", $"{r.Id}: {id} exists only in {hit.v.Name}; the rule needs 'variants: {hit.v.Name}' (without base)");
+                return;
+            }
+            variantCovered[hit.v.Name].Add(id);
+        }
+
+        var noRule = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var row in spec.VariantNoRule)
+        {
+            var id = row.Cell(0).Trim('`');
+            if (!deltaOf.TryGetValue(id, out var hit)) { E(row.Line, "VAR-UNKNOWN", $"Variant deltas without a rule: '{id}' is not a delta id of any variant in the manifest"); continue; }
+            if (variantCovered[hit.v.Name].Contains(id)) E(row.Line, "GRAMMAR", $"Variant deltas without a rule: {id} is also described by a rule; pick one");
+            else noRule.Add(id);
+            if (row.Cell(1).Length == 0) E(row.Line, "GRAMMAR", $"Variant deltas without a rule: {id} needs a reason");
         }
 
         var fieldRows = new Dictionary<string, SpecRow>(StringComparer.Ordinal);
@@ -265,14 +327,20 @@ public static partial class SpecLinter
                     E(r.LineOf("outcomes"), "FIXTURE-OUTCOME", $"{r.Id}: outcome '{o}' has no listed fixture with variant '{o}' and no 'outcome-gap: {o} - <reason>'");
         }
 
-        if (m.Raw.Count > 0 || m.Diagnostics.Count > 0)
+        foreach (var v in variants)
+            foreach (var d in v.Delta.Where(d => !variantCovered[v.Name].Contains(d.Id) && !noRule.Contains(d.Id)))
+                E(0, "VAR-UNCOVERED", $"{d.Id} ({d.Kind}) is neither described by a rule scoped 'variants: {v.Name}' nor listed under Variant deltas without a rule");
+
+        var raw = m.Raw.Concat(variants.SelectMany(v => v.Raw)).ToList();
+        var allDiags = m.Diagnostics.Concat(variants.SelectMany(v => v.Diagnostics)).ToList();
+        if (raw.Count > 0 || allDiags.Count > 0)
         {
             var debtPath = Path.Combine(moduleDir, "extractor-debt.md");
             var debt = File.Exists(debtPath) ? File.ReadAllLines(debtPath) : Array.Empty<string>();
             bool Acknowledged(string key) => debt.Any(l => l.Contains(key, StringComparison.Ordinal) && l.Contains("owner", StringComparison.OrdinalIgnoreCase) && DateRx().IsMatch(l));
-            foreach (var r in m.Raw)
+            foreach (var r in raw)
                 if (!Acknowledged($"{r.Loc.File}:{r.Loc.Start}")) E(0, "COV-RAW", $"raw designer statement at {r.Loc.File}:{r.Loc.Start} is not acknowledged in extractor-debt.md (line must carry '{r.Loc.File}:{r.Loc.Start}', an owner and a YYYY-MM-DD)");
-            foreach (var d in m.Diagnostics)
+            foreach (var d in allDiags)
             {
                 var key = DebtKey(d.Code, d.Message);
                 if (!Acknowledged(key)) E(0, "COV-RAW", $"diagnostic '{key}' is not acknowledged in extractor-debt.md (a line must carry exactly that text, an owner and a YYYY-MM-DD; the bare code acknowledges nothing)");

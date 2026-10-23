@@ -15,7 +15,7 @@ namespace SampleLegacy.Forms
             InitializeComponent();
         }
 
-        private void btnSearch_Click(object sender, EventArgs e)
+        protected virtual void btnSearch_Click(object sender, EventArgs e)
         {
             if (string.IsNullOrEmpty(txtSurname.Text) && string.IsNullOrEmpty(txtPostcode.Text))
             {

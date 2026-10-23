@@ -74,18 +74,18 @@ namespace SampleLegacy.Forms
             this.ResumeLayout(false);
         }
 
-        private DevExpress.XtraEditors.TextEdit txtSurname;
-        private DevExpress.XtraEditors.TextEdit txtPostcode;
-        private DevExpress.XtraEditors.DateEdit dtDob;
-        private DevExpress.XtraEditors.CheckEdit chkDeceased;
-        private DevExpress.XtraEditors.SimpleButton btnSearch;
-        private DevExpress.XtraEditors.SimpleButton btnSelect;
-        private DevExpress.XtraGrid.GridControl grdResults;
-        private DevExpress.XtraGrid.Views.Grid.GridView gvResults;
-        private DevExpress.XtraGrid.Columns.GridColumn colSurname;
-        private DevExpress.XtraGrid.Columns.GridColumn colForename;
-        private DevExpress.XtraGrid.Columns.GridColumn colDob;
-        private DevExpress.XtraEditors.LabelControl lblSurname;
-        private DevExpress.XtraEditors.LabelControl lblPostcode;
+        protected DevExpress.XtraEditors.TextEdit txtSurname;
+        protected DevExpress.XtraEditors.TextEdit txtPostcode;
+        protected DevExpress.XtraEditors.DateEdit dtDob;
+        protected DevExpress.XtraEditors.CheckEdit chkDeceased;
+        protected DevExpress.XtraEditors.SimpleButton btnSearch;
+        protected DevExpress.XtraEditors.SimpleButton btnSelect;
+        protected DevExpress.XtraGrid.GridControl grdResults;
+        protected DevExpress.XtraGrid.Views.Grid.GridView gvResults;
+        protected DevExpress.XtraGrid.Columns.GridColumn colSurname;
+        protected DevExpress.XtraGrid.Columns.GridColumn colForename;
+        protected DevExpress.XtraGrid.Columns.GridColumn colDob;
+        protected DevExpress.XtraEditors.LabelControl lblSurname;
+        protected DevExpress.XtraEditors.LabelControl lblPostcode;
     }
 }

@@ -23,6 +23,8 @@ public sealed class Spec
     public List<SpecRule> Rules = new();
     public List<SpecRow> NoBehavior = new();
     public List<SpecRow> ServiceCalls = new();
+    /// <summary>"## Variant deltas without a rule": | Delta | Reason | rows accounting for a var: delta no rule describes.</summary>
+    public List<SpecRow> VariantNoRule = new();
     public List<(string Text, int Line)> OpenQuestions = new();
     public List<(string Code, int Line, string Message)> ParseErrors = new();
     public HashSet<string> SectionsSeen = new(StringComparer.Ordinal);
@@ -71,13 +73,14 @@ public static class SpecParser
                 case "Fields":
                 case "No behavior":
                 case "Service calls":
+                case "Variant deltas without a rule":
                 {
                     if (!l.StartsWith('|')) { if (!l.StartsWith("Purpose", StringComparison.Ordinal)) spec.ParseErrors.Add(("GRAMMAR", ln, $"{section}: expected a table row")); continue; }
                     var cells = l.Trim('|').Split('|').Select(c => c.Trim()).ToList();
                     if (!headerSeen) { headerSeen = true; continue; }          // header
                     if (cells.All(c => c.Length == 0 || c.All(ch => ch == '-' || ch == ':'))) continue; // separator
                     var row = new SpecRow { Line = ln, Cells = cells };
-                    (section == "Fields" ? spec.Fields : section == "No behavior" ? spec.NoBehavior : spec.ServiceCalls).Add(row);
+                    (section switch { "Fields" => spec.Fields, "No behavior" => spec.NoBehavior, "Variant deltas without a rule" => spec.VariantNoRule, _ => spec.ServiceCalls }).Add(row);
                     break;
                 }
                 case "Rules":

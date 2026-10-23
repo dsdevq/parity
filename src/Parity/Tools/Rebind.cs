@@ -15,11 +15,12 @@ public sealed record RebindResult(bool Rebound, string Text);
 /// the ctrl:/dyn:/svc: ids in its then, and the ids of the Fields, No behavior and Service calls rows. A cited handler or
 /// method is also affected when anything it reaches through the manifest calls edges (transitively) changed or vanished.
 /// Nothing affected: the manifest line is rewritten in place. Anything affected: the hash stays and the work list is printed.
-/// New evt:/dyn: ids the spec does not mention are listed either way; the gate asks for them.
+/// Variant delta entries (var: ids) and the Variant deltas without a rule rows count like any other citation.
+/// New evt:/dyn:/var: ids the spec does not mention are listed either way; the gate asks for them.
 /// </summary>
 public static partial class Rebind
 {
-    [GeneratedRegex(@"\b(?:ctrl|dyn|svc):[^\s,;]+")] private static partial Regex ThenId();
+    [GeneratedRegex(@"\b(?:ctrl|dyn|svc|var):[^\s,;]+")] private static partial Regex ThenId();
 
     public static RebindResult Run(string specPath, string? prevPath)
     {
@@ -60,13 +61,13 @@ public static partial class Rebind
             Collect(r.Id, cites, hit, work);
             CollectReached(r.Id, cites, edges, hit, work);
         }
-        foreach (var (table, rows) in new[] { ("Fields", spec.Fields), ("No behavior", spec.NoBehavior), ("Service calls", spec.ServiceCalls) })
+        foreach (var (table, rows) in new[] { ("Fields", spec.Fields), ("No behavior", spec.NoBehavior), ("Service calls", spec.ServiceCalls), ("Variant deltas without a rule", spec.VariantNoRule) })
         {
             var cites = rows.Select(row => ("row", row.Cell(0).Trim('`'))).Distinct().ToList();
             foreach (var (_, id) in cites) mentioned.Add(id);
             Collect(table, cites, hit, work);
         }
-        var uncovered = changes.Where(c => c.Kind == '+' && c.Section is ("events" or "dynamicUi") && !mentioned.Contains(c.Id)).Select(c => c.Id).ToList();
+        var uncovered = changes.Where(c => c.Kind == '+' && c.Section is ("events" or "dynamicUi" or "delta") && !mentioned.Contains(c.Id)).Select(c => c.Id).ToList();
 
         var sb = new StringBuilder();
         var rebound = work.Count == 0;
@@ -106,7 +107,8 @@ public static partial class Rebind
     {
         var edges = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         foreach (var m in manifests)
-            foreach (var (id, calls) in m.Handlers.Select(h => (h.Id, h.Calls)).Concat(m.Methods.Select(x => (x.Id, x.Calls))))
+            foreach (var (id, calls) in m.Handlers.Select(h => (h.Id, h.Calls)).Concat(m.Methods.Select(x => (x.Id, x.Calls)))
+                         .Concat((m.Variants ?? new()).SelectMany(v => v.Delta.Select(d => (d.Id, d.Calls ?? new())).Concat(v.Methods.Select(x => (x.Id, x.Calls))))))
             {
                 if (!edges.TryGetValue(id, out var set)) edges[id] = set = new HashSet<string>(StringComparer.Ordinal);
                 set.UnionWith(calls);

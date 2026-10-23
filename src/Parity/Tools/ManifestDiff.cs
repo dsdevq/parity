@@ -18,11 +18,13 @@ public sealed record EntryChange(string Section, string Id, char Kind, List<stri
 /// changed (issue #25). Entries without an id are keyed the way the debt file acknowledges them: raw statements
 /// by file:line, diagnostics by <see cref="SpecLinter.DebtKey"/>. The form's own header fields are the
 /// <c>form</c> section. A changed entry names the top-level fields that differ; object fields (props, events
-/// of a control) are named down to their keys, except <c>loc</c>, which is one value.
+/// of a control) are named down to their keys, except <c>loc</c>, which is one value. Variants (issue #20) are a
+/// header per variant, one <c>delta</c> entry per var: id and the variants' sliced methods; their raw statements and
+/// diagnostics join the base's sections, keyed the same way.
 /// </summary>
 public static class ManifestDiff
 {
-    public static readonly string[] Sections = { "form", "controls", "events", "bindings", "validationRules", "handlers", "methods", "serviceCalls", "dynamicUi", "raw", "diagnostics" };
+    public static readonly string[] Sections = { "form", "controls", "events", "bindings", "validationRules", "handlers", "methods", "serviceCalls", "dynamicUi", "raw", "diagnostics", "variants", "delta", "variantMethods", "factories" };
 
     public static FormManifest Load(string path) => JsonSerializer.Deserialize<FormManifest>(File.ReadAllText(path), Json.Options)!;
 
@@ -73,8 +75,12 @@ public static class ManifestDiff
             "methods" => m.Methods.Select(x => (x.Id, (object)x)),
             "serviceCalls" => m.ServiceCalls.Select(x => (x.Id, (object)x)),
             "dynamicUi" => m.DynamicUi.Select(x => (x.Id, (object)x)),
-            "raw" => m.Raw.Select(x => ($"{x.Loc.File}:{x.Loc.Start}", (object)x)),
-            "diagnostics" => m.Diagnostics.Select(x => (SpecLinter.DebtKey(x.Code, x.Message), (object)x)),
+            "raw" => m.Raw.Concat(Variants(m).SelectMany(v => v.Raw)).Select(x => ($"{x.Loc.File}:{x.Loc.Start}", (object)x)),
+            "diagnostics" => m.Diagnostics.Concat(Variants(m).SelectMany(v => v.Diagnostics)).Select(x => (SpecLinter.DebtKey(x.Code, x.Message), (object)x)),
+            "variants" => Variants(m).Select(v => (v.Id, (object)new { v.Id, v.Name, v.Project, v.Class, v.Bases, v.Files, v.Layout })),
+            "delta" => Variants(m).SelectMany(v => v.Delta).Select(x => (x.Id, (object)x)),
+            "variantMethods" => Variants(m).SelectMany(v => v.Methods.Select(x => ($"{v.Id} {x.Id}", (object)x))),
+            "factories" => (m.Factories ?? new()).Select(x => (x.Id, (object)x)),
             _ => throw new ArgumentOutOfRangeException(nameof(section)),
         };
         // an id can repeat (one event wired to two handlers, a binding set twice): all entries under it are compared together
@@ -82,6 +88,8 @@ public static class ManifestDiff
             g => g.Select(x => JsonSerializer.SerializeToElement(x.Entry, x.Entry.GetType(), Json.Options)).OrderBy(e => e.GetRawText(), StringComparer.Ordinal).ToList(),
             StringComparer.Ordinal);
     }
+
+    private static List<VariantInfo> Variants(FormManifest m) => m.Variants ?? new();
 
     private static List<string> Fields(List<JsonElement> a, List<JsonElement> b)
     {

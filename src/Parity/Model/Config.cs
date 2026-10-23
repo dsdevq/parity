@@ -24,6 +24,8 @@ public sealed class ExtractConfig
     public int MaxCallDepth { get; set; } = 2;
     public string Output { get; set; } = "legacy";
     public List<string> IgnoreCalls { get; set; } = new() { "System.*", "DevExpress.*" };
+    /// <summary>Tenant or customer variants of the module's forms (issue #20). Each one's subclasses become a delta on their base form.</summary>
+    public List<VariantConfig> Variants { get; set; } = new();
 
     [JsonIgnore] public string BaseDir { get; set; } = ".";
 
@@ -37,6 +39,20 @@ public sealed class ExtractConfig
     }
 
     public string Resolve(string p) => Path.IsPathRooted(p) ? p : Path.GetFullPath(Path.Combine(BaseDir, p));
+}
+
+/// <summary>
+/// One variant. Project is the variant's csproj, relative to this config (omit it when the variant lives in the main project).
+/// Subclasses limits the variant to these class names (required without Project). Factories names extra types or
+/// Type.Method factories to read when the factory does not mention two implementations of the same form.
+/// </summary>
+public sealed class VariantConfig
+{
+    public string Id { get; set; } = "";
+    public string? Project { get; set; }
+    public string? SelfAssembly { get; set; }
+    public List<string> Subclasses { get; set; } = new();
+    public List<string> Factories { get; set; } = new();
 }
 
 public static class Json

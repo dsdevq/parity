@@ -31,6 +31,11 @@ evidence file; every id you write must appear there verbatim.
    Anything you cannot establish from the manifest goes under Open questions, phrased as a question.
    Never resolve it by assumption and never use hedging words in a rule.
 6. Events whose handler needs no port go under No behavior with the reason.
+   If the manifest has a Variants section, the rules above describe the base. For each variant, account for
+   every delta id: a rule with `variants: <Id>` that covers or cites it, or a row under Variant deltas without
+   a rule with the reason. A base rule that does not hold for a variant (it cites a handler the variant
+   replaces) gets `variants:` without that variant. The Factories table says which tenant key gets which
+   variant; cite the factory method where a rule depends on it.
 7. Run `parity lint legacy/<Module>/spec/<Form>.md`. Fix every error. Repeat until `0 error(s)`.
 8. Run `parity lint ... --gate` once and report the coverage findings as the list of what is still
    missing (do not force-close Open questions to make it pass).

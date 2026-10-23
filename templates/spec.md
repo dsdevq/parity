@@ -34,6 +34,7 @@ Purpose: one or two sentences. This is the only free text in the file.
      covers: evt: ids this rule accounts for (required, at least one)
      cite: handler: / method: ids the rule is read from (required)
      outcomes: valid, invalid, ... (optional) - each needs a fixture with that "variant", or "- outcome-gap: <outcome> - <reason>"
+     variants: base, <Id>  only when the manifest has Variants and the rule holds for some tenants; absent means all
      No hedging words: probably, likely, assume, should, seems, typically, usually, maybe, might.
      Unsure? Put it under Open questions; the gate stays closed until it is answered. -->
 

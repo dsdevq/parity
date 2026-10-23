@@ -26,17 +26,34 @@ public static class Extractor
         var sw = Stopwatch.StartNew();
         var project = CsprojReader.Read(cfg.Resolve(cfg.Project));
         var cats = ControlCategories.Load(cfg.Resolve(cfg.ControlCategories));
-        var index = FileIndex.Build(project.CompileFiles);
+        var baseIndex = FileIndex.Build(project.CompileFiles);
+        var variantProjects = cfg.Variants.Select(v => v.Project == null ? null : CsprojReader.Read(cfg.Resolve(v.Project))).ToList();
+        var variantIndexes = variantProjects.Select(p => p == null ? baseIndex : FileIndex.Build(p.CompileFiles)).ToList();
+        var index = baseIndex.With(variantIndexes.Where(x => !ReferenceEquals(x, baseIndex)));
         var parse = CompilationBuilder.ParseOptions(project);
         var matcher = Glob(formGlob);
 
         // round 0: files that declare a class matching the glob, plus the designer partials next to them
         var loaded = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var (type, files) in index.FilesByType)
+        foreach (var (type, files) in baseIndex.FilesByType)
             if (matcher(type)) foreach (var f in files) loaded.Add(f);
         if (loaded.Count == 0) throw new InvalidOperationException($"no class in {project.Path} matches '{formGlob}'");
 
         var resxIndex = new ResxIndex(project);
+
+        // ... plus every configured variant's subclasses of a matched class, and the factories that choose between them (#20)
+        var variantDiags = new List<Diagnostic>();
+        var variants = DiscoverVariants(cfg, baseIndex, variantIndexes, index, matcher, variantDiags);
+        foreach (var v in variants) foreach (var f in v.Files) loaded.Add(f);
+        var factoryFiles = FactoryFiles(cfg, index, variants);
+        foreach (var f in factoryFiles) loaded.Add(f);
+        foreach (var v in variants.GroupBy(v => v.Config.Id))
+            log.WriteLine($"variant {v.Key}: {string.Join(", ", v.Select(x => $"{x.Class} on {x.Base}"))}");
+
+        // a variant project's form resx (the main project's are in resxIndex)
+        var variantResx = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var r in variantProjects.Where(p => p != null).SelectMany(p => p!.ResxFiles))
+            variantResx.TryAdd(Path.GetFileNameWithoutExtension(r), r);
         var outDir = Path.Combine(cfg.Resolve(cfg.Output), module);
         Directory.CreateDirectory(Path.Combine(outDir, "manifests"));
 
@@ -62,9 +79,21 @@ public static class Extractor
                         refDiags.Add(new Diagnostic("BASE-UNRESOLVED", $"formBaseTypes entry '{b}' does not resolve against the loaded references (typo, or its assembly is missing from references)", null));
                 diags = new List<Diagnostic>(refDiags);
             }
-            var forms = FormDiscovery.Find(compilation, cfg, matcher, out var rejected);
+            var variantNames = variants.Select(v => v.Class).ToHashSet(StringComparer.Ordinal);
+            var found = FormDiscovery.Find(compilation, cfg, n => matcher(n) || variantNames.Contains(n), out var rejected);
+            var byName = found.GroupBy(f => f.Symbol.Name, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+            var claimed = new Dictionary<string, VariantClass>(StringComparer.Ordinal);
+            foreach (var v in variants)
+            {
+                if (!byName.TryGetValue(v.Class, out var vf) || !byName.TryGetValue(v.Base, out var bf)) continue;
+                var derives = false;
+                for (var t = vf.Symbol.BaseType; t != null && !derives; t = t.BaseType) derives = SymbolEqualityComparer.Default.Equals(t, bf.Symbol);
+                if (derives) claimed[v.Class] = new VariantClass(v.Config, vf, bf, v.Config.Project?.Replace('\\', '/'));
+            }
+            var forms = found.Where(f => !claimed.ContainsKey(f.Symbol.Name) && (matcher(f.Symbol.Name) || !variantNames.Contains(f.Symbol.Name))).ToList();
             if (forms.Count == 0)
                 throw new InvalidOperationException($"'{formGlob}' matched classes but none derives from a configured form base type. Matched: {(rejected.Count == 0 ? "(none with a base list)" : string.Join("; ", rejected.Take(8)))}. Unresolved base types: {string.Join(", ", refDiags.Where(d => d.Code == "BASE-UNRESOLVED").Select(d => d.Message))}");
+            var factories = factoryFiles.Count == 0 ? new List<FactoryInfo>() : FactoryPass.Find(compilation, factoryFiles, cfg, project.Dir, 1);
 
             manifests.Clear();
             var wanted = new HashSet<string>(StringComparer.Ordinal);
@@ -78,7 +107,16 @@ public static class Extractor
                 var h = new HandlerPass(form, compilation, controlNames, cfg, cats, index, loaded, project.Dir, constants).Run(d.Events);
                 ModelFacts.Apply(form.Symbol.Name, d, h, constants, compilation, index, loaded, wanted);
                 foreach (var w in h.WantedFiles.Concat(constants.WantedFiles)) wanted.Add(w);
-                manifests.Add(Assemble(form, project, d, h, constants, cats, diags));
+                var m = Assemble(form, project, d, h, constants, cats, diags.Concat(variantDiags.Where(x => x.Message.StartsWith(form.Symbol.Name + ":", StringComparison.Ordinal) || x.Message.StartsWith("variant", StringComparison.Ordinal))).ToList());
+                var mine = claimed.Values.Where(v => SymbolEqualityComparer.Default.Equals(v.Base.Symbol, form.Symbol)).OrderBy(v => v.Config.Id, StringComparer.Ordinal).ToList();
+                var vinfos = mine.Select(v =>
+                {
+                    var vresx = resxIndex.Find(Syntax.FullName(v.Form.Symbol), v.Form.Symbol.Name)?.Default.ToDictionary(kv => kv.Key, kv => kv.Value.Value, StringComparer.Ordinal)
+                                ?? (variantResx.TryGetValue(v.Form.Symbol.Name, out var vp) ? ResxReader.Read(vp) : new Dictionary<string, string>());
+                    return new VariantPass(v, m, compilation, project.Dir).Run(cfg, cats, index, loaded, vresx, wanted, new ConstantCollector(compilation, resxIndex, index, loaded, project.Dir));
+                }).ToList();
+                var mineFactories = FactoriesFor(factories, form, mine, cfg);
+                manifests.Add(m with { Variants = vinfos.Count == 0 ? null : vinfos, Factories = mineFactories.Count == 0 ? null : mineFactories });
             }
 
             // names the compiler could not resolve that the project declares somewhere: load those files too
@@ -121,7 +159,10 @@ public static class Extractor
 
         var peak = Process.GetCurrentProcess().PeakWorkingSet64 / (1024 * 1024);
         log.WriteLine($"render+write: {tWrite.Elapsed.TotalSeconds:0.0}s");
-        log.WriteLine($"files loaded: {loaded.Count} of {project.CompileFiles.Count}   rounds: {round}   time: {sw.Elapsed.TotalSeconds:0.0}s   peak-rss-mb: {peak}");
+        var own = project.CompileFiles.ToHashSet(StringComparer.Ordinal);
+        var fromVariants = loaded.Count(f => !own.Contains(f));
+        log.WriteLine($"files loaded: {loaded.Count - fromVariants} of {project.CompileFiles.Count}" + (fromVariants > 0 ? $" (+{fromVariants} from variant projects)" : "")
+            + $"   rounds: {round}   time: {sw.Elapsed.TotalSeconds:0.0}s   peak-rss-mb: {peak}");
         return summaries;
     }
 
@@ -149,7 +190,7 @@ public static class Extractor
         var handlers = h.Handlers.Select(x => x with { Calls = Rewrite(x.Calls) }).ToList();
         var methods = h.Methods.Values.Where(x => !alias.ContainsKey(x.Id)).Select(x => x with { Calls = Rewrite(x.Calls) })
             .OrderBy(m => m.Depth).ThenBy(m => m.Id, StringComparer.Ordinal).ToList();
-        var svcs = h.ServiceCalls.Values.OrderBy(s => s.Id, StringComparer.Ordinal).ToList();
+        var svcs = h.ServiceCalls.Values.Select(s => s with { CalledFrom = Rewrite(s.CalledFrom) }).OrderBy(s => s.Id, StringComparer.Ordinal).ToList();
         var dyn = h.DynamicUi.OrderBy(x => x.Id, StringComparer.Ordinal).ToList();
         // a grid view without designer columns is a visible gap: say so, and say where code touches its columns (#15)
         var gridDiags = new List<Diagnostic>();
@@ -169,6 +210,108 @@ public static class Extractor
 
         return new FormManifest(Extractor.SchemaVersion, $"form:{name}", name, form.Symbol.ContainingNamespace.ToDisplayString(), form.Bases, files, d.FormCaption,
             controls, events, bindings, rules, handlers, methods, svcs, dyn, constants, d.Raw.OrderBy(r => r.Loc.Start).ToList(), diags);
+    }
+
+    private sealed record VariantCandidate(VariantConfig Config, string Class, string Base, List<string> Files);
+
+    /// <summary>
+    /// Per configured variant, the classes it declares that derive (by written base name) from a matched class of the main
+    /// project; the nearest such class is the unit the variant customises. Variant classes in between are loaded but folded
+    /// into the most derived one. The first variant to claim a class keeps it.
+    /// </summary>
+    private static List<VariantCandidate> DiscoverVariants(ExtractConfig cfg, FileIndex baseIndex, List<FileIndex> variantIndexes, FileIndex index,
+        Func<string, bool> matcher, List<Diagnostic> diags)
+    {
+        var result = new List<VariantCandidate>();
+        var taken = new Dictionary<string, string>(StringComparer.Ordinal);
+        for (var i = 0; i < cfg.Variants.Count; i++)
+        {
+            var v = cfg.Variants[i];
+            var own = variantIndexes[i];
+            var inBase = ReferenceEquals(own, baseIndex);
+            if (string.IsNullOrWhiteSpace(v.Id)) { diags.Add(new Diagnostic("VARIANT-CONFIG", $"variants[{i}]: id is required", null)); continue; }
+            if (inBase && v.Subclasses.Count == 0) { diags.Add(new Diagnostic("VARIANT-CONFIG", $"variant {v.Id}: without project, subclasses is required (every subclass in the main project is not a tenant)", null)); continue; }
+            var names = own.FilesByType.Keys.Where(t => inBase ? v.Subclasses.Contains(t) : baseIndex.FilesFor(t).Count == 0)
+                .Where(t => v.Subclasses.Count == 0 || v.Subclasses.Contains(t)).ToHashSet(StringComparer.Ordinal);
+            foreach (var missing in v.Subclasses.Where(s => !names.Contains(s)))
+                diags.Add(new Diagnostic("VARIANT-CONFIG", $"variant {v.Id}: subclass '{missing}' is not declared in {(inBase ? "the main project" : v.Project)}", null));
+
+            // the chain from each class up to a matched class of the main project that is not itself part of this variant
+            var chains = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            foreach (var n in names)
+            {
+                var chain = new List<string>();
+                for (var (cur, depth) = (n, 0); depth < 16; depth++)
+                {
+                    var b = index.BasesOf(cur).FirstOrDefault(x => names.Contains(x) || (matcher(x) && baseIndex.FilesFor(x).Count > 0));
+                    if (b == null) { chain.Clear(); break; }
+                    chain.Add(b);
+                    if (!names.Contains(b)) break;
+                    cur = b;
+                }
+                if (chain.Count > 0 && !names.Contains(chain[^1])) chains[n] = chain;
+            }
+            var intermediate = chains.Values.SelectMany(c => c.Take(c.Count - 1)).ToHashSet(StringComparer.Ordinal);
+            foreach (var (cls, chain) in chains.OrderBy(x => x.Key, StringComparer.Ordinal))
+            {
+                if (intermediate.Contains(cls)) continue;
+                if (taken.TryGetValue(cls, out var first))
+                {
+                    diags.Add(new Diagnostic("VARIANT-CONFIG", $"{chain[^1]}: {cls} is claimed by variants {first} and {v.Id}; {first} keeps it", null));
+                    continue;
+                }
+                var baseName = chain[^1];
+                if (result.Any(r => r.Config.Id == v.Id && r.Base == baseName))
+                {
+                    diags.Add(new Diagnostic("VARIANT-CONFIG", $"{baseName}: variant {v.Id} has more than one class on it ({result.First(r => r.Config.Id == v.Id && r.Base == baseName).Class}, {cls}); list the one to describe in subclasses", null));
+                    continue;
+                }
+                taken[cls] = v.Id;
+                var files = chain.Take(chain.Count - 1).Prepend(cls).SelectMany(own.FilesFor).Distinct().ToList();
+                result.Add(new VariantCandidate(v, cls, baseName, files));
+                foreach (var mid in chain.Take(chain.Count - 1))
+                    diags.Add(new Diagnostic("VARIANT-INTERMEDIATE", $"{baseName}: variant {v.Id} reaches it through {mid}; only {cls}'s own declarations are described as the delta", null));
+            }
+        }
+        return result;
+    }
+
+    /// <summary>Files that construct two or more classes of one unit's family (the unit and its variants), plus configured factory types.</summary>
+    private static List<string> FactoryFiles(ExtractConfig cfg, FileIndex index, List<VariantCandidate> variants)
+    {
+        var files = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var family in variants.GroupBy(v => v.Base))
+        {
+            var hits = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (var n in family.Select(v => v.Class).Prepend(family.Key).Distinct())
+                foreach (var f in index.FilesInstantiating(n)) hits[f] = hits.GetValueOrDefault(f) + 1;
+            foreach (var (f, count) in hits) if (count >= 2) files.Add(f);
+        }
+        foreach (var entry in cfg.Variants.SelectMany(v => v.Factories))
+        {
+            var type = index.FilesFor(entry).Count > 0 || !entry.Contains('.') ? entry : entry[..entry.LastIndexOf('.')];
+            foreach (var f in index.FilesFor(type[(type.LastIndexOf('.') + 1)..])) files.Add(f);
+        }
+        return files.OrderBy(f => f, StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>The factories that hand out this unit or one of its variants, with each case mapped to "base" or the variant.</summary>
+    private static List<FactoryInfo> FactoriesFor(List<FactoryInfo> factories, FormClass form, List<VariantClass> variants, ExtractConfig cfg)
+    {
+        var baseName = Syntax.FullName(form.Symbol);
+        var byClass = variants.ToDictionary(v => Syntax.FullName(v.Form.Symbol), v => v.Config.Id, StringComparer.Ordinal);
+        var configured = cfg.Variants.Where(v => variants.Any(x => x.Config.Id == v.Id)).SelectMany(v => v.Factories).ToList();
+        var result = new List<FactoryInfo>();
+        foreach (var f in factories)
+        {
+            var cases = f.Cases.Select(c => c with { Variant = c.Class == baseName ? "base" : byClass.TryGetValue(c.Class, out var id) ? id : null }).ToList();
+            if (cases.All(c => c.Variant == null)) continue;
+            var distinct = cases.Select(c => c.Class).Distinct().Count();
+            var isConfigured = configured.Any(e => f.Id.Contains("." + e + "(", StringComparison.Ordinal) || f.Id.Contains("." + e + ".", StringComparison.Ordinal) || f.Id.StartsWith("method:" + e, StringComparison.Ordinal));
+            if (distinct < 2 && !isConfigured) continue;
+            result.Add(f with { Cases = cases });
+        }
+        return result;
     }
 
     public static bool IsColumnOwner(string type) =>

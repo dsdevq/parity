@@ -1,0 +1,158 @@
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Parity.Model;
+
+namespace Parity.Passes;
+
+/// <summary>
+/// Reads factory methods (issue #20): which form class a method hands out for which key. Understood shapes are a switch
+/// statement or expression on the key, an if-chain comparing the key to a literal, and a dictionary field from key to
+/// typeof(T) that the method reads; any other new T() / typeof(T) of a form in the method is its "default".
+/// Cases carry full class names; the caller maps them onto a unit and its variants.
+/// </summary>
+public static class FactoryPass
+{
+    public static List<FactoryInfo> Find(CSharpCompilation compilation, IEnumerable<string> files, ExtractConfig cfg, string baseDir, int minClasses = 2)
+    {
+        var wanted = files.ToHashSet(StringComparer.Ordinal);
+        var result = new List<FactoryInfo>();
+        foreach (var tree in compilation.SyntaxTrees.Where(t => wanted.Contains(t.FilePath)))
+        {
+            var model = compilation.GetSemanticModel(tree, true);
+            foreach (var method in tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>())
+            {
+                if (model.GetDeclaredSymbol(method) is not IMethodSymbol sym) continue;
+                var f = Read(method, sym, model, cfg, baseDir);
+                if (f != null && f.Cases.Select(c => c.Class).Distinct().Count() >= minClasses) result.Add(f);
+            }
+        }
+        return result.OrderBy(f => f.Id, StringComparer.Ordinal).ToList();
+    }
+
+    private static FactoryInfo? Read(MethodDeclarationSyntax method, IMethodSymbol sym, SemanticModel model, ExtractConfig cfg, string baseDir)
+    {
+        var body = (SyntaxNode?)method.Body ?? method.ExpressionBody;
+        if (body == null) return null;
+        var cases = new List<FactoryCase>();
+        var consumed = new HashSet<SyntaxNode>();
+        var on = new List<string>();
+
+        string? FormOf(SyntaxNode n)
+        {
+            var type = n switch
+            {
+                ObjectCreationExpressionSyntax oc => model.GetTypeInfo(oc).Type,
+                TypeOfExpressionSyntax to => model.GetTypeInfo(to.Type).Type,
+                _ => null,
+            };
+            if (type is not INamedTypeSymbol nt || nt.TypeKind == TypeKind.Error) return null;
+            return Syntax.TypeChain(nt).Skip(1).Any(b => Syntax.Matches(b, cfg.FormBaseTypes)) ? Syntax.FullName(nt) : null;
+        }
+        (string Class, SyntaxNode Node)? FirstForm(SyntaxNode scope)
+        {
+            foreach (var n in scope.DescendantNodesAndSelf().Where(n => n is ObjectCreationExpressionSyntax or TypeOfExpressionSyntax))
+                if (!consumed.Contains(n) && FormOf(n) is { } cls) return (cls, n);
+            return null;
+        }
+        void Add(string key, SyntaxNode scope)
+        {
+            if (FirstForm(scope) is not { } hit) return;
+            consumed.Add(hit.Node);
+            cases.Add(new FactoryCase(key, hit.Class, null, Syntax.LocOf(hit.Node, baseDir)));
+        }
+        static string Key(SyntaxNode n) => n is LiteralExpressionSyntax lit ? lit.Token.ValueText : Syntax.Text(n);
+
+        foreach (var sw in body.DescendantNodes().OfType<SwitchStatementSyntax>())
+        {
+            var before = cases.Count;
+            foreach (var section in sw.Sections)
+            {
+                var keys = section.Labels.Select(l => l switch
+                {
+                    CaseSwitchLabelSyntax c => Key(c.Value),
+                    DefaultSwitchLabelSyntax => "default",
+                    CasePatternSwitchLabelSyntax p => Syntax.Text(p.Pattern),
+                    _ => Syntax.Text(l),
+                }).ToList();
+                if (FirstForm(section) is not { } hit) continue;
+                consumed.Add(hit.Node);
+                foreach (var k in keys) cases.Add(new FactoryCase(k, hit.Class, null, Syntax.LocOf(hit.Node, baseDir)));
+            }
+            if (cases.Count > before) on.Add(Syntax.Text(sw.Expression));
+        }
+        foreach (var sw in body.DescendantNodes().OfType<SwitchExpressionSyntax>())
+        {
+            var before = cases.Count;
+            foreach (var arm in sw.Arms)
+                Add(arm.Pattern is DiscardPatternSyntax ? "default" : arm.Pattern is ConstantPatternSyntax cp ? Key(cp.Expression) : Syntax.Text(arm.Pattern), arm.Expression);
+            if (cases.Count > before) on.Add(Syntax.Text(sw.GoverningExpression));
+        }
+        foreach (var iff in body.DescendantNodes().OfType<IfStatementSyntax>())
+        {
+            if (Compared(iff.Condition) is not { } cmp) continue;
+            var before = cases.Count;
+            Add(cmp.Key, iff.Statement);
+            if (cases.Count > before) on.Add(cmp.On);
+        }
+
+        // a dictionary field from key to type, read by this method
+        foreach (var id in body.DescendantNodes().OfType<IdentifierNameSyntax>())
+        {
+            if (model.GetSymbolInfo(id).Symbol is not IFieldSymbol field || on.Contains(field.Name)) continue;
+            if (field.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() is not VariableDeclaratorSyntax { Initializer.Value: var init }) continue;
+            var fieldModel = model.Compilation.GetSemanticModel(init.SyntaxTree, true);
+            var initializer = init switch
+            {
+                ObjectCreationExpressionSyntax oc => oc.Initializer,
+                ImplicitObjectCreationExpressionSyntax ioc => ioc.Initializer,
+                _ => null,
+            };
+            if (initializer == null) continue;
+            var before = cases.Count;
+            foreach (var e in initializer.Expressions)
+            {
+                var (k, v) = e switch
+                {
+                    InitializerExpressionSyntax { Expressions.Count: 2 } pair => (pair.Expressions[0], pair.Expressions[1]),
+                    AssignmentExpressionSyntax { Left: ImplicitElementAccessSyntax ea } a when ea.ArgumentList.Arguments.Count == 1 => (ea.ArgumentList.Arguments[0].Expression, a.Right),
+                    _ => (null, null),
+                };
+                if (k == null || v == null) continue;
+                var hit = v.DescendantNodesAndSelf().FirstOrDefault(n => n is ObjectCreationExpressionSyntax or TypeOfExpressionSyntax);
+                if (hit == null) continue;
+                var type = hit is TypeOfExpressionSyntax to ? fieldModel.GetTypeInfo(to.Type).Type : fieldModel.GetTypeInfo(hit).Type;
+                if (type is not INamedTypeSymbol nt || !Syntax.TypeChain(nt).Skip(1).Any(b => Syntax.Matches(b, cfg.FormBaseTypes))) continue;
+                cases.Add(new FactoryCase(Key(k), Syntax.FullName(nt), null, Syntax.LocOf(hit, baseDir)));
+            }
+            if (cases.Count > before) on.Add(field.Name);
+        }
+
+        // whatever form the method still constructs outside the keyed shapes is what an unmatched key gets
+        if (cases.Count > 0 && cases.All(c => c.Key != "default")) Add("default", body);
+        if (cases.Count == 0) return null;
+        return new FactoryInfo(Syntax.MethodId(sym), string.Join(", ", on.Distinct()), cases, Syntax.LocOf(method, baseDir));
+    }
+
+    /// <summary>key == "X", "X" == key, key.Equals("X"), string.Equals(key, "X"[, comparison]).</summary>
+    private static (string On, string Key)? Compared(ExpressionSyntax cond)
+    {
+        static bool Lit(ExpressionSyntax e) => e is LiteralExpressionSyntax l && l.IsKind(SyntaxKind.StringLiteralExpression);
+        switch (cond)
+        {
+            case BinaryExpressionSyntax b when b.IsKind(SyntaxKind.EqualsExpression):
+                if (Lit(b.Right)) return (Syntax.Text(b.Left), ((LiteralExpressionSyntax)b.Right).Token.ValueText);
+                if (Lit(b.Left)) return (Syntax.Text(b.Right), ((LiteralExpressionSyntax)b.Left).Token.ValueText);
+                return null;
+            case InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax { Name.Identifier.Text: "Equals" } ma } inv:
+                var args = inv.ArgumentList.Arguments.Select(a => a.Expression).ToList();
+                if (args.Count >= 1 && Lit(args[0]) && ma.Expression is not PredefinedTypeSyntax && Syntax.Text(ma.Expression) != "String")
+                    return (Syntax.Text(ma.Expression), ((LiteralExpressionSyntax)args[0]).Token.ValueText);
+                if (args.Count >= 2 && Lit(args[1])) return (Syntax.Text(args[0]), ((LiteralExpressionSyntax)args[1]).Token.ValueText);
+                if (args.Count >= 2 && Lit(args[0])) return (Syntax.Text(args[1]), ((LiteralExpressionSyntax)args[0]).Token.ValueText);
+                return null;
+            default:
+                return null;
+        }
+    }
+}
