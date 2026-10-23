@@ -254,6 +254,7 @@ public sealed class IssueTests
                 ("Bash", new { command = "echo cd .. && cat ../README.md" }, Path.Combine(work, "legacy")),                     // cd as an argument moves nothing
                 ("Bash", new { command = "(cd legacy/M && ls fixtures); cat legacy/M/spec/X.md" }, work),                        // a subshell's cd ends with it
                 ("Bash", new { command = "bash -c \"cd legacy/M && ls fixtures\" && cat legacy/M/spec/X.md" }, work),           // so does a nested shell's
+                ("Bash", new { command = "bash --norc -o pipefail -c \"cd legacy/M && ls fixtures\"" }, work),                  // option words before -c
                 ("Glob", new { pattern = "**/*.{ts,tsx}" }, work),                                                               // brace alternatives that cannot be ..
             };
             // calls it must refuse
@@ -328,7 +329,13 @@ public sealed class IssueTests
                 ("PowerShell", new { command = "if ($true) { cd .. }; " + PsUp }, below, "outside"),                            // PowerShell blocks
                 ("PowerShell", new { command = "foreach ($x in 1) { Set-Location .. }; " + PsUp }, below, "outside"),
                 ("PowerShell", new { command = "1 | ForEach-Object { cd .. }; " + PsUp }, below, "outside"),
+                ("Bash", new { command = "bash --norc -c \"cd $HOME && cat Legacy/AcmeAdmin/Forms/X.cs\"" }, below, "directory"),  // long options before -c
+                ("Bash", new { command = "bash --login -c \"cd; cat Legacy/AcmeAdmin/Forms/X.cs\"" }, below, "directory"),
+                ("Bash", new { command = "bash -o pipefail -c \"cd $HOME && cat Legacy/AcmeAdmin/Forms/X.cs\"" }, below, "directory"),
                 ("Bash", new { command = "sudo cd .. && ls" }, below, "first word"),                                             // a cd the guard cannot follow
+                ("Bash", new { command = "sudo cd $HOME && ls" }, below, "first word"),
+                ("Bash", new { command = "sudo cd && ls" }, below, "first word"),
+                ("Bash", new { command = "xargs cd %USERPROFILE%" }, below, "first word"),
             }).ToArray();
             var denials = 0;
             foreach (var phase in new[] { "specify", "implement" })
@@ -399,6 +406,23 @@ public sealed class IssueTests
             Assert.Equal(0, GuardHookTests.Run(next, HookCall("Bash", new { command = "ls" }, next), hideJq: false).Code);
             Assert.Equal(0, GuardHookTests.Run(next, HookCall("Read", new { file_path = "legacy/M/manifests/X.md" }, next), hideJq: false).Code);
             Assert.Equal(2, GuardHookTests.Run(next, HookCall("Read", new { file_path = "../AcmeAdmin/Forms/X.cs" }, next), hideJq: false).Code);
+
+            // a legacy root inside the repo: a bare directory name reaches it as surely as a path
+            var inner = Path.Combine(baseDir, "inner");
+            Directory.CreateDirectory(Path.Combine(inner, "legacy", "hooks"));
+            Directory.CreateDirectory(Path.Combine(inner, "LegacyApp"));
+            File.Copy(Path.Combine(_f.RepoRoot, "adopt", "hooks", "guard-legacy.sh"), Path.Combine(inner, "legacy", "hooks", "guard-legacy.sh"));
+            File.WriteAllText(Path.Combine(inner, "legacy", "extract.config.json"), "{\n  \"project\": \"../LegacyApp/LegacyApp.csproj\"\n}\n");
+            File.WriteAllText(Path.Combine(inner, "legacy", ".phase"), "specify\n");
+            foreach (var c in new[] { "grep -r Foo LegacyApp", "ls LegacyApp", "cp -r LegacyApp out" })
+            {
+                var r = GuardHookTests.Run(inner, HookCall("Bash", new { command = c }, inner), hideJq: false);
+                Assert.True(r.Code == 2, $"{c} should be refused"); Assert.Contains("legacy source root", r.Err);
+            }
+            Assert.Equal(2, GuardHookTests.Run(inner, HookCall("mcp__fs__list_directory", new { path = "LegacyApp" }, inner), hideJq: false).Code);
+            foreach (var c in new[] { "ls", "grep -r Foo src", "cat legacy/M/spec/X.md" })
+                Assert.Equal(0, GuardHookTests.Run(inner, HookCall("Bash", new { command = c }, inner), hideJq: false).Code);
+            Assert.Equal(0, GuardHookTests.Run(inner, HookCall("mcp__docs__search_docs", new { query = "Foo" }, inner), hideJq: false).Code);
 
             // without jq nothing in a restricted phase can be parsed: refused, with the reason
             var nojq = Path.Combine(work, "nojq"); Directory.CreateDirectory(nojq);

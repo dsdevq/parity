@@ -9,9 +9,10 @@
 #     a cd is followed when it is the first word of a command (after ; | & ( ) { } or a newline outside quotes, a
 #     reserved word such as then or do, or a wrapper such as command or VAR=x); the quoted argument of sh -c,
 #     bash -c, powershell -command or eval is a command of its own, as is a ( ) subshell, so its cd does not
-#     outlive it; any other cd word before a path refuses the call
+#     outlive it; any other cd word before a path, a variable or nothing refuses the call
 #   mcp__* tools: refused when the name matches the code-index deny-list below or "guard.denyTools"; every string
 #     value in the input that contains / or \, or is . .. or ~, must be an allowed path
+#   a word without a separator (a shell token or an MCP value) is refused when it resolves into the legacy root
 #   any other tool, or any input that cannot be decided: refused (fail closed)
 # After those checks the legacy root is still looked for as a whole path anywhere in the input (second net).
 # The hook works from CLAUDE_PROJECT_DIR (else its cwd), so a session cwd below the repo root cannot hide the phase.
@@ -246,7 +247,7 @@ case $tool in
           if (nest) v = c
           else {
             w = c; t = substr(o, length(o) - 80)
-            if (t ~ /(^|[ ;(\/])(sh|bash|zsh|dash|ksh|powershell|pwsh)(\.exe)? +(-[a-z]+ +)*-[a-z]*c(ommand)? *$/ || t ~ /(^|[ ;(])eval *$/) { nest = 1; c = " ( " }
+            if (t ~ /(^|[ ;(\/])(sh|bash|zsh|dash|ksh|powershell|pwsh)(\.exe)?( +(-[-a-z]*|[-+][a-z]*o +[a-z_]+))* +-[a-z]*c(ommand)? *$/ || t ~ /(^|[ ;(])eval *$/) { nest = 1; c = " ( " }
           }
         }
         else if (c ~ /[;|&{}]/ || (ps && c ~ /[()]/)) c = " ; "
@@ -277,8 +278,13 @@ $stack"; at=1; continue ;;
       case $w$t in
         0cd|0chdir|0pushd|0set-location|0sl|0push-location)
           case $cw in echo|git|printf) ;; *)
-            [ $# -gt 0 ] && clean "$1" && case $C in
-              */*|*\\*|.|..|~*|-) deny "the directory change '$t $C' is not the first word of a command, so the guard cannot follow it and later relative paths may be outside the allowed roots" ;;
+            tgt=
+            for a in "$@"; do
+              case $a in \;|\(|\)) break ;; -|-*:*|-[a-z]*[./\\]*) tgt=$a; break ;; -*) ;; *) tgt=$a; break ;; esac
+            done
+            [ -n "$tgt" ] && clean "$tgt" && tgt=$C
+            case $tgt in
+              ''|-*|*/*|*\\*|.|..|~*|*'$'*|*%*%*) deny "the directory change '$t${tgt:+ $tgt}' is not the first word of a command, so the guard cannot follow it and later relative paths may be outside the allowed roots" ;;
             esac ;;
           esac
           ;;
@@ -315,7 +321,7 @@ $stack"; at=1; continue ;;
         ~*) deny "the path '$t' (the home directory) is outside the allowed roots" ;;
         *'$'*/*|*%*%*/*|*/*'$'*|*/*%*%*) deny "the path '$t' cannot be resolved (shell expansion), so it may be outside the allowed roots" ;;
         */*|.|..|[a-z]:) ;;
-        *) continue ;;
+        *) case $legacy in "$cwd"/*) ;; *) continue ;; esac ;;
       esac
       t=$(printf '%s' "$t" | sed 's#[^/]*[*?[].*##')
       [ -n "$t" ] || continue
@@ -335,13 +341,14 @@ $deny_extra"
       # shellcheck disable=SC2254
       case $name in $pat) deny "'$tool' is a code-index tool (matches '$pat'; guard.denyTools in $cfg extends the list) and could read the legacy source" ;; esac
     done
-    vals=$(jget '.tool_input | .. | strings | select(test("[/\\\\]") or test("^(\\.\\.?|~)$")) | gsub("[\r\n]+"; " ")')
+    vals=$(jget '.tool_input | .. | strings | gsub("[\r\n]+"; " ")')
     _ifs=$IFS; IFS='
 '
     set -- $vals
     IFS=$_ifs
     for v in "$@"; do
       case $v in \~|\~/*|\~\\*) deny "the path '$v' (the home directory) is outside the allowed roots" ;; esac
+      case $v in */*|*\\*|.|..) ;; *) norm "$v" "$cwd"; case $N in "$legacy"|"$legacy"/*) ;; *) continue ;; esac ;; esac
       need_allowed "$v" "$cwd" "the path"
     done
     ;;
