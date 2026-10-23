@@ -38,6 +38,7 @@ from the manifest, which the agent cannot shrink.
 | `manifests/<Form>.prev.json` | a re-extract that changed the manifest | the previous manifest, one generation, so `parity diff` and `parity rebind` need no git |
 | `module.json` | same run | forms, every service call id, exact and near duplicate handlers across forms |
 | `evidence/<Form>.json` | `parity evidence add` | quoted legacy lines the manifest lacks (a model class, a config value), each an `ev:` id with its file, range, quote hash and source revision |
+| `fixtures/<name>.json` | your recorder; `parity fixture scaffold` for synthetic variants | one service reply each: `recorded` on a date, or `synthetic` with the outcome `variant` it stands for, labelled so lint can tell them apart |
 | `spec/<Form>.md` | you + agent | field inventory, rules with citations, no-behavior list, service calls with fixtures, open questions |
 | lint findings | `parity lint` | `file:line CODE message`, exit 1 on errors |
 | manifest diff | `parity diff <old.json> <new.json>` | controls, events, bindings, validation rules, handlers, methods, service calls, dynamic UI, raw and diagnostics added / removed / changed by id, exit 1 when they differ |
@@ -114,7 +115,10 @@ Then delete a rule and run it again to see what the gate says.
    `parity evidence add <Form> <file>:<start>-<end> --note <text>` prints an `ev:<Form>/<n>` the rule
    cites beside its handler (`docs/spec.md`, Evidence).
 6. **Gate**: `parity lint spec/<Form>.md --gate`. Every control, event, handler and service call is
-   accounted for or the gate is red. `--implement <dir>` additionally wants every rule id in the
+   accounted for or the gate is red. A reply the host cannot be made to return (invalid, blank) is a
+   synthetic fixture: `parity fixture scaffold <svc-id> --from fixtures/<recorded>.json --variant invalid`
+   writes a labelled copy to edit, and the gate stays red until it carries `shapeVerified: true` and a
+   note (`docs/spec.md`, Fixtures). `--implement <dir>` additionally wants every rule id in the
    title of an active test (`it`, `test`, `describe`, `[Fact]`); `it.todo`, `.skip`, comments and
    constants do not count (`COV-TODO` says where). See `docs/lint.md`.
 7. **Re-extract** after a tool upgrade, a config fix or a legacy change. Specs on a changed manifest
@@ -222,7 +226,7 @@ manifests and specs are meant to be committed and reviewed.
 
 - `legacy/<Module>/module.json` lists every `svc:` id. Record at least one real call per id with your
   own runner into `legacy/<Module>/fixtures/<name>.json`, shape per `templates/fixture.json`, the
-  `service` field set to the id.
+  `service` field set to the id and `recorded` to the capture date (`synthetic` only for a variant, see Gate).
 - Check: `ls legacy/<Module>/fixtures` has a file for every id.
 - While `.phase` is still `extract`, quote any legacy fact a rule will need that the manifest lacks:
   `parity evidence add <Form> <file>:<start>-<end> --note <text>` (file relative to the legacy root)

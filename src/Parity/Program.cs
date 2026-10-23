@@ -15,13 +15,15 @@ parity - reverse-engineer a legacy WinForms module into a citable manifest and g
   parity lint     <spec.md> [--gate] [--implement <dir>]
   parity evidence add <Unit> <file>:<start>-<end> [--note <text>] [--config <extract.config.json>] [--module <Name>]
                                                        record legacy lines the manifest lacks as ev:<Unit>/<n>; refused in specify and implement
+  parity fixture scaffold <svc-id> --from <recorded.json> --variant <name> [--out <dir>]
+                                                       write <from>.<variant>.json, a synthetic copy of a recorded reply to edit
   parity probe    <project.csproj> [--forms <glob>]    anonymized statement shapes; paste into an issue
   parity report   <manifest.json>                      anonymized raw/diagnostics/unresolved; review, then paste into an issue
   parity hash     <manifest.json>
   parity diff     <old.json> <new.json>                entries added, removed and changed, by id per section
   parity rebind   <spec.md> [--prev <old.json>]        move a STALE spec to the new manifest when nothing it cites changed
 
-Exit codes: 0 ok, 1 lint errors / manifests differ / rebind left a work list, 2 usage, 3 failure (a refused rebind too).
+Exit codes: 0 ok, 1 lint errors / manifests differ / rebind left a work list, 2 usage, 3 failure (a refused rebind or fixture scaffold too).
 """;
 
 try
@@ -68,11 +70,10 @@ try
         case "lint":
         {
             var path = Positional(opts, 0) ?? throw new ArgumentException("spec.md path required");
-            var findings = SpecLinter.Lint(path, opts.ContainsKey("gate"), Opt(opts, "implement"));
+            var findings = SpecLinter.Lint(path, opts.ContainsKey("gate"), Opt(opts, "implement"), out var fixtures);
             foreach (var x in findings) Console.WriteLine(x.Severity == "warning" ? $"{x} [warning]" : x.ToString());
-            var errors = findings.Count(x => x.Severity == "error");
-            Console.Error.WriteLine($"{errors} error(s), {findings.Count - errors} warning(s)");
-            return errors > 0 ? 1 : 0;
+            Console.Error.WriteLine(SpecLinter.Summary(findings, fixtures));
+            return findings.Any(x => x.Severity == "error") ? 1 : 0;
         }
         case "evidence":
         {
@@ -82,6 +83,16 @@ try
             var cfgPath = Opt(opts, "config") ?? (File.Exists("legacy/extract.config.json") ? "legacy/extract.config.json" : "extract.config.json");
             var rec = Evidence.AddFromConfig(ExtractConfig.Load(cfgPath), Opt(opts, "module"), unit, loc, Opt(opts, "note"));
             Console.WriteLine($"{rec.Id}\t{rec.File}:{rec.Start}-{rec.End}\t{rec.QuoteHash}\t{rec.Revision}");
+            return 0;
+        }
+        case "fixture":
+        {
+            if (Positional(opts, 0) != "scaffold") throw new ArgumentException("fixture: the subcommand is scaffold");
+            var svc = Positional(opts, 1) ?? throw new ArgumentException("fixture scaffold needs <svc-id>");
+            var from = Opt(opts, "from") ?? throw new ArgumentException("fixture scaffold needs --from <recorded.json>");
+            var variant = Opt(opts, "variant") ?? throw new ArgumentException("fixture scaffold needs --variant <name>");
+            Console.WriteLine(FixtureScaffold.Run(svc, from, variant, Opt(opts, "out")));
+            Console.Error.WriteLine($"edit request and response into the {variant} reply, check the shape against a real one, then set shapeVerified: true and write the note");
             return 0;
         }
         case "probe":

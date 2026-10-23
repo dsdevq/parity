@@ -286,6 +286,133 @@ public sealed class IssueTests
         finally { File.Delete(spec); File.Delete(phase); if (Directory.Exists(Path.GetDirectoryName(evFile))) Directory.Delete(Path.GetDirectoryName(evFile)!, true); }
     }
 
+    [Fact]
+    public void issue_24_a_rule_covered_only_by_synthetic_fixtures_is_warned_an_unverified_synthetic_fixture_is_an_error_and_scaffold_labels_its_output()
+    {
+        // input: the example spec, whose svc:IPolicyService.GetPremiumLimits has one recorded reply (limits-term-life, used by
+        // R-001 and R-003). The host cannot be made to return the other outcomes, so they are synthetic replies.
+        const string Svc = "svc:IPolicyService.GetPremiumLimits";
+        var fx = Path.Combine(_f.ModuleDir, "fixtures");
+        var handmade = Path.Combine(fx, "limits-handmade.json");
+        var recorded = Path.Combine(fx, "limits-term-life.json");
+        var scaffolded = Path.Combine(fx, "limits-term-life.invalid.json");
+        var outDir = Path.Combine(_f.OutRoot, "fixtures-24");
+        void Handmade(string fields) => File.WriteAllText(handmade, $"{{ \"service\": \"{Svc}\", {fields}, \"request\": {{ \"productId\": 101 }}, \"response\": {{ \"min\": 0, \"max\": 0 }} }}");
+        List<Finding> Gate(string path, out FixtureTally? tally) => SpecLinter.Lint(path, gate: true, implementDir: null, out tally);
+        List<Finding> Errors(List<Finding> f) => f.Where(x => x.Severity == "error").ToList();
+        try
+        {
+            // a hand-made synthetic reply is the only fixture of the service: today's lint accepted it silently.
+            // R-001 lists only it and is warned; R-003 lists it beside the recorded riders-term-life, so it is not
+            var only = _f.InstallExampleSpec("PolicyWizardStep3", s => s.Replace("limits-term-life", "limits-handmade"));
+            Handmade("\"recorded\": \"synthetic\", \"note\": \"hand-made: a product with no limits\"");
+            var f = Gate(only, out var tally);
+            Assert.DoesNotContain(f, x => x.Code is "COV-SERVICE" or "FIXTURE-MISSING" or "FIXTURE-INVALID");
+            var unverified = Assert.Single(Errors(f));
+            Assert.Equal("FIXTURE-SYNTHETIC", unverified.Code);
+            Assert.Equal($"limits-handmade.json is synthetic but lacks shapeVerified: true; check its shape against a real reply of {Svc} and say in the note what it stands for", unverified.Message);
+            var warned = Assert.Single(f, x => x.Code == "FIXTURE-SYNTHETIC" && x.Severity == "warning");
+            Assert.Equal("R-PolicyWizardStep3-001: every fixture it runs on is synthetic (limits-handmade); a test built on them must say it runs on synthetic replies", warned.Message);
+            Assert.Equal(new FixtureTally(4, 1), tally);
+            Assert.Equal($"1 error(s), {f.Count - 1} warning(s), fixtures: 4 (1 synthetic)", SpecLinter.Summary(f, tally));
+            Assert.DoesNotContain(SpecLinter.Lint(only, gate: false, implementDir: null, out var draftTally), x => x.Code.StartsWith("FIXTURE", StringComparison.Ordinal));
+            Assert.Equal(tally, draftTally);                                             // counted without --gate too
+
+            // verified and explained, it passes the gate, still warned: a test on it must say so
+            Handmade("\"recorded\": \"synthetic\", \"shapeVerified\": true, \"note\": \"hand-made: a product with no limits\"");
+            f = Gate(only, out _);
+            Assert.Empty(Errors(f));
+            Assert.Single(f, x => x.Code == "FIXTURE-SYNTHETIC");
+            Handmade("\"recorded\": \"synthetic\", \"shapeVerified\": true, \"note\": \" \"");
+            Assert.Contains("lacks a note;", Assert.Single(Errors(Gate(only, out _))).Message);
+            Handmade("\"recorded\": \"synthetic\", \"shapeVerified\": \"yes\", \"note\": \"hand-made\"");
+            Assert.Equal(new[] { "FIXTURE-INVALID", "FIXTURE-SYNTHETIC" }, Errors(Gate(only, out _)).Select(x => x.Code).OrderBy(x => x, StringComparer.Ordinal));
+
+            // recorded is a date or synthetic, nothing else
+            foreach (var bad in new[] { "last week", "2026-13-01" })
+            {
+                Handmade($"\"recorded\": \"{bad}\"");
+                var invalid = Assert.Single(Errors(Gate(only, out _)));
+                Assert.Equal(("FIXTURE-INVALID", $"limits-handmade.json 'recorded' is '{bad}', neither a YYYY-MM-DD date nor synthetic"), (invalid.Code, invalid.Message));
+            }
+
+            // one recorded reply beside the synthetic one: no warning
+            Handmade("\"recorded\": \"synthetic\", \"shapeVerified\": true, \"note\": \"hand-made: a product with no limits\"");
+            var mixed = _f.InstallExampleSpec("PolicyWizardStep3", s => s.Replace("| limits-term-life |", "| limits-term-life, limits-handmade |"));
+            f = Gate(mixed, out tally);
+            Assert.DoesNotContain(f, x => x.Code == "FIXTURE-SYNTHETIC");
+            Assert.Equal(new FixtureTally(5, 1), tally);
+
+            // the issue's core case: a rule naming only the synthetic reply is warned although its service row carries the recorded one;
+            // naming both, it is not
+            var ownOnly = _f.InstallExampleSpec("PolicyWizardStep3", s => s.Replace("- fixtures: limits-term-life\n", "- fixtures: limits-handmade\n"));
+            f = Gate(ownOnly, out tally);
+            Assert.Empty(Errors(f));
+            Assert.Equal("R-PolicyWizardStep3-001: every fixture it runs on is synthetic (limits-handmade); a test built on them must say it runs on synthetic replies",
+                Assert.Single(f, x => x.Code == "FIXTURE-SYNTHETIC").Message);
+            Assert.Equal(new FixtureTally(5, 1), tally);
+            var ownBoth = _f.InstallExampleSpec("PolicyWizardStep3", s => s.Replace("- fixtures: limits-term-life\n", "- fixtures: limits-term-life, limits-handmade\n"));
+            Assert.DoesNotContain(Gate(ownBoth, out _), x => x.Code == "FIXTURE-SYNTHETIC");
+
+            // a rule that declares its outcomes needs a fixture variant per outcome, or a stated gap
+            const string Outcomes = "- fixtures: limits-term-life\n- outcomes: valid, invalid, blank\n";
+            var declared = _f.InstallExampleSpec("PolicyWizardStep3", s => s.Replace("- fixtures: limits-term-life\n", Outcomes));
+            var gaps = Errors(Gate(declared, out _));
+            Assert.All(gaps, x => Assert.Equal("FIXTURE-OUTCOME", x.Code));
+            Assert.Equal(new[] { "blank", "invalid", "valid" }.Select(o => $"R-PolicyWizardStep3-001: outcome '{o}' has no listed fixture with variant '{o}' and no 'outcome-gap: {o} - <reason>'"), gaps.Select(x => x.Message));
+
+            // scaffold the invalid reply from the recorded one: labelled, unverified, the request and response copied to edit
+            Assert.Equal(scaffolded, FixtureScaffold.Run(Svc, recorded, "invalid", null));
+            var copy = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(scaffolded))!.AsObject();
+            Assert.Equal(new[] { "service", "recorded", "variant", "source", "shapeVerified", "note", "request", "response" }, copy.Select(p => p.Key));
+            Assert.Equal((Svc, "synthetic", "invalid", "scaffolded from limits-term-life.json by parity fixture scaffold", false, ""),
+                ((string)copy["service"]!, (string)copy["recorded"]!, (string)copy["variant"]!, (string)copy["source"]!, (bool)copy["shapeVerified"]!, (string)copy["note"]!));
+            var original = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(recorded))!;
+            Assert.True(System.Text.Json.Nodes.JsonNode.DeepEquals(original["request"], copy["request"]) && System.Text.Json.Nodes.JsonNode.DeepEquals(original["response"], copy["response"]));
+
+            // listed on the rule, the unverified copy is a gate error; the recorded reply is the valid variant and blank is a stated gap
+            var varied = _f.InstallExampleSpec("PolicyWizardStep3", s => s.Replace("- fixtures: limits-term-life\n",
+                "- fixtures: limits-term-life, limits-term-life.invalid\n- outcomes: valid, invalid, blank\n- outcome-gap: blank - the host fills limits for every product, so no blank reply exists\n"));
+            Assert.Equal(new[] { "FIXTURE-OUTCOME" }, Errors(Gate(varied, out _)).Where(x => x.Message.Contains("outcome '")).Select(x => x.Code));
+            File.WriteAllText(recorded, File.ReadAllText(recorded).Replace("\"recorded\": \"2026-10-22\",", "\"recorded\": \"2026-10-22\", \"variant\": \"valid\","));
+            f = Gate(varied, out tally);
+            var unedited = Assert.Single(Errors(f));
+            Assert.Equal(("FIXTURE-SYNTHETIC", $"limits-term-life.invalid.json is synthetic but lacks shapeVerified: true and a note; check its shape against a real reply of {Svc} and say in the note what it stands for"), (unedited.Code, unedited.Message));
+            Assert.DoesNotContain(f, x => x.Code == "FIXTURE-SYNTHETIC" && x.Severity == "warning");   // R-001 also has the recorded reply
+            Assert.Equal(new FixtureTally(5, 1), tally);
+            copy["shapeVerified"] = true;
+            copy["note"] = "max below min: the reply a misconfigured product returns";
+            File.WriteAllText(scaffolded, copy.ToJsonString());
+            Assert.Empty(Errors(Gate(varied, out _)));
+
+            // an outcome is judged by the rule's own fixtures: a variant only on its service row does not count
+            var rowVariant = _f.InstallExampleSpec("PolicyWizardStep3", s => s.Replace("- fixtures: limits-term-life\n", "- fixtures: limits-term-life\n- outcomes: valid, invalid\n")
+                .Replace("| limits-term-life |", "| limits-term-life, limits-term-life.invalid |"));
+            File.WriteAllText(recorded, File.ReadAllText(recorded).Replace("\"recorded\": \"2026-10-22\",", "\"recorded\": \"2026-10-22\", \"variant\": \"valid\","));   // installing the spec restored the example's copy
+            Assert.Equal(new[] { "R-PolicyWizardStep3-001: outcome 'invalid' has no listed fixture with variant 'invalid' and no 'outcome-gap: invalid - <reason>'" },
+                Errors(Gate(rowVariant, out _)).Select(x => x.Message));
+
+            // outcome-gap is checked like the rest of the grammar
+            var badGap = _f.InstallExampleSpec("PolicyWizardStep3", s => s.Replace("- fixtures: limits-term-life\n", Outcomes + "- outcome-gap: error - no such outcome declared\n- outcome-gap: blank\n"));
+            Assert.Equal(new[] { "R-PolicyWizardStep3-001: outcome-gap names 'error', which is not in outcomes", "R-PolicyWizardStep3-001: outcome-gap must be '<outcome> - <reason>'" },
+                SpecLinter.Lint(badGap, gate: false, implementDir: null).Where(x => x.Code == "GRAMMAR").Select(x => x.Message));
+
+            // scaffold refuses a synthetic source, a different service and an existing target; --out puts the copy elsewhere
+            Assert.Contains("is itself synthetic", Assert.Throws<InvalidOperationException>(() => FixtureScaffold.Run(Svc, scaffolded, "blank", null)).Message);
+            Assert.Equal($"limits-term-life.json records {Svc}, not svc:IPolicyService.GetProducts", Assert.Throws<InvalidOperationException>(() => FixtureScaffold.Run("svc:IPolicyService.GetProducts", recorded, "blank", null)).Message);
+            Assert.EndsWith("exists; scaffold never overwrites a fixture", Assert.Throws<InvalidOperationException>(() => FixtureScaffold.Run(Svc, recorded, "invalid", null)).Message);
+            Assert.Throws<ArgumentException>(() => FixtureScaffold.Run(Svc, recorded, "../blank", null));
+            Assert.Equal(Path.Combine(outDir, "limits-term-life.blank.json"), FixtureScaffold.Run(Svc, recorded, "blank", outDir));
+            Assert.False(File.Exists(Path.Combine(fx, "limits-term-life.blank.json")));
+        }
+        finally
+        {
+            File.Delete(handmade); File.Delete(scaffolded);
+            if (Directory.Exists(outDir)) Directory.Delete(outDir, true);
+            File.Copy(Path.Combine(_f.RepoRoot, "examples", "PolicyWizard", "fixtures", "limits-term-life.json"), recorded, overwrite: true);
+        }
+    }
+
     private static bool Git(string dir, string args)
     {
         try

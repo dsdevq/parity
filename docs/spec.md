@@ -58,8 +58,15 @@ category input, action, grid, column, display or unknown, per container that has
 - when: ...
 - then: ...                         must name a control (ctrl:/dyn: id or control name), a svc: or a form:
 - fixtures: name, name              optional; each must exist as fixtures/<name>.json
+- outcomes: valid, invalid, blank   optional; the outcome names are yours
+- outcome-gap: blank - <reason>     optional, one line per outcome that has no fixture
 - quirk: preserve|diverge - ..., decided-by <name> <YYYY-MM-DD>   optional
 ```
+
+A rule that distinguishes outcomes of a service reply declares them in `outcomes`; lint never infers
+them from the prose. Each declared outcome needs a fixture the rule uses whose `variant` is that
+outcome, or an `outcome-gap` line saying why there is none (`FIXTURE-OUTCOME` otherwise). `outcome-gap` is the one key a rule may
+repeat, and it must name a declared outcome.
 
 Ids containing commas (method parameter lists) are split on top-level commas only.
 Hedging words anywhere in given/when/then are errors: probably, likely, assume(d), should, seem(s),
@@ -129,11 +136,36 @@ rules; the old id stays in the file until no spec cites it.
 
 ## Fixtures
 
-`fixtures/<name>.json`:
+`fixtures/<name>.json`, one reply of one service (`templates/fixture.json` is the blank):
 
 ```json
-{ "service": "svc:IService.Method", "recorded": "YYYY-MM-DD", "request": {}, "response": {} }
+{ "service": "svc:IService.Method", "recorded": "YYYY-MM-DD | synthetic",
+  "variant": "invalid", "scenario": "...", "source": "...", "shapeVerified": true, "note": "...",
+  "request": {}, "response": {} }
 ```
 
-How they are recorded is the adopter's business (a headless runner against the old API); the lint only
-checks presence and the service id.
+- `service` and `recorded` are required. `recorded` is the date the reply was captured from the host,
+  or `synthetic` for a reply written by hand because the host cannot be made to return it. Anything
+  else is `FIXTURE-INVALID`. A recorded fixture needs nothing more.
+- `variant` names the outcome the reply stands for (the names in a rule's `outcomes`).
+- `scenario` is a free id for the business scenario the reply belongs to.
+- `source` says where it came from: the host, environment or tool run, or `scaffolded from <file>`.
+- A synthetic fixture needs `shapeVerified: true` (its shape was checked against a real reply) and a
+  `note` saying what it stands for; without both it is a gate error (`FIXTURE-SYNTHETIC`).
+
+The fixtures a rule uses: a rule that lists `fixtures:` is judged by them alone; otherwise by its
+services' rows (the Service calls rows that name it in `called from`, and those of a `svc:` in `then`).
+A rule whose every such fixture is synthetic passes the gate with a `FIXTURE-SYNTHETIC` warning: a
+test built on those fixtures must say it runs on synthetic replies. The lint summary counts the fixtures the spec lists, `fixtures: N (M synthetic)`.
+
+How replies are recorded is the adopter's business (a headless runner against the old API). A synthetic
+variant starts from a recorded one:
+
+```
+parity fixture scaffold svc:IService.Method --from fixtures/<name>.json --variant invalid [--out <dir>]
+```
+
+writes `fixtures/<name>.invalid.json` (or into `--out`): the same service, `recorded: synthetic`, the
+variant, `source: scaffolded from <name>.json by parity fixture scaffold`, `shapeVerified: false`, an
+empty note, and the request and response copied for you to edit into the invalid reply. It refuses
+when `--from` is itself synthetic, records another service, or the target exists.
