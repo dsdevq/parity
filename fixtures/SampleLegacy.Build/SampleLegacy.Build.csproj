@@ -13,6 +13,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../SampleLegacy/**/*.cs" />
+    <Compile Include="../SampleLegacy.Thistle/**/*.cs" />
     <ProjectReference Include="../WinFormsStubs/WinFormsStubs.csproj" />
   </ItemGroup>
 </Project>

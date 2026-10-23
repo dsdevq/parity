@@ -25,6 +25,9 @@ public static partial class SpecLinter
     [GeneratedRegex(@"\b\d{4}-\d{2}-\d{2}\b")] private static partial Regex DateRx();
     [GeneratedRegex(@"^closed by evidence\b")] private static partial Regex ClosedByEvidence();
     [GeneratedRegex(@"\bev:[A-Za-z_]\w*/\d+")] private static partial Regex EvIdRx();
+    [GeneratedRegex(@"\bsvc:[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*")] private static partial Regex SvcIdRx();
+    [GeneratedRegex(@"\bR-\w+-\d+\b")] private static partial Regex RuleIdRx();
+    [GeneratedRegex(@"^(\S+)\s+-\s+(\S.*)$")] private static partial Regex OutcomeGapRx();
 
     /// <summary>
     /// What a debt line must contain to acknowledge a diagnostic: the code plus the message's subject
@@ -37,8 +40,19 @@ public static partial class SpecLinter
         return m.Success ? code + ": " + m.Groups[1].Value : code + ": " + message;
     }
 
-    public static List<Finding> Lint(string specPath, bool gate, string? implementDir)
+    public static List<Finding> Lint(string specPath, bool gate, string? implementDir) => Lint(specPath, gate, implementDir, out _);
+
+    /// <summary>The line printed after the findings: error and warning counts, then the fixture tally when lint got that far.</summary>
+    public static string Summary(IReadOnlyCollection<Finding> findings, FixtureTally? fixtures)
     {
+        var errors = findings.Count(x => x.Severity == "error");
+        return $"{errors} error(s), {findings.Count - errors} warning(s)" + (fixtures == null ? "" : $", {fixtures}");
+    }
+
+    /// <param name="fixtures">the fixtures the spec lists that exist, and how many of them are synthetic; null when lint stopped before reading the spec.</param>
+    public static List<Finding> Lint(string specPath, bool gate, string? implementDir, out FixtureTally? fixtures)
+    {
+        fixtures = null;
         var file = Path.GetRelativePath(Environment.CurrentDirectory, specPath).Replace('\\', '/');
         var f = new List<Finding>();
         void E(int line, string code, string msg) => f.Add(new Finding(file, line, code, "error", msg));
@@ -66,7 +80,16 @@ public static partial class SpecLinter
         var handlerIds = m.Handlers.Select(h => h.Id).ToHashSet(StringComparer.Ordinal);
         var methodIds = m.Methods.Select(x => x.Id).ToHashSet(StringComparer.Ordinal);
         var svcIds = m.ServiceCalls.Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
-        var allIds = controlIds.Concat(dynIds).Concat(eventIds).Concat(handlerIds).Concat(methodIds).Concat(svcIds).ToHashSet(StringComparer.Ordinal);
+        // variants (#20): each delta id belongs to one variant; a rule's scope is base plus every variant unless it says 'variants:'
+        var variants = m.Variants ?? new List<VariantInfo>();
+        var deltaOf = variants.SelectMany(v => v.Delta.Select(d => (v, d))).ToDictionary(x => x.d.Id, x => x, StringComparer.Ordinal);
+        var replacedIn = variants.ToDictionary(v => v.Name, v => v.Delta.Where(d => d.Kind == "override" && d.Detail?.StartsWith("replaces base", StringComparison.Ordinal) == true && d.Target != null)
+            .ToDictionary(d => d.Target!, d => d.Id, StringComparer.Ordinal), StringComparer.Ordinal);
+        var removedIn = variants.ToDictionary(v => v.Name, v => v.Delta.Where(d => d.Kind == "removed" && d.Target != null).ToDictionary(d => d.Target!, d => d.Id, StringComparer.Ordinal), StringComparer.Ordinal);
+        foreach (var x in variants.SelectMany(v => v.Delta).Where(d => d.Kind == "service-added" && d.Target != null)) svcIds.Add(x.Target!);
+        var allIds = controlIds.Concat(dynIds).Concat(eventIds).Concat(handlerIds).Concat(methodIds).Concat(svcIds)
+            .Concat((m.Factories ?? new()).Select(x => x.Id)).ToHashSet(StringComparer.Ordinal);
+        var variantCovered = variants.ToDictionary(v => v.Name, _ => new HashSet<string>(StringComparer.Ordinal), StringComparer.Ordinal);
         // ev: ids live outside the manifest, in evidence/<Unit>.json; each is re-read from the legacy source
         var evidence = new EvidenceSet(moduleDir);
         void Ev(int line, string who, string id) { if (evidence.Check(id) is { } bad) E(line, bad.Code, $"{who}: '{id}' {bad.Message}"); }
@@ -87,14 +110,36 @@ public static partial class SpecLinter
                 if (r.Get(key) is null or "") E(r.Line, "GRAMMAR", $"{r.Id}: missing '- {key}:'");
             if (r.Get("kind") is { } kind && kind.Length > 0 && !RuleKinds.Contains(kind)) E(r.LineOf("kind"), "GRAMMAR", $"{r.Id}: kind '{kind}' is not one of {string.Join("|", RuleKinds)}");
 
+            var scope = new HashSet<string>(StringComparer.Ordinal);
+            if (r.Get("variants") is { } vs)
+            {
+                foreach (var name in SpecParser.SplitIds(vs))
+                {
+                    if (name != "base" && !variantCovered.ContainsKey(name))
+                        E(r.LineOf("variants"), "VAR-UNKNOWN", variants.Count == 0 ? $"{r.Id}: {formName} has no variants; drop 'variants:'" : $"{r.Id}: variant '{name}' is not one of base, {string.Join(", ", variants.Select(v => v.Name))}");
+                    else scope.Add(name);
+                }
+                if (scope.Count == 0) E(r.LineOf("variants"), "GRAMMAR", $"{r.Id}: 'variants:' lists nothing (omit it for base and every variant)");
+            }
+            else { scope.Add("base"); foreach (var v in variants) scope.Add(v.Name); }
+            var inBase = scope.Contains("base");
+
             var covers = SpecParser.SplitIds(r.Get("covers"));
             if (covers.Count == 0 && r.Get("covers") != null) E(r.LineOf("covers"), "ORPHAN-RULE", $"{r.Id} covers nothing");
             foreach (var id in covers)
             {
                 if (id.StartsWith("ev:", StringComparison.Ordinal)) E(r.LineOf("covers"), "CITE-KIND", $"{r.Id}: covers must list evt: (or dyn:) ids, got '{id}'");
+                else if (id.StartsWith("var:", StringComparison.Ordinal)) VarRef(r, "covers", id, scope);
                 else if (!allIds.Contains(id)) E(r.LineOf("covers"), "CITE-UNKNOWN", $"{r.Id}: '{id}' is not in the manifest");
                 else if (!id.StartsWith("evt:", StringComparison.Ordinal) && !id.StartsWith("dyn:", StringComparison.Ordinal)) E(r.LineOf("covers"), "CITE-KIND", $"{r.Id}: covers must list evt: (or dyn:) ids, got '{id}'");
-                else covered.Add(id);
+                else
+                {
+                    if (inBase) covered.Add(id);
+                    var ctl = m.Events.FirstOrDefault(e => e.Id == id)?.Control;
+                    foreach (var v in scope.Where(n => n != "base"))
+                        if (ctl != null && removedIn[v].TryGetValue(ctl, out var rid))
+                            E(r.LineOf("covers"), "VAR-SCOPE", $"{r.Id}: covers {id}, but {v} removes that control ({rid}); scope the rule without {v}");
+                }
             }
             var cites = SpecParser.SplitIds(r.Get("cite"));
             if (cites.Count > 0 && cites.All(id => id.StartsWith("ev:", StringComparison.Ordinal)))
@@ -102,11 +147,18 @@ public static partial class SpecLinter
             foreach (var id in cites)
             {
                 if (id.StartsWith("ev:", StringComparison.Ordinal)) Ev(r.LineOf("cite"), r.Id, id);
+                else if (id.StartsWith("var:", StringComparison.Ordinal)) VarRef(r, "cite", id, scope);
                 else if (!allIds.Contains(id)) E(r.LineOf("cite"), "CITE-UNKNOWN", $"{r.Id}: '{id}' is not in the manifest");
                 else if (!id.StartsWith("handler:", StringComparison.Ordinal) && !id.StartsWith("method:", StringComparison.Ordinal)) E(r.LineOf("cite"), "CITE-KIND", $"{r.Id}: cite must list handler:, method: or ev: ids, got '{id}'");
-                else cited.Add(id);
+                else
+                {
+                    if (inBase) cited.Add(id);
+                    foreach (var v in scope.Where(n => n != "base"))
+                        if (replacedIn[v].TryGetValue(id, out var oid))
+                            E(r.LineOf("cite"), "VAR-SCOPE", $"{r.Id}: cites {id}, which {v} replaces ({oid}); scope the rule without {v} and describe {v} in a rule citing {oid}");
+                }
             }
-            if (r.Get("then") is { } then && then.Length > 0 && !Regex.IsMatch(then, @"\b(ctrl|dyn|svc|form):\S+") && !Regex.IsMatch(then, @"\b[a-z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*\b"))
+            if (r.Get("then") is { } then && then.Length > 0 && !Regex.IsMatch(then, @"\b(ctrl|dyn|svc|form|var):\S+") && !Regex.IsMatch(then, @"\b[a-z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*\b"))
                 E(r.LineOf("then"), "GRAMMAR", $"{r.Id}: 'then' must name an observable outcome: a control (ctrl:/dyn: id or control name), a service (svc:) or a form shown (form:)");
             foreach (var key in new[] { "given", "when", "then" })
                 if (r.Get(key) is { } v && HedgeWords.Any(h => Regex.IsMatch(v, $@"\b{Regex.Escape(h)}\b", RegexOptions.IgnoreCase)))
@@ -117,6 +169,43 @@ public static partial class SpecLinter
                 if (!Decided().IsMatch(q)) E(r.LineOf("quirk"), "DROP-REASON", $"{r.Id}: quirk needs 'decided-by <name> <YYYY-MM-DD>'");
             }
             foreach (var fx in SpecParser.SplitIds(r.Get("fixtures"))) ruleFixtures.Add((fx, r.LineOf("fixtures")));
+
+            // outcomes are declared, never inferred from prose; each one is a fixture variant or a stated gap
+            var outcomes = SpecParser.SplitIds(r.Get("outcomes"));
+            if (r.Get("outcomes") != null && outcomes.Count == 0) E(r.LineOf("outcomes"), "GRAMMAR", $"{r.Id}: outcomes lists nothing");
+            foreach (var dup in outcomes.GroupBy(x => x, StringComparer.Ordinal).Where(g => g.Count() > 1)) E(r.LineOf("outcomes"), "GRAMMAR", $"{r.Id}: outcome '{dup.Key}' is listed twice");
+            var gapped = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var (gap, line) in r.OutcomeGaps)
+            {
+                var gm = OutcomeGapRx().Match(gap);
+                if (!gm.Success) E(line, "GRAMMAR", $"{r.Id}: outcome-gap must be '<outcome> - <reason>'");
+                else if (!outcomes.Contains(gm.Groups[1].Value)) E(line, "GRAMMAR", $"{r.Id}: outcome-gap names '{gm.Groups[1].Value}', which is not in outcomes");
+                else if (!gapped.Add(gm.Groups[1].Value)) E(line, "GRAMMAR", $"{r.Id}: outcome '{gm.Groups[1].Value}' has two outcome-gap lines");
+            }
+        }
+
+        // a var: id names one variant's delta: it is described only by a rule scoped to that variant, never the base
+        void VarRef(SpecRule r, string key, string id, HashSet<string> scope)
+        {
+            if (!deltaOf.TryGetValue(id, out var hit)) { E(r.LineOf(key), "VAR-UNKNOWN", $"{r.Id}: '{id}' is not a delta id of any variant in the manifest"); return; }
+            var code = hit.d.Kind is "override" or "handler" or "ctor";
+            if (code != (key == "cite")) { E(r.LineOf(key), "CITE-KIND", $"{r.Id}: {id} is a {hit.d.Kind} delta; it belongs in {(code ? "cite" : "covers")}"); return; }
+            if (!scope.Contains(hit.v.Name) || scope.Contains("base"))
+            {
+                E(r.LineOf(key), "VAR-SCOPE", $"{r.Id}: {id} exists only in {hit.v.Name}; the rule needs 'variants: {hit.v.Name}' (without base)");
+                return;
+            }
+            variantCovered[hit.v.Name].Add(id);
+        }
+
+        var noRule = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var row in spec.VariantNoRule)
+        {
+            var id = row.Cell(0).Trim('`');
+            if (!deltaOf.TryGetValue(id, out var hit)) { E(row.Line, "VAR-UNKNOWN", $"Variant deltas without a rule: '{id}' is not a delta id of any variant in the manifest"); continue; }
+            if (variantCovered[hit.v.Name].Contains(id)) E(row.Line, "GRAMMAR", $"Variant deltas without a rule: {id} is also described by a rule; pick one");
+            else noRule.Add(id);
+            if (row.Cell(1).Length == 0) E(row.Line, "GRAMMAR", $"Variant deltas without a rule: {id} needs a reason");
         }
 
         var fieldRows = new Dictionary<string, SpecRow>(StringComparer.Ordinal);
@@ -159,6 +248,16 @@ public static partial class SpecLinter
             foreach (var id in evIds) Ev(line, "Open questions", id);
         }
 
+        // the fixtures this spec lists, each with the first line that lists it; counted with or without --gate
+        var fixturesDir = Path.Combine(moduleDir, "fixtures");
+        var unreadable = new List<(string File, string Message)>();
+        var fixtureFiles = Fixtures.Load(fixturesDir, unreadable);
+        var listed = new SortedDictionary<string, int>(StringComparer.Ordinal);
+        foreach (var (name, line) in svcRows.Values.SelectMany(row => SpecParser.SplitIds(row.Cell(2)).Select(n => (n, row.Line))).Concat(ruleFixtures))
+            listed[name] = listed.TryGetValue(name, out var first) ? Math.Min(first, line) : line;
+        var present = listed.Keys.Where(fixtureFiles.ContainsKey).Select(n => fixtureFiles[n]).ToList();
+        fixtures = new FixtureTally(present.Count, present.Count(x => x.Synthetic));
+
         if (!gate) return f.OrderBy(x => x.Line).ThenBy(x => x.Code, StringComparer.Ordinal).ToList();
 
         // ---- gate: coverage against the manifest ----
@@ -186,19 +285,15 @@ public static partial class SpecLinter
         foreach (var x in m.Methods.Where(x => x.Source != null))
             if (!cited.Contains(x.Id)) W(0, "COV-METHOD", $"{x.Id} (depth {x.Depth}) is reached from a handler but cited by no rule");
 
-        var fixturesDir = Path.Combine(moduleDir, "fixtures");
-        var fixtureService = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (Directory.Exists(fixturesDir))
-            foreach (var fx in Directory.EnumerateFiles(fixturesDir, "*.json"))
-            {
-                try
-                {
-                    using var doc = JsonDocument.Parse(File.ReadAllText(fx));
-                    if (doc.RootElement.TryGetProperty("service", out var sv) && sv.ValueKind == JsonValueKind.String)
-                        fixtureService[Path.GetFileNameWithoutExtension(fx)] = sv.GetString() ?? "";
-                }
-                catch (JsonException ex) { E(0, "FIXTURE-INVALID", $"{Path.GetFileName(fx)}: {ex.Message}"); }
-            }
+        foreach (var (name, msg) in unreadable) E(0, "FIXTURE-INVALID", $"{name}: {msg}");
+        foreach (var (name, line) in listed)
+        {
+            if (!fixtureFiles.TryGetValue(name, out var fx)) continue;                          // FIXTURE-MISSING below
+            foreach (var p in fx.Problems) E(line, "FIXTURE-INVALID", $"{name}.json {p}");
+            if (!fx.Synthetic) continue;
+            var lacks = new[] { fx.ShapeVerified == true ? null : "shapeVerified: true", string.IsNullOrWhiteSpace(fx.Note) ? "a note" : null }.OfType<string>().ToList();
+            if (lacks.Count > 0) E(line, "FIXTURE-SYNTHETIC", $"{name}.json is synthetic but lacks {string.Join(" and ", lacks)}; check its shape against a real reply of {fx.Service} and say in the note what it stands for");
+        }
         foreach (var s in m.ServiceCalls)
         {
             if (!svcRows.TryGetValue(s.Id, out var row)) { E(0, "COV-SERVICE", $"{s.Id} has no row under Service calls"); continue; }
@@ -206,21 +301,46 @@ public static partial class SpecLinter
             if (fxs.Count == 0) E(row.Line, "COV-SERVICE", $"{s.Id} lists no fixtures");
             foreach (var fx in fxs)
             {
-                if (!fixtureService.TryGetValue(fx, out var svc)) E(row.Line, "FIXTURE-MISSING", $"fixture '{fx}' not found at fixtures/{fx}.json");
-                else if (svc != s.Id) E(row.Line, "FIXTURE-MISSING", $"fixture '{fx}' records {svc}, not {s.Id}");
+                if (!fixtureFiles.TryGetValue(fx, out var ff)) E(row.Line, "FIXTURE-MISSING", $"fixture '{fx}' not found at fixtures/{fx}.json");
+                else if (ff.Service != null && ff.Service != s.Id) E(row.Line, "FIXTURE-MISSING", $"fixture '{fx}' records {ff.Service}, not {s.Id}");
             }
         }
         foreach (var (name, line) in ruleFixtures)
-            if (!fixtureService.ContainsKey(name)) E(line, "FIXTURE-MISSING", $"fixture '{name}' not found at fixtures/{name}.json");
+            if (!fixtureFiles.ContainsKey(name)) E(line, "FIXTURE-MISSING", $"fixture '{name}' not found at fixtures/{name}.json");
 
-        if (m.Raw.Count > 0 || m.Diagnostics.Count > 0)
+        // per rule: its own fixtures: when it lists any, otherwise the Service calls rows of the services it touches (a row naming it, a svc: in then)
+        foreach (var r in spec.Rules)
+        {
+            var names = SpecParser.SplitIds(r.Get("fixtures"));
+            if (names.Count == 0)
+            {
+                var services = svcRows.Where(kv => RuleIdRx().Matches(kv.Value.Cell(1)).Any(x => x.Value == r.Id)).Select(kv => kv.Key).ToHashSet(StringComparer.Ordinal);
+                foreach (Match sm in SvcIdRx().Matches(r.Get("then") ?? "")) if (svcRows.ContainsKey(sm.Value)) services.Add(sm.Value);
+                names = services.SelectMany(svc => SpecParser.SplitIds(svcRows[svc].Cell(2))).ToList();
+            }
+            var usable = names.Where(fixtureFiles.ContainsKey).Select(n => fixtureFiles[n]).DistinctBy(x => x.Name).ToList();
+            if (usable.Count > 0 && usable.All(x => x.Synthetic))
+                W(r.Line, "FIXTURE-SYNTHETIC", $"{r.Id}: every fixture it runs on is synthetic ({string.Join(", ", usable.Select(x => x.Name))}); a test built on them must say it runs on synthetic replies");
+            var gapped = r.OutcomeGaps.Select(g => OutcomeGapRx().Match(g.Value)).Where(x => x.Success).Select(x => x.Groups[1].Value).ToHashSet(StringComparer.Ordinal);
+            foreach (var o in SpecParser.SplitIds(r.Get("outcomes")).Distinct(StringComparer.Ordinal))
+                if (!gapped.Contains(o) && !usable.Any(x => x.Variant == o))
+                    E(r.LineOf("outcomes"), "FIXTURE-OUTCOME", $"{r.Id}: outcome '{o}' has no listed fixture with variant '{o}' and no 'outcome-gap: {o} - <reason>'");
+        }
+
+        foreach (var v in variants)
+            foreach (var d in v.Delta.Where(d => !variantCovered[v.Name].Contains(d.Id) && !noRule.Contains(d.Id)))
+                E(0, "VAR-UNCOVERED", $"{d.Id} ({d.Kind}) is neither described by a rule scoped 'variants: {v.Name}' nor listed under Variant deltas without a rule");
+
+        var raw = m.Raw.Concat(variants.SelectMany(v => v.Raw)).ToList();
+        var allDiags = m.Diagnostics.Concat(variants.SelectMany(v => v.Diagnostics)).ToList();
+        if (raw.Count > 0 || allDiags.Count > 0)
         {
             var debtPath = Path.Combine(moduleDir, "extractor-debt.md");
             var debt = File.Exists(debtPath) ? File.ReadAllLines(debtPath) : Array.Empty<string>();
             bool Acknowledged(string key) => debt.Any(l => l.Contains(key, StringComparison.Ordinal) && l.Contains("owner", StringComparison.OrdinalIgnoreCase) && DateRx().IsMatch(l));
-            foreach (var r in m.Raw)
+            foreach (var r in raw)
                 if (!Acknowledged($"{r.Loc.File}:{r.Loc.Start}")) E(0, "COV-RAW", $"raw designer statement at {r.Loc.File}:{r.Loc.Start} is not acknowledged in extractor-debt.md (line must carry '{r.Loc.File}:{r.Loc.Start}', an owner and a YYYY-MM-DD)");
-            foreach (var d in m.Diagnostics)
+            foreach (var d in allDiags)
             {
                 var key = DebtKey(d.Code, d.Message);
                 if (!Acknowledged(key)) E(0, "COV-RAW", $"diagnostic '{key}' is not acknowledged in extractor-debt.md (a line must carry exactly that text, an owner and a YYYY-MM-DD; the bare code acknowledges nothing)");

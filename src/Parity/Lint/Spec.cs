@@ -4,6 +4,8 @@ public sealed class SpecRule
 {
     public string Id = ""; public int Line;
     public Dictionary<string, (string Value, int Line)> Fields = new(StringComparer.Ordinal);
+    /// <summary><c>- outcome-gap: &lt;outcome&gt; - &lt;reason&gt;</c>, the one key a rule may repeat (one line per outcome).</summary>
+    public List<(string Value, int Line)> OutcomeGaps = new();
     public string? Get(string key) => Fields.TryGetValue(key, out var v) ? v.Value : null;
     public int LineOf(string key) => Fields.TryGetValue(key, out var v) ? v.Line : Line;
 }
@@ -21,6 +23,8 @@ public sealed class Spec
     public List<SpecRule> Rules = new();
     public List<SpecRow> NoBehavior = new();
     public List<SpecRow> ServiceCalls = new();
+    /// <summary>"## Variant deltas without a rule": | Delta | Reason | rows accounting for a var: delta no rule describes.</summary>
+    public List<SpecRow> VariantNoRule = new();
     public List<(string Text, int Line)> OpenQuestions = new();
     public List<(string Code, int Line, string Message)> ParseErrors = new();
     public HashSet<string> SectionsSeen = new(StringComparer.Ordinal);
@@ -69,13 +73,14 @@ public static class SpecParser
                 case "Fields":
                 case "No behavior":
                 case "Service calls":
+                case "Variant deltas without a rule":
                 {
                     if (!l.StartsWith('|')) { if (!l.StartsWith("Purpose", StringComparison.Ordinal)) spec.ParseErrors.Add(("GRAMMAR", ln, $"{section}: expected a table row")); continue; }
                     var cells = l.Trim('|').Split('|').Select(c => c.Trim()).ToList();
                     if (!headerSeen) { headerSeen = true; continue; }          // header
                     if (cells.All(c => c.Length == 0 || c.All(ch => ch == '-' || ch == ':'))) continue; // separator
                     var row = new SpecRow { Line = ln, Cells = cells };
-                    (section == "Fields" ? spec.Fields : section == "No behavior" ? spec.NoBehavior : spec.ServiceCalls).Add(row);
+                    (section switch { "Fields" => spec.Fields, "No behavior" => spec.NoBehavior, "Variant deltas without a rule" => spec.VariantNoRule, _ => spec.ServiceCalls }).Add(row);
                     break;
                 }
                 case "Rules":
@@ -92,6 +97,7 @@ public static class SpecParser
                     var colon = body.IndexOf(':');
                     if (colon <= 0) { spec.ParseErrors.Add(("GRAMMAR", ln, $"{rule.Id}: expected '- key: value'")); continue; }
                     var key = body[..colon].Trim();
+                    if (key == "outcome-gap") { rule.OutcomeGaps.Add((body[(colon + 1)..].Trim(), ln)); break; }
                     if (rule.Fields.ContainsKey(key)) spec.ParseErrors.Add(("GRAMMAR", ln, $"{rule.Id}: duplicate '{key}'"));
                     rule.Fields[key] = (body[(colon + 1)..].Trim(), ln);
                     break;

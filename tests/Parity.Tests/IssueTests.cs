@@ -554,6 +554,133 @@ public sealed class IssueTests
         finally { File.Delete(spec); File.Delete(phase); if (Directory.Exists(Path.GetDirectoryName(evFile))) Directory.Delete(Path.GetDirectoryName(evFile)!, true); }
     }
 
+    [Fact]
+    public void issue_24_a_rule_covered_only_by_synthetic_fixtures_is_warned_an_unverified_synthetic_fixture_is_an_error_and_scaffold_labels_its_output()
+    {
+        // input: the example spec, whose svc:IPolicyService.GetPremiumLimits has one recorded reply (limits-term-life, used by
+        // R-001 and R-003). The host cannot be made to return the other outcomes, so they are synthetic replies.
+        const string Svc = "svc:IPolicyService.GetPremiumLimits";
+        var fx = Path.Combine(_f.ModuleDir, "fixtures");
+        var handmade = Path.Combine(fx, "limits-handmade.json");
+        var recorded = Path.Combine(fx, "limits-term-life.json");
+        var scaffolded = Path.Combine(fx, "limits-term-life.invalid.json");
+        var outDir = Path.Combine(_f.OutRoot, "fixtures-24");
+        void Handmade(string fields) => File.WriteAllText(handmade, $"{{ \"service\": \"{Svc}\", {fields}, \"request\": {{ \"productId\": 101 }}, \"response\": {{ \"min\": 0, \"max\": 0 }} }}");
+        List<Finding> Gate(string path, out FixtureTally? tally) => SpecLinter.Lint(path, gate: true, implementDir: null, out tally);
+        List<Finding> Errors(List<Finding> f) => f.Where(x => x.Severity == "error").ToList();
+        try
+        {
+            // a hand-made synthetic reply is the only fixture of the service: today's lint accepted it silently.
+            // R-001 lists only it and is warned; R-003 lists it beside the recorded riders-term-life, so it is not
+            var only = _f.InstallExampleSpec("PolicyWizardStep3", s => s.Replace("limits-term-life", "limits-handmade"));
+            Handmade("\"recorded\": \"synthetic\", \"note\": \"hand-made: a product with no limits\"");
+            var f = Gate(only, out var tally);
+            Assert.DoesNotContain(f, x => x.Code is "COV-SERVICE" or "FIXTURE-MISSING" or "FIXTURE-INVALID");
+            var unverified = Assert.Single(Errors(f));
+            Assert.Equal("FIXTURE-SYNTHETIC", unverified.Code);
+            Assert.Equal($"limits-handmade.json is synthetic but lacks shapeVerified: true; check its shape against a real reply of {Svc} and say in the note what it stands for", unverified.Message);
+            var warned = Assert.Single(f, x => x.Code == "FIXTURE-SYNTHETIC" && x.Severity == "warning");
+            Assert.Equal("R-PolicyWizardStep3-001: every fixture it runs on is synthetic (limits-handmade); a test built on them must say it runs on synthetic replies", warned.Message);
+            Assert.Equal(new FixtureTally(4, 1), tally);
+            Assert.Equal($"1 error(s), {f.Count - 1} warning(s), fixtures: 4 (1 synthetic)", SpecLinter.Summary(f, tally));
+            Assert.DoesNotContain(SpecLinter.Lint(only, gate: false, implementDir: null, out var draftTally), x => x.Code.StartsWith("FIXTURE", StringComparison.Ordinal));
+            Assert.Equal(tally, draftTally);                                             // counted without --gate too
+
+            // verified and explained, it passes the gate, still warned: a test on it must say so
+            Handmade("\"recorded\": \"synthetic\", \"shapeVerified\": true, \"note\": \"hand-made: a product with no limits\"");
+            f = Gate(only, out _);
+            Assert.Empty(Errors(f));
+            Assert.Single(f, x => x.Code == "FIXTURE-SYNTHETIC");
+            Handmade("\"recorded\": \"synthetic\", \"shapeVerified\": true, \"note\": \" \"");
+            Assert.Contains("lacks a note;", Assert.Single(Errors(Gate(only, out _))).Message);
+            Handmade("\"recorded\": \"synthetic\", \"shapeVerified\": \"yes\", \"note\": \"hand-made\"");
+            Assert.Equal(new[] { "FIXTURE-INVALID", "FIXTURE-SYNTHETIC" }, Errors(Gate(only, out _)).Select(x => x.Code).OrderBy(x => x, StringComparer.Ordinal));
+
+            // recorded is a date or synthetic, nothing else
+            foreach (var bad in new[] { "last week", "2026-13-01" })
+            {
+                Handmade($"\"recorded\": \"{bad}\"");
+                var invalid = Assert.Single(Errors(Gate(only, out _)));
+                Assert.Equal(("FIXTURE-INVALID", $"limits-handmade.json 'recorded' is '{bad}', neither a YYYY-MM-DD date nor synthetic"), (invalid.Code, invalid.Message));
+            }
+
+            // one recorded reply beside the synthetic one: no warning
+            Handmade("\"recorded\": \"synthetic\", \"shapeVerified\": true, \"note\": \"hand-made: a product with no limits\"");
+            var mixed = _f.InstallExampleSpec("PolicyWizardStep3", s => s.Replace("| limits-term-life |", "| limits-term-life, limits-handmade |"));
+            f = Gate(mixed, out tally);
+            Assert.DoesNotContain(f, x => x.Code == "FIXTURE-SYNTHETIC");
+            Assert.Equal(new FixtureTally(5, 1), tally);
+
+            // the issue's core case: a rule naming only the synthetic reply is warned although its service row carries the recorded one;
+            // naming both, it is not
+            var ownOnly = _f.InstallExampleSpec("PolicyWizardStep3", s => s.Replace("- fixtures: limits-term-life\n", "- fixtures: limits-handmade\n"));
+            f = Gate(ownOnly, out tally);
+            Assert.Empty(Errors(f));
+            Assert.Equal("R-PolicyWizardStep3-001: every fixture it runs on is synthetic (limits-handmade); a test built on them must say it runs on synthetic replies",
+                Assert.Single(f, x => x.Code == "FIXTURE-SYNTHETIC").Message);
+            Assert.Equal(new FixtureTally(5, 1), tally);
+            var ownBoth = _f.InstallExampleSpec("PolicyWizardStep3", s => s.Replace("- fixtures: limits-term-life\n", "- fixtures: limits-term-life, limits-handmade\n"));
+            Assert.DoesNotContain(Gate(ownBoth, out _), x => x.Code == "FIXTURE-SYNTHETIC");
+
+            // a rule that declares its outcomes needs a fixture variant per outcome, or a stated gap
+            const string Outcomes = "- fixtures: limits-term-life\n- outcomes: valid, invalid, blank\n";
+            var declared = _f.InstallExampleSpec("PolicyWizardStep3", s => s.Replace("- fixtures: limits-term-life\n", Outcomes));
+            var gaps = Errors(Gate(declared, out _));
+            Assert.All(gaps, x => Assert.Equal("FIXTURE-OUTCOME", x.Code));
+            Assert.Equal(new[] { "blank", "invalid", "valid" }.Select(o => $"R-PolicyWizardStep3-001: outcome '{o}' has no listed fixture with variant '{o}' and no 'outcome-gap: {o} - <reason>'"), gaps.Select(x => x.Message));
+
+            // scaffold the invalid reply from the recorded one: labelled, unverified, the request and response copied to edit
+            Assert.Equal(scaffolded, FixtureScaffold.Run(Svc, recorded, "invalid", null));
+            var copy = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(scaffolded))!.AsObject();
+            Assert.Equal(new[] { "service", "recorded", "variant", "source", "shapeVerified", "note", "request", "response" }, copy.Select(p => p.Key));
+            Assert.Equal((Svc, "synthetic", "invalid", "scaffolded from limits-term-life.json by parity fixture scaffold", false, ""),
+                ((string)copy["service"]!, (string)copy["recorded"]!, (string)copy["variant"]!, (string)copy["source"]!, (bool)copy["shapeVerified"]!, (string)copy["note"]!));
+            var original = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(recorded))!;
+            Assert.True(System.Text.Json.Nodes.JsonNode.DeepEquals(original["request"], copy["request"]) && System.Text.Json.Nodes.JsonNode.DeepEquals(original["response"], copy["response"]));
+
+            // listed on the rule, the unverified copy is a gate error; the recorded reply is the valid variant and blank is a stated gap
+            var varied = _f.InstallExampleSpec("PolicyWizardStep3", s => s.Replace("- fixtures: limits-term-life\n",
+                "- fixtures: limits-term-life, limits-term-life.invalid\n- outcomes: valid, invalid, blank\n- outcome-gap: blank - the host fills limits for every product, so no blank reply exists\n"));
+            Assert.Equal(new[] { "FIXTURE-OUTCOME" }, Errors(Gate(varied, out _)).Where(x => x.Message.Contains("outcome '")).Select(x => x.Code));
+            File.WriteAllText(recorded, File.ReadAllText(recorded).Replace("\"recorded\": \"2026-10-22\",", "\"recorded\": \"2026-10-22\", \"variant\": \"valid\","));
+            f = Gate(varied, out tally);
+            var unedited = Assert.Single(Errors(f));
+            Assert.Equal(("FIXTURE-SYNTHETIC", $"limits-term-life.invalid.json is synthetic but lacks shapeVerified: true and a note; check its shape against a real reply of {Svc} and say in the note what it stands for"), (unedited.Code, unedited.Message));
+            Assert.DoesNotContain(f, x => x.Code == "FIXTURE-SYNTHETIC" && x.Severity == "warning");   // R-001 also has the recorded reply
+            Assert.Equal(new FixtureTally(5, 1), tally);
+            copy["shapeVerified"] = true;
+            copy["note"] = "max below min: the reply a misconfigured product returns";
+            File.WriteAllText(scaffolded, copy.ToJsonString());
+            Assert.Empty(Errors(Gate(varied, out _)));
+
+            // an outcome is judged by the rule's own fixtures: a variant only on its service row does not count
+            var rowVariant = _f.InstallExampleSpec("PolicyWizardStep3", s => s.Replace("- fixtures: limits-term-life\n", "- fixtures: limits-term-life\n- outcomes: valid, invalid\n")
+                .Replace("| limits-term-life |", "| limits-term-life, limits-term-life.invalid |"));
+            File.WriteAllText(recorded, File.ReadAllText(recorded).Replace("\"recorded\": \"2026-10-22\",", "\"recorded\": \"2026-10-22\", \"variant\": \"valid\","));   // installing the spec restored the example's copy
+            Assert.Equal(new[] { "R-PolicyWizardStep3-001: outcome 'invalid' has no listed fixture with variant 'invalid' and no 'outcome-gap: invalid - <reason>'" },
+                Errors(Gate(rowVariant, out _)).Select(x => x.Message));
+
+            // outcome-gap is checked like the rest of the grammar
+            var badGap = _f.InstallExampleSpec("PolicyWizardStep3", s => s.Replace("- fixtures: limits-term-life\n", Outcomes + "- outcome-gap: error - no such outcome declared\n- outcome-gap: blank\n"));
+            Assert.Equal(new[] { "R-PolicyWizardStep3-001: outcome-gap names 'error', which is not in outcomes", "R-PolicyWizardStep3-001: outcome-gap must be '<outcome> - <reason>'" },
+                SpecLinter.Lint(badGap, gate: false, implementDir: null).Where(x => x.Code == "GRAMMAR").Select(x => x.Message));
+
+            // scaffold refuses a synthetic source, a different service and an existing target; --out puts the copy elsewhere
+            Assert.Contains("is itself synthetic", Assert.Throws<InvalidOperationException>(() => FixtureScaffold.Run(Svc, scaffolded, "blank", null)).Message);
+            Assert.Equal($"limits-term-life.json records {Svc}, not svc:IPolicyService.GetProducts", Assert.Throws<InvalidOperationException>(() => FixtureScaffold.Run("svc:IPolicyService.GetProducts", recorded, "blank", null)).Message);
+            Assert.EndsWith("exists; scaffold never overwrites a fixture", Assert.Throws<InvalidOperationException>(() => FixtureScaffold.Run(Svc, recorded, "invalid", null)).Message);
+            Assert.Throws<ArgumentException>(() => FixtureScaffold.Run(Svc, recorded, "../blank", null));
+            Assert.Equal(Path.Combine(outDir, "limits-term-life.blank.json"), FixtureScaffold.Run(Svc, recorded, "blank", outDir));
+            Assert.False(File.Exists(Path.Combine(fx, "limits-term-life.blank.json")));
+        }
+        finally
+        {
+            File.Delete(handmade); File.Delete(scaffolded);
+            if (Directory.Exists(outDir)) Directory.Delete(outDir, true);
+            File.Copy(Path.Combine(_f.RepoRoot, "examples", "PolicyWizard", "fixtures", "limits-term-life.json"), recorded, overwrite: true);
+        }
+    }
+
     private static bool Git(string dir, string args)
     {
         try
@@ -703,6 +830,375 @@ public sealed class IssueTests
         Assert.Equal(new[] { 2, 4, 5, 6, 8, 9, 10, 11 }.Select(i => $"R-PolicyWizardStep3-{i:000}"), ids);
         Assert.Contains(todo, x => x.Message.Contains("step3.spec.ts") && x.Message.Contains("it.todo"));
         Assert.Contains(todo, x => x.Message.Contains("Step3Tests.cs") && x.Message.Contains("Skip"));
+    }
+
+    [Fact]
+    public void issue_19_constants_and_resource_texts_are_resolved_with_their_values_and_a_missing_key_is_diagnosed()
+    {
+        // input: PremiumHistoryForm reads PolicyLimits (const, static readonly), Captions (generated resource class and
+        // ResourceManager.GetString, default resx plus a fr culture, one key missing), and binds PremiumHistoryRow,
+        // whose properties carry [Display], [Browsable(false)], [Required] and [StringLength], to gvHistory via bsHistory
+        var m = _f.Manifest("PremiumHistoryForm");
+        ConstantInfo C(string member) => Assert.Single(m.Constants, c => c.Member == member);
+
+        var max = C("ReasonMaxLength");
+        Assert.Equal(("const", "SampleLegacy.Helpers.PolicyLimits", "int", "40"), (max.Kind, max.Type, max.ValueType, max.Value));
+        Assert.Equal(new Loc("Helpers/PolicyLimits.cs", 5, 5), max.Declared);
+        Assert.Equal("Forms/PremiumHistoryForm.cs", max.FirstUse!.File);
+        Assert.Equal(new[] { "ctrl:PremiumHistoryForm/colReason", "handler:PremiumHistoryForm/btnArchive_Click" }, max.UsedBy); // [StringLength(PolicyLimits.ReasonMaxLength)] too
+        var category = C("HistoryCategory");
+        Assert.Equal(("readonly", "string", "premium-history"), (category.Kind, category.ValueType, category.Value));
+
+        var reasons = C("lsReasons");                                           // Captions.lsReasons, the generated property
+        Assert.Equal(("resource", "SampleLegacy.Resources.Captions", "Reasons are kept for audit"), (reasons.Kind, reasons.Type, reasons.Value));
+        Assert.Equal("Resources/Captions.resx", reasons.Declared!.File);
+        Assert.Equal(new[] { "fr" }, reasons.Cultures);
+        Assert.Equal(new[] { "handler:PremiumHistoryForm/PremiumHistoryForm_Load" }, reasons.UsedBy);
+        var title = C("lsHistoryTitle");                                        // Captions.ResourceManager.GetString("lsHistoryTitle")
+        Assert.Equal(("resource", "Premium history"), (title.Kind, title.Value));
+        Assert.Empty(title.Cultures);                                            // the fr resx does not translate it
+        var policyLog = C("Policy log");                                        // Captions.Policy_log: the resx key is the GetString literal, not the identifier
+        Assert.Equal(("resource", "Policy log"), (policyLog.Kind, policyLog.Value));
+        Assert.Equal("Resources/Captions.resx", policyLog.Declared!.File);
+        Assert.DoesNotContain(m.Constants, c => c.Member == "Policy_log");
+        Assert.DoesNotContain(m.Methods, x => x.Id.Contains("Captions.lsReasons", StringComparison.Ordinal)); // a fact, not a call
+        Assert.DoesNotContain(m.Constants, c => c.Member == "Enter" || c.Type.StartsWith("System.", StringComparison.Ordinal));
+
+        var missing = C("lsArchiveReasonTooLong");
+        Assert.Null(missing.Value);
+        var d = Assert.Single(m.Diagnostics, x => x.Code == "RESOURCE-KEY-MISSING");
+        Assert.Equal("PremiumHistoryForm.lsArchiveReasonTooLong: resource key not found in the default-culture resx of 'SampleLegacy.Resources.Captions' (Resources/Captions.resx); read by handler:PremiumHistoryForm/btnArchive_Click", d.Message);
+        Assert.Equal("$form.$id: resource key not found in the default-culture resx of '$id' (<path>.resx); read by handler:$id", Report.AnonMessage(d.Message));
+
+        // the bound model's annotations are column facts next to the designer columns (#15)
+        var ctl = m.Controls.ToDictionary(c => c.Field);
+        Assert.Equal("SampleLegacy.Models.PremiumHistoryRow", ctl["bsHistory"].Props["@modelType"]);
+        Assert.Equal("SampleLegacy.Models.PremiumHistoryRow", ctl["gvHistory"].Props["@modelType"]);
+        Assert.Equal("Reason for change", ctl["colReason"].Props["@display"]);
+        Assert.Equal("SampleLegacy.Resources.Captions.colReason", ctl["colReason"].Props["@display@resx"]);
+        Assert.Equal("true", ctl["colReason"].Props["@required"]);
+        Assert.Equal("40", ctl["colReason"].Props["@stringLength"]);
+        Assert.Equal("Reason for change", ctl["colReason"].Caption);           // no designer caption: the grid shows the [Display] text
+        Assert.Equal("Effective from", ctl["colEffectiveDate"].Props["@display"]);
+        Assert.Equal("Amount", ctl["colAmount"].Props["@display"]);
+        Assert.Equal("Browsable(false)", ctl["gvHistory"].Props["@model.HistoryId"]); // a property without a designer column
+        Assert.Contains(m.Constants, c => c.Member == "colReason" && c.UsedBy.SequenceEqual(new[] { "ctrl:PremiumHistoryForm/colReason" }));
+
+        // rendered: a Constants table, and the literal beside its first use inside the slice
+        var md = File.ReadAllText(Path.Combine(_f.ModuleDir, "manifests", "PremiumHistoryForm.md"));
+        Assert.Contains("## Constants and resource texts", md);
+        Assert.Contains("| const | `SampleLegacy.Helpers.PolicyLimits.ReasonMaxLength` | `40` |", md);
+        Assert.Contains("if (row.Reason != null && row.Reason.Length > PolicyLimits.ReasonMaxLength)  // PolicyLimits.ReasonMaxLength = 40", md);
+        Assert.Contains("lblReasons.Text = Captions.lsReasons;  // Captions.lsReasons = \"Reasons are kept for audit\"", md);
+    }
+
+    [Fact]
+    public void issue_19_a_resource_key_with_a_space_resolves_when_only_this_form_is_extracted()
+    {
+        // input: extract PremiumHistoryForm alone, so Captions is first seen as metadata of the built assembly (no getter source);
+        // output: the collector loads Captions.Designer.cs and reads the key "Policy log" from the Policy_log getter, no false RESOURCE-KEY-MISSING
+        var cfg = ExtractConfig.Load(Path.Combine(_f.RepoRoot, "fixtures", "extract.config.json"));
+        cfg.Output = Path.Combine(_f.OutRoot, "issue19-single");
+        Extractor.Run(cfg, "M", "PremiumHistoryForm", new StringWriter());
+        var m = System.Text.Json.JsonSerializer.Deserialize<FormManifest>(File.ReadAllText(Path.Combine(cfg.Output, "M", "manifests", "PremiumHistoryForm.json")), Json.Options)!;
+        var policyLog = Assert.Single(m.Constants, c => c.Member == "Policy log");
+        Assert.Equal("Policy log", policyLog.Value);
+        Assert.DoesNotContain(m.Constants, c => c.Member == "Policy_log");
+        Assert.DoesNotContain(m.Diagnostics, d => d.Code == "RESOURCE-KEY-MISSING" && d.Message.Contains("Policy_log", StringComparison.Ordinal));
+        Assert.Single(m.Diagnostics, d => d.Code == "RESOURCE-KEY-MISSING"); // only lsArchiveReasonTooLong
+    }
+
+    [Fact]
+    public void issue_20_tenant_variants_fold_into_the_base_manifest_with_a_delta_and_factories()
+    {
+        // input: ClientSearchForm plus two tenant subclasses (Larkspur in the base project, Thistle in its own csproj) and
+        // ClientSearchFormFactory; extract.config.json declares both variants. output: one base unit carrying both deltas.
+        var dir = Path.Combine(_f.ModuleDir, "manifests");
+        Assert.False(File.Exists(Path.Combine(dir, "LarkspurClientSearchForm.json")), "a variant is not a unit of its own");
+        Assert.DoesNotContain(_f.Summaries, s => s.Form is "LarkspurClientSearchForm" or "ThistleClientSearchForm");
+        var m = _f.Manifest("ClientSearchForm");
+        Assert.NotNull(m.Variants);
+        Assert.Equal(new[] { "var:Larkspur", "var:Thistle" }, m.Variants!.Select(v => v.Id));
+        var lrk = m.Variants[0];
+        var ths = m.Variants[1];
+        Assert.Equal("SampleLegacy.Tenants.Larkspur.LarkspurClientSearchForm", lrk.Class);
+        Assert.Null(lrk.Project);
+        Assert.Equal("SampleLegacy.Thistle/SampleLegacy.Thistle.csproj", ths.Project);
+        Assert.All(m.Variants, v => { Assert.Empty(v.Raw); Assert.Empty(v.Diagnostics); });
+
+        Assert.Equal(new[]
+        {
+            "var:Larkspur/added/chkLoyaltyOnly",
+            "var:Larkspur/constant/LarkspurLimits.MaxResults",
+            "var:Larkspur/event/chkLoyaltyOnly.CheckedChanged",
+            "var:Larkspur/handler/chkLoyaltyOnly_CheckedChanged",
+            "var:Larkspur/override/btnSearch_Click",
+            "var:Larkspur/retagged/$this",
+            "var:Larkspur/retagged/lblPostcode",
+            "var:Larkspur/service-added/IClientService.SearchLoyaltyClients",
+            "var:Larkspur/service-removed/IClientService.SearchClients",
+        }, lrk.Delta.Select(d => d.Id));
+        Assert.Equal(new[]
+        {
+            "var:Thistle/added/ctor/lblTenant",
+            "var:Thistle/event/txtPostcode.KeyDown",
+            "var:Thistle/handler/txtPostcode_KeyDown",
+            "var:Thistle/override/btnSearch_Click",
+            "var:Thistle/removed/dtDob",
+            "var:Thistle/retagged/btnSelect",
+            "var:Thistle/retagged/lblSurname",
+        }, ths.Delta.Select(d => d.Id));
+        VariantDelta D(VariantInfo v, string id) => v.Delta.Single(d => d.Id == id);
+
+        // every entry cites the variant's own file:line; Thistle's project sits next to the base one
+        Assert.All(m.Variants.SelectMany(v => v.Delta), d => Assert.NotNull(d.Loc));
+        Assert.All(ths.Delta, d => Assert.StartsWith("../SampleLegacy.Thistle/Forms/ThistleClientSearchForm.cs", d.Loc!.File));
+        var postcode = D(lrk, "var:Larkspur/retagged/lblPostcode");
+        Assert.Equal("ctrl:ClientSearchForm/lblPostcode", postcode.Target);
+        var text = Assert.Single(postcode.Changes!);
+        Assert.Equal(("Text", "Postcode", "Zip code"), (text.Property, text.Base, text.Value));
+        Assert.Equal(new Loc("Tenants/Larkspur/LarkspurClientSearchForm.Designer.cs", 13, 13), postcode.Loc);
+        Assert.Equal(("Visible", (string?)null, "false"), D(ths, "var:Thistle/retagged/btnSelect").Changes!.Select(c => (c.Property, c.Base, c.Value)).Single());
+        Assert.Equal("ctrl:ClientSearchForm/dtDob", D(ths, "var:Thistle/removed/dtDob").Target);
+        Assert.Equal("ctrl:ClientSearchForm/$this", D(ths, "var:Thistle/added/ctor/lblTenant").Target);
+
+        // a constant the variant reads in place of the base's (same member name, another type, another value) is a delta with both values
+        var limit = D(lrk, "var:Larkspur/constant/LarkspurLimits.MaxResults");
+        Assert.Equal(("constant", "SearchLimits.MaxResults", "const"), (limit.Kind, limit.Target, limit.Detail));
+        var change0 = Assert.Single(limit.Changes!);
+        Assert.Equal(("value", "50", "200"), (change0.Property, change0.Base, change0.Value));
+        Assert.Equal(new Loc("Tenants/Larkspur/LarkspurClientSearchForm.cs", 27, 27), limit.Loc);
+        Assert.DoesNotContain(ths.Delta, d => d.Kind == "constant"); // Thistle reads the base's constant through its base call: nothing to account for
+
+        // an override either replaces the base handler or extends it; only a replacement drops the base's service call
+        var lo = D(lrk, "var:Larkspur/override/btnSearch_Click");
+        Assert.Equal(("handler:ClientSearchForm/btnSearch_Click", "replaces base"), (lo.Target, lo.Detail));
+        Assert.Equal("calls base", D(ths, "var:Thistle/override/btnSearch_Click").Detail);
+        Assert.Equal(new[] { "var:Larkspur/override/btnSearch_Click" }, D(lrk, "var:Larkspur/service-added/IClientService.SearchLoyaltyClients").Calls);
+        Assert.Equal("svc:IClientService.SearchClients", D(lrk, "var:Larkspur/service-removed/IClientService.SearchClients").Target);
+        Assert.DoesNotContain(ths.Delta, d => d.Kind.StartsWith("service", StringComparison.Ordinal));
+        Assert.Equal(new[] { "var:Larkspur/handler/chkLoyaltyOnly_CheckedChanged" }, new[] { D(lrk, "var:Larkspur/event/chkLoyaltyOnly.CheckedChanged").Detail });
+
+        // which class a tenant code actually gets is a cited fact
+        Assert.NotNull(m.Factories);
+        var create = m.Factories!.Single(x => x.Id == "method:SampleLegacy.Forms.ClientSearchFormFactory.Create(string)");
+        Assert.Equal("tenantCode", create.On);
+        Assert.Equal(new[] { ("LRK", "Larkspur"), ("THS", "Thistle"), ("THS-NORTH", "Thistle"), ("default", "base") },
+            create.Cases.Select(c => (c.Key, c.Variant!)));
+        Assert.All(create.Cases, c => Assert.Equal("Forms/ClientSearchFormFactory.cs", c.Loc!.File));
+        var region = m.Factories.Single(x => x.Id.Contains("ForRegion", StringComparison.Ordinal));
+        Assert.Equal("ByRegion", region.On);
+        Assert.Equal(new[] { "Larkspur", "Thistle", "base" }, region.Cases.Select(c => c.Variant!).Distinct().OrderBy(x => x, StringComparer.Ordinal));
+        // a factory branch the pass does not understand is a case keyed by its condition text, never the default
+        var site = m.Factories.Single(x => x.Id.Contains(".ForSite(", StringComparison.Ordinal));
+        Assert.Equal("siteCode", site.On);
+        Assert.Equal(new[] { ("THS-PILOT", "Thistle"), ("siteCode.StartsWith(\"LRK\") && pilot", "Larkspur"), ("default", "base") },
+            site.Cases.Select(c => (c.Key, c.Variant!)));
+        Assert.Equal("default", region.Cases.Single(c => c.Variant == "base").Key);
+        // a when clause or a condition inside a keyed case joins its key, and every form the case guards is a case of its own
+        var desk = m.Factories.Single(x => x.Id.Contains(".ForDesk(", StringComparison.Ordinal));
+        Assert.Equal("deskCode", desk.On);
+        Assert.Equal(new[] { ("LRK && pilot", "Larkspur"), ("THS && pilot", "Thistle"), ("THS", "base"), ("default", "base") },
+            desk.Cases.Select(c => (c.Key, c.Variant!)));
+        var kiosk = m.Factories.Single(x => x.Id.Contains(".ForKiosk(", StringComparison.Ordinal));
+        Assert.Equal(new[] { ("LRK && pilot", "Larkspur"), ("THS", "Thistle"), ("default", "base") },
+            kiosk.Cases.Select(c => (c.Key, c.Variant!)));
+        // a unit without variants keeps its manifest shape
+        Assert.Null(_f.Manifest("PolicyWizardStep3").Variants);
+        Assert.Null(_f.Manifest("PolicyWizardStep3").Factories);
+
+        // a re-extract that changes a delta is a diff entry, so rebind does not move a spec citing it
+        var relabeled = m with { Variants = new() { lrk with { Delta = lrk.Delta.Select(d => d.Id == postcode.Id ? d with { Changes = new() { text with { Value = "ZIP" } } } : d).ToList() }, ths } };
+        var change = Assert.Single(ManifestDiff.Compare(m, relabeled));
+        Assert.Equal(("delta", postcode.Id, '~', "changes"), (change.Section, change.Id, change.Kind, string.Join(",", change.Fields)));
+
+        var md = File.ReadAllText(Path.Combine(dir, "ClientSearchForm.md"));
+        Assert.Contains("### Variant Larkspur", md);
+        Assert.Contains("### Variant Thistle", md);
+        Assert.Contains("## Factories", md);
+        Assert.Contains("| `var:Thistle/removed/dtDob` | removed | `ctrl:ClientSearchForm/dtDob` |", md);
+        Assert.Contains("| `var:Larkspur/constant/LarkspurLimits.MaxResults` | constant | `SearchLimits.MaxResults` | const |", md);
+        Assert.Contains("  - value: 50 -> 200 `Tenants/Larkspur/LarkspurClientSearchForm.cs:27-27`", md);
+
+        // lint: a delta no rule scoped to its variant describes, and no 'Variant deltas without a rule' row accounts for, fails the gate
+        var specDir = Path.Combine(_f.ModuleDir, "spec");
+        Directory.CreateDirectory(specDir);
+        var spec = Path.Combine(specDir, "ClientSearchForm.md");
+        string Spec(string rules, string noRule) =>
+            "---\nform: form:ClientSearchForm\nmanifest: " + ManifestHash.Of(Path.Combine(dir, "ClientSearchForm.json")) + "\nstatus: reviewed\nreviewed-by: example-reviewer 2026-10-23\n---\n\n" +
+            "# ClientSearchForm\n\n## Rules\n\n" + rules + "\n## Variant deltas without a rule\n\n| delta | reason |\n|---|---|\n" + noRule + "\n## Open questions\n\n- none\n";
+        const string Rule = "### {0}\n- kind: data\n{1}- covers: {2}\n- cite: {3}\n- given: any state\n- when: the user acts\n- then: ctrl:ClientSearchForm/grdResults is refilled\n\n";
+        string R(string id, string? variants, string covers, string cite) => string.Format(Rule, id, variants == null ? "" : $"- variants: {variants}\n", covers, cite);
+        List<Finding> Var(string rules, string noRule)
+        {
+            File.WriteAllText(spec, Spec(rules, noRule));
+            return SpecLinter.Lint(spec, gate: true, implementDir: null).Where(x => x.Code.StartsWith("VAR", StringComparison.Ordinal)).ToList();
+        }
+        try
+        {
+            var all = string.Join("\n", lrk.Delta.Concat(ths.Delta).Select(d => $"| {d.Id} | no rule needed in this test |"));
+            Assert.Empty(Var(R("R-ClientSearchForm-001", "base, Thistle", "evt:ClientSearchForm/btnSearch.Click", "handler:ClientSearchForm/btnSearch_Click"), all));
+
+            // dropping one row surfaces exactly that delta
+            var f = Var("", string.Join("\n", all.Split('\n').Where(l => !l.Contains("var:Thistle/removed/dtDob"))));
+            Assert.Equal("VAR-UNCOVERED", Assert.Single(f).Code);
+            Assert.Contains("var:Thistle/removed/dtDob", f[0].Message);
+
+            // the constant delta is gated the same way
+            f = Var("", string.Join("\n", all.Split('\n').Where(l => !l.Contains("var:Larkspur/constant/LarkspurLimits.MaxResults"))));
+            Assert.Equal("VAR-UNCOVERED", Assert.Single(f).Code);
+            Assert.Contains("var:Larkspur/constant/LarkspurLimits.MaxResults", f[0].Message);
+
+            // a rule scoped to Larkspur accounts for its entries; the rest stay uncovered
+            f = Var(R("R-ClientSearchForm-002", "Larkspur", "var:Larkspur/event/chkLoyaltyOnly.CheckedChanged, var:Larkspur/added/chkLoyaltyOnly",
+                "var:Larkspur/handler/chkLoyaltyOnly_CheckedChanged, var:Larkspur/override/btnSearch_Click"), "| var:Larkspur/retagged/lblPostcode | caption only |");
+            Assert.All(f, x => Assert.Equal("VAR-UNCOVERED", x.Code));
+            Assert.Equal(new[] { "var:Larkspur/constant/LarkspurLimits.MaxResults", "var:Larkspur/retagged/$this", "var:Larkspur/service-added/IClientService.SearchLoyaltyClients", "var:Larkspur/service-removed/IClientService.SearchClients" }
+                .Concat(ths.Delta.Select(d => d.Id)), f.Select(x => x.Message.Split(' ')[0]));
+
+            // scope errors: an unscoped rule cites a base handler Larkspur replaces; a Larkspur rule names a Thistle delta; an unknown variant
+            f = Var(R("R-ClientSearchForm-003", null, "evt:ClientSearchForm/btnSearch.Click", "handler:ClientSearchForm/btnSearch_Click")
+                + R("R-ClientSearchForm-004", "Larkspur", "var:Thistle/event/txtPostcode.KeyDown", "var:Larkspur/override/btnSearch_Click")
+                + R("R-ClientSearchForm-005", "Ivy", "evt:ClientSearchForm/txtSurname.KeyDown", "handler:ClientSearchForm/txtSurname_KeyDown")
+                + R("R-ClientSearchForm-006", "base, Thistle", "evt:ClientSearchForm/txtSurname.KeyDown", "handler:ClientSearchForm/txtSurname_KeyDown"), all);
+            Assert.Equal(new[] { "VAR-SCOPE", "VAR-SCOPE", "VAR-UNKNOWN" }, f.Select(x => x.Code));
+            Assert.Contains("which Larkspur replaces (var:Larkspur/override/btnSearch_Click)", f[0].Message);
+            Assert.Contains("var:Thistle/event/txtPostcode.KeyDown exists only in Thistle", f[1].Message);
+            Assert.Contains("variant 'Ivy'", f[2].Message);
+        }
+        finally { File.Delete(spec); }
+    }
+
+    [Fact]
+    public void issue_20_a_configured_factories_entry_is_a_type_or_a_type_dot_method_and_one_that_matches_nothing_is_diagnosed()
+    {
+        // input: four entries on the Larkspur variant - a namespace-qualified type, a simple Type.Method, a method the type does
+        // not declare, a type no file declares; output: the first two read their factories silently, the last two are VARIANT-CONFIG
+        var cfg = ExtractConfig.Load(Path.Combine(_f.RepoRoot, "fixtures", "extract.config.json"));
+        cfg.Output = Path.Combine(_f.OutRoot, "issue20-factories");
+        cfg.Variants[0].Factories.AddRange(new[]
+        {
+            "SampleLegacy.Forms.ClientSearchFormFactory", "ClientSearchFormFactory.ForRegion",
+            "SampleLegacy.Forms.ClientSearchFormFactory.Missing", "NoSuchFactory.Create",
+        });
+        Extractor.Run(cfg, "M", "ClientSearchForm", new StringWriter());
+        var m = System.Text.Json.JsonSerializer.Deserialize<FormManifest>(File.ReadAllText(Path.Combine(cfg.Output, "M", "manifests", "ClientSearchForm.json")), Json.Options)!;
+        var problems = m.Diagnostics.Where(d => d.Code == "VARIANT-CONFIG" && d.Message.Contains("factories entry", StringComparison.Ordinal)).Select(d => d.Message).OrderBy(x => x, StringComparer.Ordinal).ToList();
+        Assert.Equal(2, problems.Count);
+        Assert.StartsWith("variant Larkspur: factories entry 'NoSuchFactory.Create' matches no type", problems[0]);
+        Assert.StartsWith("variant Larkspur: factories entry 'SampleLegacy.Forms.ClientSearchFormFactory.Missing' reads no factory", problems[1]);
+        Assert.Contains(m.Factories!, f => f.Id == "method:SampleLegacy.Forms.ClientSearchFormFactory.Create(string)");
+    }
+
+    [Fact]
+    public void issue_20_a_configured_subclass_that_derives_from_no_matched_form_is_diagnosed_not_dropped()
+    {
+        // input: a third variant Ivy listing PolicyWizardStep3 (an XtraForm, not a ClientSearchForm subclass) next to the
+        // fixture's Larkspur and Thistle; output: Ivy is no delta, and every manifest of the run says why in one VARIANT-CONFIG
+        var cfg = ExtractConfig.Load(Path.Combine(_f.RepoRoot, "fixtures", "extract.config.json"));
+        cfg.Output = Path.Combine(_f.OutRoot, "issue20-unclaimed");
+        cfg.Variants.Add(new VariantConfig { Id = "Ivy", Subclasses = { "PolicyWizardStep3" } });
+        Extractor.Run(cfg, "M", "ClientSearchForm", new StringWriter());
+        var m = System.Text.Json.JsonSerializer.Deserialize<FormManifest>(File.ReadAllText(Path.Combine(cfg.Output, "M", "manifests", "ClientSearchForm.json")), Json.Options)!;
+        Assert.Equal(new[] { "var:Larkspur", "var:Thistle" }, m.Variants!.Select(v => v.Id));
+        var problem = Assert.Single(m.Diagnostics, d => d.Code == "VARIANT-CONFIG");
+        Assert.Equal("variant Ivy: subclass 'PolicyWizardStep3' derives from no form of the main project (its base chain stops at 'XtraForm')", problem.Message);
+    }
+
+    [Fact]
+    public void issue_20_variants_of_a_form_the_glob_does_not_select_are_not_a_config_error()
+    {
+        // input: fixtures/extract.config.json (Larkspur and Thistle customise ClientSearchForm, Larkspur with a configured factory)
+        // extracting only DynamicRidersForm; output: neither variant applies to this run, and DynamicRidersForm carries no variants
+        // and no VARIANT-CONFIG, not even for the factory of a unit this run does not describe, whose file the run does not load
+        string Loaded(string log) => log[log.IndexOf("files loaded:", StringComparison.Ordinal)..log.IndexOf("   rounds:", StringComparison.Ordinal)];
+        var plain = ExtractConfig.Load(Path.Combine(_f.RepoRoot, "fixtures", "extract.config.json"));
+        plain.Output = Path.Combine(_f.OutRoot, "issue20-unselected-plain");
+        var plainLog = new StringWriter();
+        Extractor.Run(plain, "M", "DynamicRidersForm", plainLog);
+        var cfg = ExtractConfig.Load(Path.Combine(_f.RepoRoot, "fixtures", "extract.config.json"));
+        cfg.Output = Path.Combine(_f.OutRoot, "issue20-unselected");
+        cfg.Variants[0].Factories.Add("SampleLegacy.Forms.ClientSearchFormFactory");
+        var log = new StringWriter();
+        Extractor.Run(cfg, "M", "DynamicRidersForm", log);
+        Assert.Equal(Loaded(plainLog.ToString()), Loaded(log.ToString()));
+        var m = System.Text.Json.JsonSerializer.Deserialize<FormManifest>(File.ReadAllText(Path.Combine(cfg.Output, "M", "manifests", "DynamicRidersForm.json")), Json.Options)!;
+        Assert.Null(m.Variants);
+        Assert.DoesNotContain(m.Diagnostics, d => d.Code is "VARIANT-CONFIG" or "VARIANT-INTERMEDIATE");
+    }
+
+    [Fact]
+    public void issue_20_a_base_chain_that_leaves_the_main_project_is_left_to_the_compiler()
+    {
+        // input: a project Wren whose OrderSearchForm derives from Common.BaseForm, declared in a referenced Wren.Common.dll
+        // (BaseForm : XtraForm), and whose InvoiceForm derives from Shell.ShellForm, a main-project class with no base list that
+        // formBaseTypes selects with the wildcard Wren.Shell.*; a variant project Heron lists a subclass of each.
+        // output: both forms carry var:Heron with a delta and no VARIANT-CONFIG; without the wildcard, InvoiceForm's written chain
+        // is fully indexed and reaches no form, so HeronInvoiceForm is VARIANT-CONFIG and OrderSearchForm keeps its variant
+        var root = Path.Combine(_f.OutRoot, "issue20-referenced");
+        void Write(string rel, string text) { var p = Path.Combine(root, rel); Directory.CreateDirectory(Path.GetDirectoryName(p)!); File.WriteAllText(p, text); }
+        string Csproj(params string[] files) => "<Project ToolsVersion=\"4.0\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\n  <ItemGroup>\n"
+            + string.Concat(files.Select(f => $"    <Compile Include=\"{f}\" />\n")) + "  </ItemGroup>\n</Project>\n";
+        string Form(string ns, string name, string baseName, string button) =>
+            $"using System;\n\nnamespace {ns}\n{{\n    public class {name} : {baseName}\n    {{\n        private DevExpress.XtraEditors.SimpleButton {button};\n\n"
+            + $"        public {name}()\n        {{\n            InitializeComponent();\n        }}\n\n        private void InitializeComponent()\n        {{\n"
+            + $"            this.{button} = new DevExpress.XtraEditors.SimpleButton();\n            this.{button}.Name = \"{button}\";\n"
+            + $"            this.{button}.Click += new System.EventHandler(this.{button}_Click);\n            this.Controls.Add(this.{button});\n        }}\n\n"
+            + $"        protected virtual void {button}_Click(object sender, EventArgs e)\n        {{\n            Text = \"{name}\";\n        }}\n    }}\n}}\n";
+        string Variant(string name, string baseName, string button) =>
+            $"using System;\n\nnamespace Wren.Tenants.Heron\n{{\n    public class {name} : {baseName}\n    {{\n"
+            + $"        protected override void {button}_Click(object sender, EventArgs e)\n        {{\n            base.{button}_Click(sender, e);\n        }}\n    }}\n}}\n";
+        Write("Wren/Wren.csproj", Csproj("Forms\\OrderSearchForm.cs", "Forms\\InvoiceForm.cs", "Shell\\ShellForm.cs"));
+        Write("Wren/Forms/OrderSearchForm.cs", Form("Wren.Orders", "OrderSearchForm", "Common.BaseForm", "btnFind"));
+        Write("Wren/Forms/InvoiceForm.cs", Form("Wren.Invoices", "InvoiceForm", "Shell.ShellForm", "btnPay"));
+        Write("Wren/Shell/ShellForm.cs", "namespace Wren.Shell\n{\n    public class ShellForm\n    {\n        public string Text { get; set; }\n"
+            + "        public System.Collections.Generic.List<object> Controls { get; } = new System.Collections.Generic.List<object>();\n    }\n}\n");
+        Write("Heron/Heron.csproj", Csproj("Forms\\HeronOrderSearchForm.cs", "Forms\\HeronInvoiceForm.cs"));
+        Write("Heron/Forms/HeronOrderSearchForm.cs", Variant("HeronOrderSearchForm", "Wren.Orders.OrderSearchForm", "btnFind"));
+        Write("Heron/Forms/HeronInvoiceForm.cs", Variant("HeronInvoiceForm", "Wren.Invoices.InvoiceForm", "btnPay"));
+
+        // the referenced assembly: built against the fixture's references, never part of the Wren project's files
+        var fixtureCfg = ExtractConfig.Load(Path.Combine(_f.RepoRoot, "fixtures", "extract.config.json"));
+        var refs = Parity.Project.CompilationBuilder.BuildReferences(Parity.Project.CsprojReader.Read(fixtureCfg.Resolve(fixtureCfg.Project)), fixtureCfg, new List<Diagnostic>());
+        var common = Microsoft.CodeAnalysis.CSharp.CSharpCompilation.Create("Wren.Common",
+            new[] { Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText("namespace Wren.Common\n{\n    public class BaseForm : DevExpress.XtraEditors.XtraForm { }\n}\n") },
+            refs, new Microsoft.CodeAnalysis.CSharp.CSharpCompilationOptions(Microsoft.CodeAnalysis.OutputKind.DynamicallyLinkedLibrary));
+        var dll = Path.Combine(root, "lib", "Wren.Common.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(dll)!);
+        using (var fs = File.Create(dll)) Assert.True(common.Emit(fs).Success);
+
+        ExtractConfig Config(string output, bool wildcard)
+        {
+            var cfg = ExtractConfig.Load(Path.Combine(_f.RepoRoot, "fixtures", "extract.config.json"));
+            cfg.Project = Path.Combine(root, "Wren", "Wren.csproj");
+            cfg.Output = Path.Combine(_f.OutRoot, output);
+            cfg.SelfAssembly = null;
+            cfg.References.Add(dll);
+            if (wildcard) cfg.FormBaseTypes.Add("Wren.Shell.*");
+            cfg.Variants = new() { new VariantConfig { Id = "Heron", Project = Path.Combine(root, "Heron", "Heron.csproj"), Subclasses = { "HeronOrderSearchForm", "HeronInvoiceForm" } } };
+            return cfg;
+        }
+        FormManifest Read(ExtractConfig cfg, string form) =>
+            System.Text.Json.JsonSerializer.Deserialize<FormManifest>(File.ReadAllText(Path.Combine(cfg.Output, "M", "manifests", form + ".json")), Json.Options)!;
+
+        var wild = Config("issue20-referenced-wildcard", wildcard: true);
+        Extractor.Run(wild, "M", "*", new StringWriter());
+        foreach (var (form, cls, button) in new[] { ("OrderSearchForm", "HeronOrderSearchForm", "btnFind"), ("InvoiceForm", "HeronInvoiceForm", "btnPay") })
+        {
+            var m = Read(wild, form);
+            var v = Assert.Single(m.Variants!);
+            Assert.Equal(("var:Heron", $"Wren.Tenants.Heron.{cls}"), (v.Id, v.Class));
+            Assert.Contains($"var:Heron/override/{button}_Click", v.Delta.Select(d => d.Id));
+            Assert.DoesNotContain(m.Diagnostics, d => d.Code is "VARIANT-CONFIG" or "BASE-UNRESOLVED");
+        }
+
+        var plain = Config("issue20-referenced-plain", wildcard: false);
+        Extractor.Run(plain, "M", "*", new StringWriter());
+        Assert.False(File.Exists(Path.Combine(plain.Output, "M", "manifests", "InvoiceForm.json")), "InvoiceForm is no form without the wildcard");
+        var order = Read(plain, "OrderSearchForm");
+        Assert.Equal("var:Heron", Assert.Single(order.Variants!).Id);
+        var problem = Assert.Single(order.Diagnostics, d => d.Code == "VARIANT-CONFIG");
+        Assert.Equal("variant Heron: subclass 'HeronInvoiceForm' derives from no form of the main project (its base chain stops at 'InvoiceForm')", problem.Message);
     }
 }
 

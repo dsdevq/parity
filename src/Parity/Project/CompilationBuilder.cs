@@ -85,6 +85,12 @@ public static class CompilationBuilder
             if (File.Exists(self)) AddRef(self);
             else diags.Add(new Diagnostic("REF-MISSING", $"selfAssembly not found: {self}", null));
         }
+        foreach (var v in cfg.Variants.Where(v => v.SelfAssembly != null))
+        {
+            var self = cfg.Resolve(v.SelfAssembly!);
+            if (File.Exists(self)) AddRef(self);
+            else diags.Add(new Diagnostic("REF-MISSING", $"variant {v.Id} selfAssembly not found: {self}", null));
+        }
 
         if (cfg.ReferencesFromProject)
         {

@@ -26,6 +26,8 @@ public sealed class ExtractConfig
     public List<string> IgnoreCalls { get; set; } = new() { "System.*", "DevExpress.*" };
     /// <summary>Read by adopt/hooks/guard-legacy.sh, not by the extractor; typed here so the keys are part of the config contract.</summary>
     public GuardConfig Guard { get; set; } = new();
+    /// <summary>Tenant or customer variants of the module's forms (issue #20). Each one's subclasses become a delta on their base form.</summary>
+    public List<VariantConfig> Variants { get; set; } = new();
 
     [JsonIgnore] public string BaseDir { get; set; } = ".";
 
@@ -47,6 +49,20 @@ public sealed class GuardConfig
     public List<string> DenyTools { get; set; } = new();
     /// <summary>Directories readable and writable in specify and implement besides the consuming repo. Relative entries are relative to the config file.</summary>
     public List<string> AllowRoots { get; set; } = new();
+}
+
+/// <summary>
+/// One variant. Project is the variant's csproj, relative to this config (omit it when the variant lives in the main project).
+/// Subclasses limits the variant to these class names (required without Project). Factories names extra factories to read
+/// when the factory does not mention two implementations of the same form: a type, or Type.Method, simple or namespace-qualified.
+/// </summary>
+public sealed class VariantConfig
+{
+    public string Id { get; set; } = "";
+    public string? Project { get; set; }
+    public string? SelfAssembly { get; set; }
+    public List<string> Subclasses { get; set; } = new();
+    public List<string> Factories { get; set; } = new();
 }
 
 public static class Json

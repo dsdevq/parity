@@ -24,10 +24,18 @@ evidence file; every id you write must appear there verbatim.
 4. Rules: read each handler and the methods it reaches, in the manifest. One rule per observable
    behavior; a rule may cover several events. `given`/`when`/`then` describe what the legacy code does,
    in user terms, naming controls. Cite the handler and every method the behavior depends on. If a
-   handler calls a `svc:` id, name it in `then` and list a fixture.
-5. Anything you cannot establish from the manifest goes under Open questions, phrased as a question.
+   handler calls a `svc:` id, name it in `then` and list a fixture. A rule that branches on the reply
+   declares `outcomes:` and lists a fixture per outcome by its `variant`, or an `outcome-gap:` line.
+5. Constant values and resource texts are in the manifest's Constants and resource texts table and in
+   the comment beside their first use in a slice: write the value into `then`, do not ask for it.
+   Anything you cannot establish from the manifest goes under Open questions, phrased as a question.
    Never resolve it by assumption and never use hedging words in a rule.
 6. Events whose handler needs no port go under No behavior with the reason.
+   If the manifest has a Variants section, the rules above describe the base. For each variant, account for
+   every delta id: a rule with `variants: <Id>` that covers or cites it, or a row under Variant deltas without
+   a rule with the reason. A base rule that does not hold for a variant (it cites a handler the variant
+   replaces) gets `variants:` without that variant. The Factories table says which tenant key gets which
+   variant; cite the factory method where a rule depends on it.
 7. Run `parity lint legacy/<Module>/spec/<Form>.md`. Fix every error. Repeat until `0 error(s)`.
 8. Run `parity lint ... --gate` once and report the coverage findings as the list of what is still
    missing (do not force-close Open questions to make it pass).

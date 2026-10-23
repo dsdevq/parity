@@ -9,5 +9,9 @@
   "ignoreCalls": ["System.*", "DevExpress.*"],
   "controlCategories": "../templates/control-categories.json",
   "maxCallDepth": 2,
-  "output": "../.out/legacy"
+  "output": "../.out/legacy",
+  "variants": [
+    { "id": "Larkspur", "subclasses": ["LarkspurClientSearchForm"] },
+    { "id": "Thistle", "project": "SampleLegacy.Thistle/SampleLegacy.Thistle.csproj", "selfAssembly": "SampleLegacy.Build/bin/Debug/net10.0/SampleLegacy.dll" }
+  ]
 }

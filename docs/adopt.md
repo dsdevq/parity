@@ -44,12 +44,22 @@ Put the `parity` binary on PATH (`bin/publish.sh win-x64` here, or a release zip
    issue with `parity report <manifest.json>` and the probe shapes, and acknowledge the entries in
    `extractor-debt.md` meanwhile. Never quote the manifest's Raw or Diagnostics sections directly;
    they carry real identifiers.
+   When some tenants get a customised subclass of a form instead of the form, list them under `variants`
+   (one entry per tenant family; see `templates/extract.config.json`): `id` names the variant in specs,
+   `subclasses` the class names to describe, `project` and `selfAssembly` the variant's csproj and built
+   assembly when it lives outside the module's project (`subclasses` then defaults to every subclass of a
+   module form found there). `factories` names factories to read when the tool does not find them itself:
+   a type, or `Type.Method`, simple or namespace-qualified. The log prints `variant <id>: <class> on <form>`
+   per variant, listing each subclass found; a `VARIANT-CONFIG` diagnostic means an entry could not be applied.
 4. Commit the manifests. They are generated, deterministic, and the thing specs bind to.
 5. Record fixtures for every id in `module.json` `serviceCalls` with your own runner, one file per
-   recording, `service` field set. Quote the legacy facts a rule will need that the manifest lacks
-   with `parity evidence add <Form> <file>:<start>-<end> --note <text>` (the file relative to the
-   legacy root; `--config` defaults to `legacy/extract.config.json`). It reads `legacy/.phase` and
-   refuses in `specify` and `implement`: the agent there may cite evidence, not collect it.
+   recording, `service` and `recorded` set. An outcome the host cannot be made to return is a synthetic
+   fixture: `parity fixture scaffold <svc-id> --from <recorded.json> --variant <outcome>` writes a
+   labelled copy to edit into that reply (`docs/spec.md`, Fixtures). Quote the legacy facts a rule will
+   need that the manifest lacks with `parity evidence add <Form> <file>:<start>-<end> --note <text>`
+   (the file relative to the legacy root; `--config` defaults to `legacy/extract.config.json`). It reads
+   `legacy/.phase` and refuses in `specify` and `implement`: the agent there may cite evidence, not
+   collect it.
 6. Set `legacy/.phase` to `specify`, start a fresh agent session, run the `parity-specify` skill for
    the form. The hook denies anything outside the consuming repo in this phase; the agent works from
    `manifests/<Form>.md` and `evidence/<Form>.json`. Iterate until `parity lint` is green. The linter

@@ -20,11 +20,11 @@ reviewed-by: <name> <YYYY-MM-DD>
 A re-extract that changes the manifest makes the spec `STALE`. Run `parity rebind spec/<Class>.md`
 before anything else. It diffs the manifest the spec was written against (`manifests/<Class>.prev.json`,
 or `--prev <old.json>` recovered from git) with the one on disk and checks every id the spec cites: each
-rule's `covers`, `cite` and the `ctrl:`/`dyn:`/`svc:` ids in its `then`, and the ids of the Fields,
-No behavior and Service calls rows. An id is affected when it vanished or changed in more than its
+rule's `covers`, `cite` and the `ctrl:`/`dyn:`/`svc:`/`var:` ids in its `then`, and the ids of the Fields,
+No behavior, Service calls and Variant deltas without a rule rows. An id is affected when it vanished or changed in more than its
 location (`loc` alone moving is not a change to what the spec says). A cited `handler:` or `method:`
 is also affected when any method reachable from it through the manifest `calls` edges (transitive,
-cycle-safe, edges taken from both manifests) vanished or changed, even if the rule does not cite that
+cycle-safe, edges taken from both manifests; a `var:` override, handler or ctor entry's calls count) vanished or changed, even if the rule does not cite that
 method; the work list names the path as `<rule> via handler:X -> method:Y`.
 
 - Nothing affected: the `manifest:` line is rewritten in place to the new hash, exit 0.
@@ -38,7 +38,8 @@ method; the work list names the path as `<rule> via handler:X -> method:Y`.
 ## Sections, in this order
 
 `# <title>` and a `Purpose:` line. Then exactly these `##` sections: **Fields**, **Rules**,
-**No behavior**, **Service calls**, **Open questions**.
+**No behavior**, **Service calls**, **Open questions**. A form with variants may add **Variant deltas
+without a rule** before Open questions.
 
 ### Fields
 
@@ -52,18 +53,41 @@ category input, action, grid, column, display or unknown, per container that has
 ```
 ### R-<Class>-NNN
 - kind: validation | enablement | navigation | data | calculation | ui | service | lifecycle
-- covers: evt:..., evt:...          at least one; dyn: ids also allowed
-- cite: handler:..., method:..., ev:...   at least one handler: or method:; ev: optional
+- variants: base, A, B               optional; absent means base and every variant
+- covers: evt:..., evt:...          at least one; dyn: ids also allowed, var: event/added/removed/retagged/service/constant ids
+- cite: handler:..., method:..., ev:...   at least one handler: or method:; ev: optional; var: override/handler/ctor ids also allowed
 - given: ...
 - when: ...
 - then: ...                         must name a control (ctrl:/dyn: id or control name), a svc: or a form:
 - fixtures: name, name              optional; each must exist as fixtures/<name>.json
+- outcomes: valid, invalid, blank   optional; the outcome names are yours
+- outcome-gap: blank - <reason>     optional, one line per outcome that has no fixture
 - quirk: preserve|diverge - ..., decided-by <name> <YYYY-MM-DD>   optional
 ```
 
+A rule that distinguishes outcomes of a service reply declares them in `outcomes`; lint never infers
+them from the prose. Each declared outcome needs a fixture the rule uses whose `variant` is that
+outcome, or an `outcome-gap` line saying why there is none (`FIXTURE-OUTCOME` otherwise). `outcome-gap` is the one key a rule may
+repeat, and it must name a declared outcome.
+
 Ids containing commas (method parameter lists) are split on top-level commas only.
+
+`variants:` scopes a rule to the tenants it holds for. `base` is the form itself; the other names are the
+variant names in the manifest. A rule without the field holds everywhere, so it may not cite a base handler
+or method that some variant replaces, nor cover an event on a control some variant removes (`VAR-SCOPE`):
+scope it to the variants where it is true and write the replacement's rule separately. A `var:` id is
+described only by a rule whose `variants:` names its variant and not `base`. Base coverage
+(`COV-EVENT`, `COV-HANDLER`) counts only rules whose scope includes `base`.
 Hedging words anywhere in given/when/then are errors: probably, likely, assume(d), should, seem(s),
 typically, usually, maybe, might, presumably, appears to, "I think".
+
+Literal values come from the rendered manifest's **Constants and resource texts** table, `| kind | name |
+value | type | declared | other cultures | first use | used by |`, and from the comment the renderer appends
+to the first line in each slice that reads one (`// PolicyLimits.ReasonMaxLength = 40`,
+`// Captions.lsReasons = "Reasons are kept for audit"`). Write the value in `then` text (the message shown,
+the limit checked); never ask it as an Open question. A row is a fact, not an id: the rule still cites
+the handler or method that reads it. A value marked "not found in the project's default-culture resx" is
+an Open question (and a `RESOURCE-KEY-MISSING` diagnostic).
 
 ### No behavior
 
@@ -74,6 +98,12 @@ either here or in some rule's `covers`, never both.
 
 `| service | called from | fixtures |`: one row per `svc:` id in the manifest, with at least one fixture
 whose `service` field equals the id.
+
+### Variant deltas without a rule
+
+`| delta | reason |`: optional. `var:` delta ids that need no rule of their own (a caption change already
+in the Fields note, a removed control nothing depended on). A reason is required; an id is either here or in
+a rule, never both. Every delta entry of every variant must be in one of the two (`VAR-UNCOVERED`).
 
 ### Open questions
 
@@ -121,11 +151,36 @@ rules; the old id stays in the file until no spec cites it.
 
 ## Fixtures
 
-`fixtures/<name>.json`:
+`fixtures/<name>.json`, one reply of one service (`templates/fixture.json` is the blank):
 
 ```json
-{ "service": "svc:IService.Method", "recorded": "YYYY-MM-DD", "request": {}, "response": {} }
+{ "service": "svc:IService.Method", "recorded": "YYYY-MM-DD | synthetic",
+  "variant": "invalid", "scenario": "...", "source": "...", "shapeVerified": true, "note": "...",
+  "request": {}, "response": {} }
 ```
 
-How they are recorded is the adopter's business (a headless runner against the old API); the lint only
-checks presence and the service id.
+- `service` and `recorded` are required. `recorded` is the date the reply was captured from the host,
+  or `synthetic` for a reply written by hand because the host cannot be made to return it. Anything
+  else is `FIXTURE-INVALID`. A recorded fixture needs nothing more.
+- `variant` names the outcome the reply stands for (the names in a rule's `outcomes`).
+- `scenario` is a free id for the business scenario the reply belongs to.
+- `source` says where it came from: the host, environment or tool run, or `scaffolded from <file>`.
+- A synthetic fixture needs `shapeVerified: true` (its shape was checked against a real reply) and a
+  `note` saying what it stands for; without both it is a gate error (`FIXTURE-SYNTHETIC`).
+
+The fixtures a rule uses: a rule that lists `fixtures:` is judged by them alone; otherwise by its
+services' rows (the Service calls rows that name it in `called from`, and those of a `svc:` in `then`).
+A rule whose every such fixture is synthetic passes the gate with a `FIXTURE-SYNTHETIC` warning: a
+test built on those fixtures must say it runs on synthetic replies. The lint summary counts the fixtures the spec lists, `fixtures: N (M synthetic)`.
+
+How replies are recorded is the adopter's business (a headless runner against the old API). A synthetic
+variant starts from a recorded one:
+
+```
+parity fixture scaffold svc:IService.Method --from fixtures/<name>.json --variant invalid [--out <dir>]
+```
+
+writes `fixtures/<name>.invalid.json` (or into `--out`): the same service, `recorded: synthetic`, the
+variant, `source: scaffolded from <name>.json by parity fixture scaffold`, `shapeVerified: false`, an
+empty note, and the request and response copied for you to edit into the invalid reply. It refuses
+when `--from` is itself synthetic, records another service, or the target exists.
