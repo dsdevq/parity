@@ -194,8 +194,11 @@ can cite an `ev:` record. `specify` and `implement` keep the legacy tree unavail
 1. A pass is not done until the registries are updated. After an extract that changed a manifest the
    revision moves and every registry file is `REGISTRY-STALE`; `parity lint --gate` on any spec of the
    module fails on it too. The extract log prints `changed: <Form>` per changed manifest, `stale spec:`
-   per spec bound to it, and `registry: STALE` when the module has a registry. In `map` and `extract`
-   the stop hook runs `parity registry check` on each module it touched.
+   per spec bound to it, and `registry: STALE` when the module has a registry. The stop hook decides from
+   the state of each module that has a `registry/`, not from the uncommitted diff, so committing first does
+   not hide a stale registry. In `extract` a stale registry never blocks the stop (the extract agent cannot
+   review it): the hook names the stale modules and says to run the map phase next. In `map`, `specify` and
+   `implement` a stale registry blocks the stop with `REGISTRY-STALE` until map has reviewed and stamped it.
 2. Review: `parity diff manifests/<Form>.prev.json manifests/<Form>.json` per changed form, then each
    scenario, decision and dependency entry that cites an id in it. Specs move with `parity rebind`.
 3. `parity registry stamp` once check is green.

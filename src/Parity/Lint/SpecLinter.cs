@@ -195,7 +195,7 @@ public static partial class SpecLinter
                 if (scenarioVersions.Value == null) E(line, "SCENARIO-UNKNOWN", $"{r.Id}: '{sid}' cannot be checked: the module has no readable registry/scenarios.json");
                 else if (!scenarioVersions.Value.TryGetValue(sid, out var v)) E(line, "SCENARIO-UNKNOWN", $"{r.Id}: '{sid}' is not in registry/scenarios.json");
                 else if (!sm.Groups[2].Success) E(line, "SCENARIO-VERSION", $"{r.Id}: '{sid}' names no version; write {sid}@{v} (registry has v{v})");
-                else if (int.Parse(sm.Groups[2].Value) != v) E(line, "SCENARIO-VERSION", $"{r.Id}: '{s}' was written against v{sm.Groups[2].Value}, registry has v{v}; re-read the scenario, then update the rule and its version");
+                else if (!int.TryParse(sm.Groups[2].Value, out var written) || written != v) E(line, "SCENARIO-VERSION", $"{r.Id}: '{s}' was written against v{sm.Groups[2].Value}, registry has v{v}; re-read the scenario, then update the rule and its version");
             }
 
             // outcomes are declared, never inferred from prose; each one is a fixture variant or a stated gap

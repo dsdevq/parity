@@ -161,7 +161,7 @@ shared state, embeds), and `module.json` joins the edges into graphs: who produc
 shared field, which host composes which unit, and every caller of each service. The rest of the context is
 knowledge, not code: business scenarios, a service's error cases, a human's answers. That knowledge lives
 in `registry/`, written in a `map` phase that may read the source. It is checked against the extract like a
-spec is, and it goes STALE like a spec does (`docs/adopt.md`, The map phase and the registries). Three
+spec is, and it goes STALE like a spec does (`docs/adopt.md`, The map phase and the registries). Four
 decisions shape it.
 
 **Shared state is syntactic, bounded by depth.** A member of a configured `sharedState` type is resolved
@@ -209,6 +209,15 @@ There is no field for a client, a policy number or an amount, and an unknown fie
 session, so host data would leak by default, and data copied from one test run turns a scenario into a
 fixture. Recorded replies with their data belong in `fixtures/`, which already labels each one's
 provenance. A scenario points at them by being named in their `scenario` field.
+
+**The stop hook reads state, and extract hands a stale registry to map.** Whether a registry is stale is a
+fact of the working tree (`registry/` exists and the stamps differ from the module's revision), so the hook
+checks every module that has a `registry/` in every phase instead of the modules in the uncommitted diff. A
+diff-based check never fires in the flow the extract skill prescribes: the agent commits `manifests/` and
+`module.json` first, and the diff is then empty. The phase decides only whether the answer blocks. The extract
+agent runs deterministic scripts and cannot do the review, which needs the legacy source and belongs to `map`.
+So in `extract` the hook prints the stale modules and "run the map phase next" and lets the turn end. In
+`map`, `specify` and `implement` the same finding blocks until map has reviewed and stamped the registry.
 
 ## What it deliberately does not do
 

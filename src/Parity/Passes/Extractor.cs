@@ -19,7 +19,7 @@ public sealed record ExtractSummary(string Form, int Controls, int Events, int H
 /// </summary>
 public static class Extractor
 {
-    public const string SchemaVersion = "1";
+    public const string SchemaVersion = "2";
     private const int MaxRounds = 8;
 
     public static List<ExtractSummary> Run(ExtractConfig cfg, string module, string formGlob, TextWriter log)

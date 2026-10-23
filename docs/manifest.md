@@ -1,4 +1,4 @@
-# Manifest schema (schemaVersion 1)
+# Manifest schema (schemaVersion 2)
 
 `manifests/<Form>.json`, one per form class. Lists are sorted; there are no timestamps; the file is
 byte-stable for the same input, so `git diff` is meaningful and the spec binds to its SHA-256.
@@ -17,7 +17,7 @@ that differ (`props.Text`, `source`, `loc`), sorted by id, and exits 0 when iden
 
 | Field | Type | Notes |
 |---|---|---|
-| `schemaVersion` | string | bump on breaking change |
+| `schemaVersion` | string | bump on breaking change; see Schema history |
 | `id` | `form:<Class>` | |
 | `className`, `namespace` | string | |
 | `bases` | string[] | the base-type chain |
@@ -236,6 +236,18 @@ Each entry is another unit of the module that this unit creates. `mode` is one o
 (Factories, #20) say which variant each host key gets. `calls`, `sets` and `reads` are `member, args, loc,
 reflection?`: what the host does with the instance. A `GetMethod(...).Invoke` on it is a call with
 `reflection: true`.
+
+## Schema history
+
+**2.** A unit that a handler opens with `new X()` and does not add to a container no longer gets a `dyn:` entry.
+It gets an `embed:` entry, and the callee's body is no longer sliced into the host: the call is recorded as a
+call, and the callee's code is in its own manifest. A spec that cited a `dyn:` id of such a unit, or a
+`method:` id that was reached only through another unit, loses its target.
+
+Migration: re-extract the module, which moves each changed manifest to `.prev.json`. `parity diff
+manifests/<Form>.prev.json manifests/<Form>.json` lists the dropped `dyn:` and `method:` ids and the new
+`embed:` ids, and `parity rebind <spec>` lists each spec that cites a dropped id as stale. Cite the unit's own
+manifest, or the `embed:` id, instead.
 
 ## module.json
 

@@ -328,10 +328,6 @@ public sealed partial class IssueTests
         // input: the guard and stop hooks in a temp repo with .phase map; evidence recorded in map; a registry citing it.
         // output: the source and the module readable, writes outside registry/ and evidence/ refused; specify and implement
         // still refuse the source; the stop hook gates the registry in map and refuses other changes
-        var kit = File.ReadAllText(Path.Combine(_f.RepoRoot, "adopt", ".claude", "skills", "parity-map", "SKILL.md"));
-        Assert.Contains("legacy/.phase", kit);
-        Assert.Contains("\"${PARITY_BIN:-parity}\" registry check legacy/<Module> --gate", kit);
-        Assert.Contains("map", File.ReadAllText(Path.Combine(_f.RepoRoot, "docs", "adopt.md")));
         var phases = Kit.Load().Manifest.Phases;                                                   // init installs the skill, doctor accepts .phase map
         Assert.Equal(new[] { "extract", "map", "specify" }, phases.Select(x => x.Name).Take(3));
         Assert.Equal(("parity-map", true), (phases[1].Skill, phases[1].Driven));
@@ -432,14 +428,32 @@ public sealed partial class IssueTests
             var outside = Stop();
             Assert.Equal(2, outside.Code);
             Assert.Contains("map phase changed files outside legacy/<module>/registry/ and evidence/: src/app.ts", outside.Err);
-            // extract: a pass that changed manifests is not done until the registry is checked too
+            // extract: the hook reads state, not the diff; a stale registry hands off to map and never blocks
             File.Delete(Path.Combine(work, "src", "app.ts"));
-            File.WriteAllText(phase, "extract\n");
-            File.WriteAllText(calls, "");
             Directory.CreateDirectory(Path.Combine(work, "legacy", "M", "manifests"));
             File.WriteAllText(Path.Combine(work, "legacy", "M", "manifests", "X.json"), "{}");
-            Assert.Equal(0, Stop().Code);
+            Assert.True(Git(work, "add", "-A") && Git(work, "-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-q", "-m", "extract"));
+            File.WriteAllText(phase, "extract\n");
+            File.WriteAllText(calls, "");
+            var clean = Stop();
+            Assert.Equal(0, clean.Code);
             Assert.Contains("registry check legacy/M", File.ReadAllText(calls));
+            Assert.DoesNotContain("map phase", clean.Err);
+            File.WriteAllText(Path.Combine(baseDir, "red"), "");
+            var handoff = Stop();
+            Assert.Equal(0, handoff.Code);
+            Assert.Contains("legacy/M is STALE", handoff.Err);
+            Assert.Contains("run the map phase next", handoff.Err);
+            foreach (var p in new[] { "map", "specify", "implement" })
+            {
+                File.WriteAllText(phase, p + "\n");
+                var blocked = Stop();
+                Assert.True(blocked.Code == 2, $"{p}: a stale registry blocks the stop on a clean tree");
+                Assert.Contains("REGISTRY-STALE", blocked.Err);
+            }
+            File.Delete(Path.Combine(baseDir, "red"));
+            File.WriteAllText(phase, "specify\n");
+            Assert.Equal(0, Stop().Code);
         }
         finally { Directory.Delete(baseDir, true); }
     }

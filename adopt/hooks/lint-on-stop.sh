@@ -1,9 +1,11 @@
 #!/usr/bin/env sh
 # Claude Code Stop hook. Lints every spec changed in the working tree; in the implement phase it gates.
-# The registries (#17): in the extract phase a module whose manifests changed and that has a registry/ is checked
-# (a pass is not done until the registry is reviewed and stamped); in the map phase every module whose registry/ or
-# evidence/ changed is checked with --gate, and any change outside legacy/<module>/registry/ and evidence/ (other than
-# the kit's own files: legacy/hooks/, legacy/templates/ and the files directly in legacy/) is refused, the net for writes made from a shell.
+# The registries (#17) are checked from state, not from the diff: every module with a registry/ is checked in every
+# phase, so committing first does not hide a stale one. In extract a stale registry never blocks (the extract agent
+# cannot review it): the stale modules are named and the map phase is next. In map, specify and implement it blocks
+# with REGISTRY-STALE until map has reviewed and stamped it. In map a module whose registry/ or evidence/ changed is
+# checked with --gate, and any change outside legacy/<module>/registry/ and evidence/ (other than the kit's own files:
+# legacy/hooks/, legacy/templates/ and the files directly in legacy/) is refused, the net for writes made from a shell.
 # Exit 2 keeps the turn open with the findings shown to the agent.
 set -u
 bin="${PARITY_BIN:-parity}"
@@ -16,19 +18,26 @@ if [ "$phase" = map ]; then
   outside=$(printf '%s\n' "$changed" | grep -vE '^legacy/[^/]+/(registry|evidence)/|^legacy/[^/]+$|^legacy/(hooks|templates)/|^$' | tr '\n' ' ' | sed 's/ *$//')
   if [ -n "$outside" ]; then echo "parity: map phase changed files outside legacy/<module>/registry/ and evidence/: $outside; map writes only the registries and evidence, revert the rest" >&2; exit 2; fi
 fi
+handoff=""
 case "$phase" in
-  map) modules=$(printf '%s\n' "$changed" | sed -nE 's#^(legacy/[^/]+)/(registry|evidence)/.*#\1#p' | sort -u) ;;
-  extract) modules=$(printf '%s\n' "$changed" | sed -nE 's#^(legacy/[^/]+)/manifests/.*#\1#p' | sort -u) ;;
-  *) modules= ;;
-esac
-for m in $modules; do
-  [ -d "$m/registry" ] || continue
-  if [ "$phase" = map ]; then r=$("$bin" registry check "$m" --gate 2>&1); else r=$("$bin" registry check "$m" 2>&1); fi
-  rc=$?
-  out="$out
+  extract|map|specify|implement)
+    touched=$(printf '%s\n' "$changed" | sed -nE 's#^(legacy/[^/]+)/(registry|evidence)/.*#\1#p' | sort -u)
+    for d in legacy/*/registry; do
+      [ -d "$d" ] || continue
+      m=${d%/registry}
+      if [ "$phase" = map ] && printf '%s\n' "$touched" | grep -qx "$m"; then
+        r=$("$bin" registry check "$m" --gate 2>&1); rc=$?
+        out="$out
 $r"
-  [ $rc -eq 0 ] || status=2
-done
+        [ $rc -eq 0 ] || status=2
+        continue
+      fi
+      r=$("$bin" registry check "$m" 2>&1) || true
+      case "$r" in *REGISTRY-STALE*) ;; *) continue ;; esac
+      if [ "$phase" = extract ]; then handoff="$handoff $m"; else out="$out
+$r"; status=2; fi
+    done ;;
+esac
 
 specs=$(printf '%s\n' "$changed" | grep -E '^legacy/.+/spec/.+\.md$')
 for s in $specs; do
@@ -39,5 +48,6 @@ for s in $specs; do
 $r"
   [ $rc -eq 0 ] || status=2
 done
+[ -z "$handoff" ] || echo "parity: the registry of$handoff is STALE against this extract; run the map phase next to review and stamp it" >&2
 if [ $status -ne 0 ]; then echo "parity lint is red; fix before stopping:$out" >&2; exit 2; fi
 exit 0

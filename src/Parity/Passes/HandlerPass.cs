@@ -397,21 +397,26 @@ public sealed class HandlerPass
         return a;
     }
 
+    private static readonly System.Text.RegularExpressions.Regex ReflectionCallRx =
+        new("(?:GetMethod|GetProperty|InvokeMember)\\s*\\(\\s*\"(?<n>(?:[^\"\\\\]|\\\\.)*)\"", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private (Dictionary<string, List<string>> Sites, Dictionary<string, List<string>> Unloaded)? _reflection;
+
     /// <summary>
-    /// file:line of each GetMethod/GetProperty/InvokeMember("name", ...) whose receiver is typeof(ThisForm) or x.GetType() of
-    /// this form, in the loaded files. A file that names this form and the string but is not loaded yet is asked for.
+    /// One scan per form: file:line of each GetMethod/GetProperty/InvokeMember("name", ...) whose receiver is typeof(ThisForm)
+    /// or x.GetType() of this form, in the loaded files, by name; and, by name, the not yet loaded files that instantiate this
+    /// form and name it in such a call (they are asked for).
     /// </summary>
-    private List<string> ReflectionSites(string name)
+    private (Dictionary<string, List<string>> Sites, Dictionary<string, List<string>> Unloaded) ReflectionIndex()
     {
-        var literal = "\"" + name + "\"";
-        var sites = new List<string>();
+        if (_reflection is { } done) return done;
+        var sites = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var tree in _compilation.SyntaxTrees)
         {
-            if (!tree.GetText().ToString().Contains(literal, StringComparison.Ordinal)) continue;
             foreach (var inv in tree.GetRoot().DescendantNodes().OfType<InvocationExpressionSyntax>())
             {
                 if (inv.Expression is not MemberAccessExpressionSyntax { Name.Identifier.Text: "GetMethod" or "GetProperty" or "InvokeMember" } ma) continue;
-                if (inv.ArgumentList.Arguments.FirstOrDefault()?.Expression is not LiteralExpressionSyntax lit || lit.Token.ValueText != name) continue;
+                if (inv.ArgumentList.Arguments.FirstOrDefault()?.Expression is not LiteralExpressionSyntax lit || !lit.IsKind(SyntaxKind.StringLiteralExpression)) continue;
                 var receiver = ma.Expression switch
                 {
                     TypeOfExpressionSyntax t => Model(tree).GetTypeInfo(t.Type).Type,
@@ -420,12 +425,30 @@ public sealed class HandlerPass
                 };
                 if (!SymbolEqualityComparer.Default.Equals(receiver?.OriginalDefinition, _form.Symbol)) continue;
                 var loc = Syntax.LocOf(inv, _baseDir);
-                sites.Add($"{loc.File}:{loc.Start}");
+                if (!sites.TryGetValue(lit.Token.ValueText, out var list)) sites[lit.Token.ValueText] = list = new List<string>();
+                list.Add($"{loc.File}:{loc.Start}");
             }
         }
+        foreach (var key in sites.Keys.ToList()) sites[key] = sites[key].Distinct().OrderBy(x => x, StringComparer.Ordinal).ToList();
+        var unloaded = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var f in _index.FilesInstantiating(_formName))
-            if (!_loadedFiles.Contains(f) && File.ReadAllText(f).Contains(literal, StringComparison.Ordinal)) _r.WantedFiles.Add(f);
-        return sites.Distinct().OrderBy(x => x, StringComparer.Ordinal).ToList();
+        {
+            if (_loadedFiles.Contains(f)) continue;
+            foreach (System.Text.RegularExpressions.Match m in ReflectionCallRx.Matches(File.ReadAllText(f)))
+            {
+                var n = m.Groups["n"].Value;
+                if (!unloaded.TryGetValue(n, out var files)) unloaded[n] = files = new List<string>();
+                if (!files.Contains(f)) files.Add(f);
+            }
+        }
+        return (_reflection = (sites, unloaded)).Value;
+    }
+
+    private List<string> ReflectionSites(string name)
+    {
+        var (sites, unloaded) = ReflectionIndex();
+        if (unloaded.TryGetValue(name, out var files)) foreach (var f in files) _r.WantedFiles.Add(f);
+        return sites.TryGetValue(name, out var list) ? list : new List<string>();
     }
 
     private void RecordCall(IMethodSymbol m, List<string> args, string ownerId, int depth, Analysis a)
