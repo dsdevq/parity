@@ -84,18 +84,23 @@ public static class Extractor
             var found = FormDiscovery.Find(compilation, cfg, n => matcher(n) || variantNames.Contains(n), out var rejected);
             var byName = found.GroupBy(f => f.Symbol.Name, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
             var claimed = new Dictionary<string, VariantClass>(StringComparer.Ordinal);
+            var unclaimed = new List<Diagnostic>();
             foreach (var v in variants)
             {
-                if (!byName.TryGetValue(v.Class, out var vf) || !byName.TryGetValue(v.Base, out var bf)) continue;
                 var derives = false;
-                for (var t = vf.Symbol.BaseType; t != null && !derives; t = t.BaseType) derives = SymbolEqualityComparer.Default.Equals(t, bf.Symbol);
-                if (derives) claimed[v.Class] = new VariantClass(v.Config, vf, bf, v.Config.Project?.Replace('\\', '/'));
+                if (byName.TryGetValue(v.Class, out var vf) && byName.TryGetValue(v.Base, out var bf))
+                {
+                    for (var t = vf.Symbol.BaseType; t != null && !derives; t = t.BaseType) derives = SymbolEqualityComparer.Default.Equals(t, bf.Symbol);
+                    if (derives) claimed[v.Class] = new VariantClass(v.Config, vf, bf, v.Config.Project?.Replace('\\', '/'));
+                }
+                if (!derives)
+                    unclaimed.Add(new Diagnostic("VARIANT-CONFIG", $"variant {v.Config.Id}: {v.Class} is written as a subclass of {v.Base} but the compiler does not resolve it as a form deriving from it (another type of the same name, or a base outside formBaseTypes), so the variant class is not described", null));
             }
             var forms = found.Where(f => !claimed.ContainsKey(f.Symbol.Name) && (matcher(f.Symbol.Name) || !variantNames.Contains(f.Symbol.Name))).ToList();
             if (forms.Count == 0)
                 throw new InvalidOperationException($"'{formGlob}' matched classes but none derives from a configured form base type. Matched: {(rejected.Count == 0 ? "(none with a base list)" : string.Join("; ", rejected.Take(8)))}. Unresolved base types: {string.Join(", ", refDiags.Where(d => d.Code == "BASE-UNRESOLVED").Select(d => d.Message))}");
             var factories = factoryFiles.Count == 0 ? new List<FactoryInfo>() : FactoryPass.Find(compilation, factoryFiles, cfg, project.Dir, 1);
-            var roundVariantDiags = variantDiags.Concat(UnreadFactories(factoryEntries, factories)).ToList();
+            var roundVariantDiags = variantDiags.Concat(unclaimed).Concat(UnreadFactories(factoryEntries, factories)).ToList();
 
             manifests.Clear();
             var wanted = new HashSet<string>(StringComparer.Ordinal);
@@ -233,6 +238,7 @@ public static class Extractor
             var inBase = ReferenceEquals(own, baseIndex);
             if (string.IsNullOrWhiteSpace(v.Id)) { diags.Add(new Diagnostic("VARIANT-CONFIG", $"variants[{i}]: id is required", null)); continue; }
             if (inBase && v.Subclasses.Count == 0) { diags.Add(new Diagnostic("VARIANT-CONFIG", $"variant {v.Id}: without project, subclasses is required (every subclass in the main project is not a tenant)", null)); continue; }
+            var before = diags.Count;
             var names = own.FilesByType.Keys.Where(t => inBase ? v.Subclasses.Contains(t) : baseIndex.FilesFor(t).Count == 0)
                 .Where(t => v.Subclasses.Count == 0 || v.Subclasses.Contains(t)).ToHashSet(StringComparer.Ordinal);
             foreach (var missing in v.Subclasses.Where(s => !names.Contains(s)))
@@ -243,7 +249,8 @@ public static class Extractor
             foreach (var n in names)
             {
                 var chain = new List<string>();
-                for (var (cur, depth) = (n, 0); depth < 16; depth++)
+                var cur = n;
+                for (var depth = 0; depth < 16; depth++)
                 {
                     var b = index.BasesOf(cur).FirstOrDefault(x => names.Contains(x) || (matcher(x) && baseIndex.FilesFor(x).Count > 0));
                     if (b == null) { chain.Clear(); break; }
@@ -252,6 +259,8 @@ public static class Extractor
                     cur = b;
                 }
                 if (chain.Count > 0 && !names.Contains(chain[^1])) chains[n] = chain;
+                else if (v.Subclasses.Contains(n))
+                    diags.Add(new Diagnostic("VARIANT-CONFIG", $"variant {v.Id}: subclass '{n}' derives from no matched form of the main project (its base chain stops at {(index.BasesOf(cur).FirstOrDefault() is { } stop ? $"'{stop}'" : $"'{cur}', which has no base list")})", null));
             }
             var intermediate = chains.Values.SelectMany(c => c.Take(c.Count - 1)).ToHashSet(StringComparer.Ordinal);
             foreach (var (cls, chain) in chains.OrderBy(x => x.Key, StringComparer.Ordinal))
@@ -274,6 +283,8 @@ public static class Extractor
                 foreach (var mid in chain.Take(chain.Count - 1))
                     diags.Add(new Diagnostic("VARIANT-INTERMEDIATE", $"{baseName}: variant {v.Id} reaches it through {mid}; only {cls}'s own declarations are described as the delta", null));
             }
+            if (diags.Count == before && !result.Any(r => ReferenceEquals(r.Config, v)))
+                diags.Add(new Diagnostic("VARIANT-CONFIG", $"variant {v.Id}: {(inBase ? "the main project" : v.Project)} declares no subclass of a matched form of the main project, so the variant is not described", null));
         }
         return result;
     }

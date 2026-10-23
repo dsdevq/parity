@@ -821,6 +821,21 @@ public sealed class IssueTests
         Assert.StartsWith("variant Larkspur: factories entry 'SampleLegacy.Forms.ClientSearchFormFactory.Missing' reads no factory", problems[1]);
         Assert.Contains(m.Factories!, f => f.Id == "method:SampleLegacy.Forms.ClientSearchFormFactory.Create(string)");
     }
+
+    [Fact]
+    public void issue_20_a_configured_subclass_that_derives_from_no_matched_form_is_diagnosed_not_dropped()
+    {
+        // input: a third variant Ivy listing PolicyWizardStep3 (an XtraForm, not a ClientSearchForm subclass) next to the
+        // fixture's Larkspur and Thistle; output: Ivy is no delta, and every manifest of the run says why in one VARIANT-CONFIG
+        var cfg = ExtractConfig.Load(Path.Combine(_f.RepoRoot, "fixtures", "extract.config.json"));
+        cfg.Output = Path.Combine(_f.OutRoot, "issue20-unclaimed");
+        cfg.Variants.Add(new VariantConfig { Id = "Ivy", Subclasses = { "PolicyWizardStep3" } });
+        Extractor.Run(cfg, "M", "ClientSearchForm", new StringWriter());
+        var m = System.Text.Json.JsonSerializer.Deserialize<FormManifest>(File.ReadAllText(Path.Combine(cfg.Output, "M", "manifests", "ClientSearchForm.json")), Json.Options)!;
+        Assert.Equal(new[] { "var:Larkspur", "var:Thistle" }, m.Variants!.Select(v => v.Id));
+        var problem = Assert.Single(m.Diagnostics, d => d.Code == "VARIANT-CONFIG");
+        Assert.Equal("variant Ivy: subclass 'PolicyWizardStep3' derives from no matched form of the main project (its base chain stops at 'XtraForm')", problem.Message);
+    }
 }
 
 /// <summary>The guard hook, run through sh. Skipped where no POSIX shell exists (plain Windows without Git Bash).</summary>
