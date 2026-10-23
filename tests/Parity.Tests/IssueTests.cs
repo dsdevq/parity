@@ -834,7 +834,20 @@ public sealed class IssueTests
         var m = System.Text.Json.JsonSerializer.Deserialize<FormManifest>(File.ReadAllText(Path.Combine(cfg.Output, "M", "manifests", "ClientSearchForm.json")), Json.Options)!;
         Assert.Equal(new[] { "var:Larkspur", "var:Thistle" }, m.Variants!.Select(v => v.Id));
         var problem = Assert.Single(m.Diagnostics, d => d.Code == "VARIANT-CONFIG");
-        Assert.Equal("variant Ivy: subclass 'PolicyWizardStep3' derives from no matched form of the main project (its base chain stops at 'XtraForm')", problem.Message);
+        Assert.Equal("variant Ivy: subclass 'PolicyWizardStep3' derives from no form of the main project (its base chain stops at 'XtraForm')", problem.Message);
+    }
+
+    [Fact]
+    public void issue_20_variants_of_a_form_the_glob_does_not_select_are_not_a_config_error()
+    {
+        // input: fixtures/extract.config.json (Larkspur and Thistle customise ClientSearchForm) extracting only DynamicRidersForm;
+        // output: neither variant applies to this run, and DynamicRidersForm carries no variants and no VARIANT-CONFIG
+        var cfg = ExtractConfig.Load(Path.Combine(_f.RepoRoot, "fixtures", "extract.config.json"));
+        cfg.Output = Path.Combine(_f.OutRoot, "issue20-unselected");
+        Extractor.Run(cfg, "M", "DynamicRidersForm", new StringWriter());
+        var m = System.Text.Json.JsonSerializer.Deserialize<FormManifest>(File.ReadAllText(Path.Combine(cfg.Output, "M", "manifests", "DynamicRidersForm.json")), Json.Options)!;
+        Assert.Null(m.Variants);
+        Assert.DoesNotContain(m.Diagnostics, d => d.Code is "VARIANT-CONFIG" or "VARIANT-INTERMEDIATE");
     }
 }
 

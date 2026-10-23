@@ -83,10 +83,12 @@ that differ (`props.Text`, `source`, `loc`), sorted by id, and exits 0 when iden
   `entry`) so a rule can cover it, and its callees are sliced like a handler's.
 - `calls` lists `method:` ids including those beyond `maxCallDepth` (which then have no `methods[]` entry).
 - `diagnostics[]` also carries `VARIANT-CONFIG` (a `variants` entry that cannot be applied: no id, a missing
-  subclass, a listed subclass whose base chain reaches no matched form, a variant with no subclass of a matched
-  form, a class the compiler does not resolve as deriving from its base, a class claimed twice) and
-  `VARIANT-INTERMEDIATE` (see Variants). A `VARIANT-CONFIG` that names a variant (`variant <id>: ...`) is on
-  every manifest of the run, so a tenant that is not described is never silent.
+  subclass, a listed subclass whose base chain reaches no form of the main project, a variant with no subclass
+  of any form of the main project, a class the compiler does not resolve as deriving from its base, a class
+  claimed twice) and `VARIANT-INTERMEDIATE` (see Variants). One that names a unit (`<Form>: ...`) is on that
+  unit's manifest only; one tied to no unit (`variant <id>: ...`) is on every manifest of the run and in the
+  extract log, so a tenant that is not described is never silent. A subclass of a form the run's glob does not
+  select is not diagnosed: that form's own run describes it.
 
 ## MethodInfo
 

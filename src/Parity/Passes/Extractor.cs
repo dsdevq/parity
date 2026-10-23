@@ -50,6 +50,8 @@ public static class Extractor
         foreach (var f in factoryFiles) loaded.Add(f);
         foreach (var v in variants.GroupBy(v => v.Config.Id))
             log.WriteLine($"variant {v.Key}: {string.Join(", ", v.Select(x => $"{x.Class} on {x.Base}"))}");
+        foreach (var d in variantDiags.Where(d => d.Message.StartsWith("variant", StringComparison.Ordinal)))
+            log.WriteLine($"{d.Code}: {d.Message}");
 
         // a variant project's form resx (the main project's are in resxIndex)
         var variantResx = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -94,7 +96,7 @@ public static class Extractor
                     if (derives) claimed[v.Class] = new VariantClass(v.Config, vf, bf, v.Config.Project?.Replace('\\', '/'));
                 }
                 if (!derives)
-                    unclaimed.Add(new Diagnostic("VARIANT-CONFIG", $"variant {v.Config.Id}: {v.Class} is written as a subclass of {v.Base} but the compiler does not resolve it as a form deriving from it (another type of the same name, or a base outside formBaseTypes), so the variant class is not described", null));
+                    unclaimed.Add(new Diagnostic("VARIANT-CONFIG", $"{v.Base}: variant {v.Config.Id}: {v.Class} is written as a subclass of {v.Base} but the compiler does not resolve it as a form deriving from it (another type of the same name, or a base outside formBaseTypes), so the variant class is not described", null));
             }
             var forms = found.Where(f => !claimed.ContainsKey(f.Symbol.Name) && (matcher(f.Symbol.Name) || !variantNames.Contains(f.Symbol.Name))).ToList();
             if (forms.Count == 0)
@@ -222,8 +224,8 @@ public static class Extractor
     private sealed record VariantCandidate(VariantConfig Config, string Class, string Base, List<string> Files);
 
     /// <summary>
-    /// Per configured variant, the classes it declares that derive (by written base name) from a matched class of the main
-    /// project; the nearest such class is the unit the variant customises. Variant classes in between are loaded but folded
+    /// Per configured variant, the classes it declares that derive (by written base name) from a form of the main project;
+    /// the nearest such form is the unit the variant customises, and only units the glob selects are described in this run. Variant classes in between are loaded but folded
     /// into the most derived one. The first variant to claim a class keeps it.
     /// </summary>
     private static List<VariantCandidate> DiscoverVariants(ExtractConfig cfg, FileIndex baseIndex, List<FileIndex> variantIndexes, FileIndex index,
@@ -231,6 +233,7 @@ public static class Extractor
     {
         var result = new List<VariantCandidate>();
         var taken = new Dictionary<string, string>(StringComparer.Ordinal);
+        var formRoots = cfg.FormBaseTypes.Select(LastSegment).ToHashSet(StringComparer.Ordinal);
         for (var i = 0; i < cfg.Variants.Count; i++)
         {
             var v = cfg.Variants[i];
@@ -239,12 +242,13 @@ public static class Extractor
             if (string.IsNullOrWhiteSpace(v.Id)) { diags.Add(new Diagnostic("VARIANT-CONFIG", $"variants[{i}]: id is required", null)); continue; }
             if (inBase && v.Subclasses.Count == 0) { diags.Add(new Diagnostic("VARIANT-CONFIG", $"variant {v.Id}: without project, subclasses is required (every subclass in the main project is not a tenant)", null)); continue; }
             var before = diags.Count;
+            var elsewhere = false;
             var names = own.FilesByType.Keys.Where(t => inBase ? v.Subclasses.Contains(t) : baseIndex.FilesFor(t).Count == 0)
                 .Where(t => v.Subclasses.Count == 0 || v.Subclasses.Contains(t)).ToHashSet(StringComparer.Ordinal);
             foreach (var missing in v.Subclasses.Where(s => !names.Contains(s)))
                 diags.Add(new Diagnostic("VARIANT-CONFIG", $"variant {v.Id}: subclass '{missing}' is not declared in {(inBase ? "the main project" : v.Project)}", null));
 
-            // the chain from each class up to a matched class of the main project that is not itself part of this variant
+            // the chain from each class up to a form of the main project that is not itself part of this variant
             var chains = new Dictionary<string, List<string>>(StringComparer.Ordinal);
             foreach (var n in names)
             {
@@ -252,7 +256,7 @@ public static class Extractor
                 var cur = n;
                 for (var depth = 0; depth < 16; depth++)
                 {
-                    var b = index.BasesOf(cur).FirstOrDefault(x => names.Contains(x) || (matcher(x) && baseIndex.FilesFor(x).Count > 0));
+                    var b = index.BasesOf(cur).FirstOrDefault(x => names.Contains(x) || MainProjectForm(x, baseIndex, formRoots, 0));
                     if (b == null) { chain.Clear(); break; }
                     chain.Add(b);
                     if (!names.Contains(b)) break;
@@ -260,12 +264,13 @@ public static class Extractor
                 }
                 if (chain.Count > 0 && !names.Contains(chain[^1])) chains[n] = chain;
                 else if (v.Subclasses.Contains(n))
-                    diags.Add(new Diagnostic("VARIANT-CONFIG", $"variant {v.Id}: subclass '{n}' derives from no matched form of the main project (its base chain stops at {(index.BasesOf(cur).FirstOrDefault() is { } stop ? $"'{stop}'" : $"'{cur}', which has no base list")})", null));
+                    diags.Add(new Diagnostic("VARIANT-CONFIG", $"variant {v.Id}: subclass '{n}' derives from no form of the main project (its base chain stops at {(index.BasesOf(cur).FirstOrDefault() is { } stop ? $"'{stop}'" : $"'{cur}', which has no base list")})", null));
             }
             var intermediate = chains.Values.SelectMany(c => c.Take(c.Count - 1)).ToHashSet(StringComparer.Ordinal);
             foreach (var (cls, chain) in chains.OrderBy(x => x.Key, StringComparer.Ordinal))
             {
                 if (intermediate.Contains(cls)) continue;
+                if (!matcher(chain[^1])) { elsewhere = true; continue; }
                 if (taken.TryGetValue(cls, out var first))
                 {
                     diags.Add(new Diagnostic("VARIANT-CONFIG", $"{chain[^1]}: {cls} is claimed by variants {first} and {v.Id}; {first} keeps it", null));
@@ -283,11 +288,16 @@ public static class Extractor
                 foreach (var mid in chain.Take(chain.Count - 1))
                     diags.Add(new Diagnostic("VARIANT-INTERMEDIATE", $"{baseName}: variant {v.Id} reaches it through {mid}; only {cls}'s own declarations are described as the delta", null));
             }
-            if (diags.Count == before && !result.Any(r => ReferenceEquals(r.Config, v)))
-                diags.Add(new Diagnostic("VARIANT-CONFIG", $"variant {v.Id}: {(inBase ? "the main project" : v.Project)} declares no subclass of a matched form of the main project, so the variant is not described", null));
+            if (diags.Count == before && !elsewhere && !result.Any(r => ReferenceEquals(r.Config, v)))
+                diags.Add(new Diagnostic("VARIANT-CONFIG", $"variant {v.Id}: {(inBase ? "the main project" : v.Project)} declares no subclass of a form of the main project, so the variant is not described", null));
         }
         return result;
     }
+
+    /// <summary>A main-project class whose written base chain reaches a formBaseTypes entry (by simple name).</summary>
+    private static bool MainProjectForm(string type, FileIndex baseIndex, HashSet<string> formRoots, int depth) =>
+        depth < 16 && baseIndex.FilesFor(type).Count > 0
+        && baseIndex.BasesOf(type).Any(b => formRoots.Contains(b) || MainProjectForm(b, baseIndex, formRoots, depth + 1));
 
     /// <summary>A configured factories entry read against the file index: Type (Method null) or Type.Method, both by the type's simple name.</summary>
     private sealed record FactoryEntry(string Variant, string Entry, string Type, string? Method);
