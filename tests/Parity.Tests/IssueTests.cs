@@ -334,7 +334,7 @@ public sealed class IssueTests
             File.WriteAllText(Path.Combine(work, "legacy", ".phase"), "specify\n");
             var sub = Path.Combine(work, "legacy", "M"); Directory.CreateDirectory(sub);
             var before = File.ReadAllLines(log).Length;
-            var fromSub = GuardHookTests.RunCommand(sub, hookCommand, work, HookCall("Read", new { file_path = "../Legacy/AcmeAdmin/Forms/X.cs" }, sub));
+            var fromSub = GuardHookTests.RunCommand(sub, hookCommand, work, HookCall("Read", new { file_path = "../../../Legacy/AcmeAdmin/Forms/X.cs" }, sub));
             Assert.Equal(2, fromSub.Code); Assert.Contains("outside", fromSub.Err);
             Assert.Equal(0, GuardHookTests.RunCommand(sub, hookCommand, work, HookCall("Read", new { file_path = "spec/X.md" }, sub)).Code);
             Assert.Equal(before + 1, File.ReadAllLines(log).Length);
