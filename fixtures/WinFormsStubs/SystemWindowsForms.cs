@@ -18,6 +18,7 @@ namespace System.Windows.Forms
     public class ControlCollection : List<Control>
     {
         public void AddRange(Control[] controls) => base.AddRange(controls);
+        public void SetChildIndex(Control child, int newIndex) { }
     }
 
     public class ControlBindingsCollection : List<Binding>

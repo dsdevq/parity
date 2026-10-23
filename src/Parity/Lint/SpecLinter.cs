@@ -24,6 +24,17 @@ public static partial class SpecLinter
     [GeneratedRegex(@"decided-by\s+\S+.*\b\d{4}-\d{2}-\d{2}\b")] private static partial Regex Decided();
     [GeneratedRegex(@"\b\d{4}-\d{2}-\d{2}\b")] private static partial Regex DateRx();
 
+    /// <summary>
+    /// What a debt line must contain to acknowledge a diagnostic: the code plus the message's subject
+    /// ("UNREACHED-METHOD: Form.btnExport_Click"), or the full message when there is no subject.
+    /// One line acknowledges one diagnostic; a re-extract that adds a new one with the same code is not covered.
+    /// </summary>
+    public static string DebtKey(string code, string message)
+    {
+        var m = Regex.Match(message, @"^([A-Za-z_]\w*(?:\.[A-Za-z_$]\w*)?):");
+        return m.Success ? code + ": " + m.Groups[1].Value : code + ": " + message;
+    }
+
     public static List<Finding> Lint(string specPath, bool gate, string? implementDir)
     {
         var file = Path.GetRelativePath(Environment.CurrentDirectory, specPath).Replace('\\', '/');
@@ -190,7 +201,10 @@ public static partial class SpecLinter
             foreach (var r in m.Raw)
                 if (!Acknowledged($"{r.Loc.File}:{r.Loc.Start}")) E(0, "COV-RAW", $"raw designer statement at {r.Loc.File}:{r.Loc.Start} is not acknowledged in extractor-debt.md (line must carry '{r.Loc.File}:{r.Loc.Start}', an owner and a YYYY-MM-DD)");
             foreach (var d in m.Diagnostics)
-                if (!Acknowledged(d.Code + ": " + d.Message) && !Acknowledged(d.Code)) E(0, "COV-RAW", $"diagnostic {d.Code} '{d.Message}' is not acknowledged in extractor-debt.md");
+            {
+                var key = DebtKey(d.Code, d.Message);
+                if (!Acknowledged(key)) E(0, "COV-RAW", $"diagnostic '{key}' is not acknowledged in extractor-debt.md (a line must carry exactly that text, an owner and a YYYY-MM-DD; the bare code acknowledges nothing)");
+            }
         }
 
         if (spec.OpenQuestions.Count != 1 || !string.Equals(spec.OpenQuestions[0].Text, "none", StringComparison.OrdinalIgnoreCase))

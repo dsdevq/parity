@@ -104,6 +104,66 @@ public sealed class IssueTests
     }
 
     [Fact]
+    public void issue_11_set_child_index_is_the_control_s_z_order_not_raw()
+    {
+        // input: ClientSearchForm.Designer.cs ends with this.Controls.SetChildIndex(this.grdResults, 0) and (this.btnSearch, 1)
+        var m = _f.Manifest("ClientSearchForm");
+        Assert.Empty(m.Raw);
+        var c = m.Controls.ToDictionary(x => x.Field);
+        Assert.Equal("0", c["grdResults"].Props["ChildIndex"]);
+        Assert.Equal("1", c["btnSearch"].Props["ChildIndex"]);
+        Assert.False(c["txtSurname"].Props.ContainsKey("ChildIndex"));
+    }
+
+    [Fact]
+    public void issue_12_module_json_accumulates_across_runs_and_globs_take_a_comma_list()
+    {
+        // input: two runs into the same module, one form each; output: module.json lists both and finds the cross-form duplicates
+        var cfg = ExtractConfig.Load(Path.Combine(_f.RepoRoot, "fixtures", "extract.config.json"));
+        cfg.Output = Path.Combine(_f.OutRoot, "accumulate");
+        Extractor.Run(cfg, "M", "ClientSearchForm", new StringWriter());
+        var first = System.Text.Json.JsonSerializer.Deserialize<ModuleIndex>(File.ReadAllText(Path.Combine(cfg.Output, "M", "module.json")), Json.Options)!;
+        Assert.Equal(new[] { "form:ClientSearchForm" }, first.Forms);
+        Assert.Empty(first.Duplicates);
+
+        var log = new StringWriter();
+        Extractor.Run(cfg, "M", "ClaimClientSearchForm", log);
+        var second = System.Text.Json.JsonSerializer.Deserialize<ModuleIndex>(File.ReadAllText(Path.Combine(cfg.Output, "M", "module.json")), Json.Options)!;
+        Assert.Equal(new[] { "form:ClaimClientSearchForm", "form:ClientSearchForm" }, second.Forms);
+        Assert.Contains("svc:IClientService.SearchClients", second.ServiceCalls);
+        Assert.Contains(second.Duplicates, d => d.Kind == "near" && d.Members.Contains("handler:ClientSearchForm/btnSearch_Click"));
+        Assert.Contains("module.json: 2 form(s) on disk (1 from this run)", log.ToString());
+
+        // a comma-separated glob extracts both in one run
+        cfg.Output = Path.Combine(_f.OutRoot, "commaglob");
+        var summaries = Extractor.Run(cfg, "M", "PolicyWizardStep3,Dynamic*", new StringWriter());
+        Assert.Equal(new[] { "DynamicRidersForm", "PolicyWizardStep3" }, summaries.Select(x => x.Form).OrderBy(x => x));
+    }
+
+    [Fact]
+    public void issue_13_a_debt_line_acknowledges_one_diagnostic_not_a_whole_code()
+    {
+        // input: BeneficiarySearchForm has one UNREACHED-METHOD diagnostic; a spec for it with extractor-debt.md variants
+        var specDir = Path.Combine(_f.ModuleDir, "spec"); Directory.CreateDirectory(specDir);
+        var hash = ManifestHash.Of(Path.Combine(_f.ModuleDir, "manifests", "BeneficiarySearchForm.json"));
+        var spec = Path.Combine(specDir, "BeneficiarySearchForm.md");
+        File.WriteAllText(spec, $"---\nform: form:BeneficiarySearchForm\nmanifest: {hash}\nstatus: draft\n---\n# x\n## Fields\n## Rules\n## No behavior\n## Service calls\n## Open questions\n- none\n");
+        var debt = Path.Combine(_f.ModuleDir, "extractor-debt.md");
+        try
+        {
+            File.WriteAllText(debt, "- UNREACHED-METHOD - all of them, owner someone - until 2026-12-31\n");
+            Assert.Contains(SpecLinter.Lint(spec, gate: true, implementDir: null), f => f.Code == "COV-RAW" && f.Message.Contains("UNREACHED-METHOD: BeneficiarySearchForm.btnExport_Click"));
+
+            File.WriteAllText(debt, "- UNREACHED-METHOD: BeneficiarySearchForm.btnExport_Click - export button never wired, owner someone - until 2026-12-31\n");
+            Assert.DoesNotContain(SpecLinter.Lint(spec, gate: true, implementDir: null), f => f.Code == "COV-RAW");
+
+            Assert.Equal("TYPE-UNRESOLVED: Form.txtX", SpecLinter.DebtKey("TYPE-UNRESOLVED", "Form.txtX: type 'A.B' not resolved (missing reference?)"));
+            Assert.Equal("REF-MISSING: reference not found: C:/x.dll", SpecLinter.DebtKey("REF-MISSING", "reference not found: C:/x.dll"));
+        }
+        finally { File.Delete(debt); File.Delete(spec); }
+    }
+
+    [Fact]
     public void issue_7_references_load_once_and_each_phase_is_timed()
     {
         Assert.Matches(@"references: \d+ loaded in \d+\.\ds", _f.Log);

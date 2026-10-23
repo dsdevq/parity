@@ -23,6 +23,9 @@ form with invented names, then the extractor is changed until the test passes.
 | #10.6 verifying `formBaseTypes` | - | `IssueTests.issue_10_an_unresolvable_form_base_type_is_a_diagnostic_and_a_glob_that_matches_no_form_explains_itself` |
 | #10.8 output path | - | `issue_6_...` asserts the probe prints `outputPath:` and reference counts |
 | #10.1, .2, .4, .5, .7 | documentation and `bin/parity.cmd` | not testable; README handoff section |
+| #11 `Controls.SetChildIndex` raw | `ClientSearchForm.Designer.cs` z-order lines | `IssueTests.issue_11_set_child_index_is_the_control_s_z_order_not_raw` |
+| #12 module.json overwritten per run | - | `IssueTests.issue_12_module_json_accumulates_across_runs_and_globs_take_a_comma_list` |
+| #13 one debt line acknowledged a whole code | - | `IssueTests.issue_13_a_debt_line_acknowledges_one_diagnostic_not_a_whole_code` |
 
 ## Adding a pattern
 

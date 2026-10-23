@@ -103,12 +103,16 @@ public static class Extractor
             summaries.Add(new ExtractSummary(m.ClassName, m.Controls.Count, m.Events.Count, m.Handlers.Count, m.Methods.Count, m.ServiceCalls.Count, m.DynamicUi.Count, m.Raw.Count, m.Diagnostics.Count));
         }
 
-        var dupes = Duplicates.Find(manifests.SelectMany(m => m.Handlers.Select(h => (h.Id, h.Source)).Concat(m.Methods.Where(x => x.Source != null).Select(x => (x.Id, x.Source!)))).DistinctBy(x => x.Item1));
+        // module.json is computed from every manifest on disk, so extracting forms one run at a time accumulates (issue #12)
+        var all = Directory.EnumerateFiles(Path.Combine(outDir, "manifests"), "*.json").OrderBy(f => f, StringComparer.Ordinal)
+            .Select(f => JsonSerializer.Deserialize<FormManifest>(File.ReadAllText(f), Json.Options)!).ToList();
+        var dupes = Duplicates.Find(all.SelectMany(m => m.Handlers.Select(h => (h.Id, h.Source)).Concat(m.Methods.Where(x => x.Source != null).Select(x => (x.Id, x.Source!)))).DistinctBy(x => x.Item1));
         var modIndex = new ModuleIndex(SchemaVersion, module, Path.GetRelativePath(cfg.BaseDir, project.Path).Replace('\\', '/'),
-            manifests.Select(m => m.Id).ToList(),
-            manifests.SelectMany(m => m.ServiceCalls.Select(s => s.Id)).Distinct().OrderBy(x => x, StringComparer.Ordinal).ToList(),
+            all.Select(m => m.Id).OrderBy(x => x, StringComparer.Ordinal).ToList(),
+            all.SelectMany(m => m.ServiceCalls.Select(s => s.Id)).Distinct().OrderBy(x => x, StringComparer.Ordinal).ToList(),
             dupes);
         File.WriteAllText(Path.Combine(outDir, "module.json"), JsonSerializer.Serialize(modIndex, Json.Options) + "\n");
+        if (all.Count > manifests.Count) log.WriteLine($"module.json: {all.Count} form(s) on disk ({manifests.Count} from this run)");
 
         var peak = Process.GetCurrentProcess().PeakWorkingSet64 / (1024 * 1024);
         log.WriteLine($"render+write: {tWrite.Elapsed.TotalSeconds:0.0}s");
@@ -149,11 +153,13 @@ public static class Extractor
             controls, events, bindings, rules, handlers, methods, svcs, dyn, d.Raw.OrderBy(r => r.Loc.Start).ToList(), diags);
     }
 
+    /// <summary>One or more globs separated by commas: 'PolicyWizard*,ClientSearchForm'.</summary>
     public static Func<string, bool> Glob(string pattern)
     {
-        var rx = "^" + System.Text.RegularExpressions.Regex.Escape(pattern).Replace("\\*", ".*").Replace("\\?", ".") + "$";
-        var re = new System.Text.RegularExpressions.Regex(rx, System.Text.RegularExpressions.RegexOptions.CultureInvariant);
-        return s => re.IsMatch(s);
+        var res = pattern.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(p => new System.Text.RegularExpressions.Regex("^" + System.Text.RegularExpressions.Regex.Escape(p).Replace("\\*", ".*").Replace("\\?", ".") + "$", System.Text.RegularExpressions.RegexOptions.CultureInvariant))
+            .ToList();
+        return s => res.Any(re => re.IsMatch(s));
     }
 }
 

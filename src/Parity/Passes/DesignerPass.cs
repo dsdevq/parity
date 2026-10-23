@@ -268,6 +268,15 @@ public static class DesignerPass
                         }
                     }
 
+                    // X.Controls.SetChildIndex(this.y, n): z-order of y inside X (issue #11)
+                    if (method == "SetChildIndex" && args.Count == 2 && Syntax.FieldRef(args[0].Expression) is { } child && child != "$this")
+                    {
+                        var c = Ctl(child); c.Touch(loc);
+                        c.Props["ChildIndex"] = EvalValue(args[1].Expression, null, "");
+                        if (c.Parent == null) c.Parent = root == "$this" ? "$this" : root;
+                        continue;
+                    }
+
                     // validationProvider.SetValidationRule(this.x, this.rule)
                     if (method == "SetValidationRule" && args.Count == 2)
                     {

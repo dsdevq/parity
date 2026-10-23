@@ -69,6 +69,8 @@ namespace SampleLegacy.Forms
             this.Controls.Add(this.grdResults);
             this.Name = "ClientSearchForm";
             this.Text = "Client Search";
+            this.Controls.SetChildIndex(this.grdResults, 0);
+            this.Controls.SetChildIndex(this.btnSearch, 1);
             this.ResumeLayout(false);
         }
 

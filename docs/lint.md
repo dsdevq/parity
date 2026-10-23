@@ -22,7 +22,7 @@ fixtures at `<spec dir>/../fixtures/`, debt at `<spec dir>/../extractor-debt.md`
 | COV-SERVICE | gate | a `svc:` id has no Service calls row or no fixtures listed |
 | FIXTURE-MISSING | gate | a named fixture file does not exist or records a different service |
 | FIXTURE-INVALID | gate | a fixture file is not valid JSON |
-| COV-RAW | gate | the manifest has raw statements or diagnostics not acknowledged in `extractor-debt.md` (line with the `file:line` or code, an owner and a date) |
+| COV-RAW | gate | the manifest has raw statements or diagnostics not acknowledged in `extractor-debt.md`. A raw statement is acknowledged by a line carrying its `file:line`; a diagnostic by a line carrying `CODE: Form.member` (the message's subject) or, for diagnostics without a subject, the full message. The line also needs an owner and a `YYYY-MM-DD`. A bare code acknowledges nothing; one line covers one entry. |
 | OPEN | gate | Open questions is not exactly `- none` |
 | STATUS | gate | status is not `reviewed`, or reviewed-by lacks a name and date |
 | COV-TEST | gate + implement | a rule id appears in no `.ts`, `.js` or `.cs` file under the directory |
