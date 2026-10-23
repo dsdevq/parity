@@ -24,6 +24,8 @@ public sealed class ExtractConfig
     public int MaxCallDepth { get; set; } = 2;
     public string Output { get; set; } = "legacy";
     public List<string> IgnoreCalls { get; set; } = new() { "System.*", "DevExpress.*" };
+    /// <summary>Read by adopt/hooks/guard-legacy.sh, not by the extractor; typed here so the keys are part of the config contract.</summary>
+    public GuardConfig Guard { get; set; } = new();
     /// <summary>Tenant or customer variants of the module's forms (issue #20). Each one's subclasses become a delta on their base form.</summary>
     public List<VariantConfig> Variants { get; set; } = new();
 
@@ -39,6 +41,14 @@ public sealed class ExtractConfig
     }
 
     public string Resolve(string p) => Path.IsPathRooted(p) ? p : Path.GetFullPath(Path.Combine(BaseDir, p));
+}
+
+public sealed class GuardConfig
+{
+    /// <summary>Glob patterns (case-insensitive, ? is any one character) for MCP tool names refused in specify and implement, added to the built-in code-index list.</summary>
+    public List<string> DenyTools { get; set; } = new();
+    /// <summary>Directories readable and writable in specify and implement besides the consuming repo. Relative entries are relative to the config file.</summary>
+    public List<string> AllowRoots { get; set; } = new();
 }
 
 /// <summary>

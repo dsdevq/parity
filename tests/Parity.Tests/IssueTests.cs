@@ -198,6 +198,281 @@ public sealed class IssueTests
         Assert.DoesNotContain(_f.Manifest("ClientSearchForm").Diagnostics, x => x.Code == "GRID-NO-COLUMNS");
     }
 
+    private static string HookCall(string tool, object input, string cwd) =>
+        System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, object> { ["cwd"] = cwd, ["hook_event_name"] = "PreToolUse", ["tool_name"] = tool, ["tool_input"] = input });
+
+    [Fact]
+    public void issue_22_guard_allow_lists_readable_roots_denies_code_index_tools_and_logs_every_denial()
+    {
+        // input: the guard run through sh with hook JSON on stdin, the legacy tree a sibling of the consuming repo;
+        // output: exit 0 for the manifest/spec/fixtures/evidence folders, exit 2 (and one log line each) for everything else
+        var settings = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(_f.RepoRoot, "adopt", ".claude", "settings.json")));
+        var matcher = settings.RootElement.GetProperty("hooks").GetProperty("PreToolUse")[0].GetProperty("matcher").GetString()!;
+        foreach (var tool in new[] { "Read", "Grep", "Glob", "Bash", "PowerShell", "Edit", "Write", "MultiEdit", "NotebookEdit", "Monitor", "mcp__codegraph__get_symbol", "mcp__docs__search" })
+            Assert.Matches(matcher, tool);
+        Assert.DoesNotMatch(matcher, "TodoWrite");
+        Assert.DoesNotMatch(matcher, "WebSearch");
+
+        if (GuardHookTests.Sh() == null) return; // no POSIX shell: the hook cannot run here at all
+        var baseDir = Path.Combine(Path.GetTempPath(), "parity-guard-" + Guid.NewGuid().ToString("N")[..8]);
+        var work = Path.Combine(baseDir, "repo");
+        var legacy = Path.Combine(baseDir, "Legacy", "AcmeAdmin");
+        Directory.CreateDirectory(Path.Combine(work, "legacy", "hooks"));
+        Directory.CreateDirectory(Path.Combine(legacy, "Forms"));
+        Directory.CreateDirectory(Path.Combine(baseDir, "shared"));
+        File.Copy(Path.Combine(_f.RepoRoot, "adopt", "hooks", "guard-legacy.sh"), Path.Combine(work, "legacy", "hooks", "guard-legacy.sh"));
+        var config = Path.Combine(work, "legacy", "extract.config.json");
+        File.WriteAllText(config, "{\n  \"project\": \"" + legacy.Replace('\\', '/') + "/AcmeAdmin.csproj\",\n  \"output\": \".\"\n}\n");
+        var log = Path.Combine(work, "legacy", ".guard-denials.log");
+        try
+        {
+            var legacyForm = Path.Combine(legacy, "Forms", "X.cs");
+            // calls a restricted phase must let through: the manifest, spec, fixtures and evidence folders, by relative and absolute path
+            var allowed = new (string Tool, object Input, string Cwd)[]
+            {
+                ("Read", new { file_path = "legacy/M/manifests/X.md" }, work),
+                ("Read", new { file_path = Path.Combine(work, "legacy", "M", "spec", "X.md") }, work),
+                ("Read", new { file_path = "spec/X.md" }, Path.Combine(work, "legacy", "M")),
+                ("Edit", new { file_path = "legacy/M/spec/X.md", old_string = "a", new_string = "b" }, work),
+                ("Grep", new { pattern = "Rule", path = "legacy/M/fixtures" }, work),
+                ("Grep", new { pattern = "Rule" }, work),
+                ("Glob", new { pattern = "legacy/M/evidence/**/*.png" }, work),
+                ("Glob", new { pattern = "**/*.md", path = "legacy/M/manifests" }, work),
+                ("Bash", new { command = "cat legacy/M/manifests/X.md | head -5 2>/dev/null" }, work),
+                ("Bash", new { command = "cd legacy/M && ls fixtures evidence && dotnet test --filter \"Name=Rule\"" }, work),
+                ("PowerShell", new { command = "Get-Content legacy\\M\\spec\\X.md" }, work),
+                ("Monitor", new { command = "tail -f legacy/M/evidence/run.log" }, work),
+                ("mcp__docs__search_docs", new { query = "angular signals" }, work),
+                ("Bash", new { command = "grep \"Rule.*\" 'legacy/M/spec/X.md' && echo \"it's fine\"" }, work),               // quoted arguments and whole-token quoted paths are not splices
+                ("Bash", new { command = "cat legacy/M/manifests/*.md" }, work),                                                 // a wildcard in the last segment only
+                ("Bash", new { command = "npx eslint \"src/**/*.ts\" && cat src/*/x.ts" }, work),                                // wildcard segments that cannot match ..
+                ("Bash", new { command = "sed -i 's/a.*b/c/' src/x.ts" }, work),                                                 // regexes
+                ("Bash", new { command = "grep -E \"foo|.*bar\" src && grep -E \"foo|[a-z]+\" src" }, work),
+                ("Bash", new { command = "git commit -m \"fix user's/admin's\"" }, work),                                         // apostrophes inside a message
+                ("mcp__filesystem__read_text_file", new { path = "legacy/M/spec/X.md" }, work),
+                ("mcp__fs__search", new { path = "legacy/M", pattern = "x" }, work),
+                ("Bash", new { command = "echo cd .. && cat ../README.md" }, Path.Combine(work, "legacy")),                     // cd as an argument moves nothing
+                ("Bash", new { command = "(cd legacy/M && ls fixtures); cat legacy/M/spec/X.md" }, work),                        // a subshell's cd ends with it
+                ("Bash", new { command = "bash -c \"cd legacy/M && ls fixtures\" && cat legacy/M/spec/X.md" }, work),           // so does a nested shell's
+                ("Bash", new { command = "bash --norc -o pipefail -c \"cd legacy/M && ls fixtures\"" }, work),                  // option words before -c
+                ("Glob", new { pattern = "**/*.{ts,tsx}" }, work),                                                               // brace alternatives that cannot be ..
+                ("Bash", new { command = "grep -E \"[0-9]{2,4}\" src/x.cs" }, work),                                            // braces inside quotes are not expansion
+                ("Bash", new { command = "curl -d '{\"a\":1,\"b\":2}' http://localhost:5000/x" }, work),
+                ("Bash", new { command = "dotnet build /p:Configuration=Release && msbuild x.sln /t:Rebuild /v:m" }, work),     // MSBuild switches are options
+                ("PowerShell", new { command = "dotnet test /p:Foo=1" }, work),
+            };
+            // calls it must refuse
+            var denied = new (string Tool, object Input, string Cwd, string Why)[]
+            {
+                ("PowerShell", new { command = "Get-Content " + legacyForm.Replace('/', '\\') }, work, "outside"),                     // the shell tool on Windows, root named
+                ("Bash", new { command = "cat " + legacyForm }, work, "outside"),
+                ("mcp__docs__search_docs", new { query = "x", path = legacyForm }, work, "outside"),                           // a path value in an MCP tool's input
+                ("mcp__filesystem__read_text_file", new { path = "../Legacy/App/X.cs" }, work, "outside"),                       // relative, the root never named
+                ("mcp__fs__search", new { path = "..", pattern = "x" }, work, "outside"),                                       // a bare .. with no separator
+                ("mcp__fs__list_directory", new { path = "~" }, work, "home directory"),
+                ("mcp__filesystem__read_multiple_files", new { paths = new[] { "legacy/M/spec/X.md", "..\\Legacy\\AcmeAdmin\\Forms\\X.cs" } }, work, "outside"),
+                ("mcp__codegraph__get_symbol", new { symbol = "PolicyForm" }, work, "code-index"),                               // no path at all
+                ("mcp__serena__find_symbol", new { name_path = "Save" }, work, "code-index"),
+                ("mcp__graft__graft_find_code", new { query = "PolicyForm" }, work, "code-index"),                              // Graft by server name
+                ("mcp__graft__graft_file_api", new { file = "Forms/X.cs" }, work, "code-index"),
+                ("mcp__graft__graft_trace_calls", new { symbol = "Save" }, work, "code-index"),
+                ("mcp__graft__graft_find_all", new { symbol = "Save" }, work, "code-index"),
+                ("mcp__graft__graft_repo_map", new { }, work, "code-index"),
+                ("mcp__graft__graft_check_freshness", new { }, work, "code-index"),
+                ("mcp__acme-graph__graft_find_code", new { query = "PolicyForm" }, work, "code-index"),                          // Graft tools under another server name, by the graft_ prefix
+                ("Read", new { file_path = "../Legacy/AcmeAdmin/Forms/X.cs" }, work, "outside"),                                 // relative path
+                ("Read", new { file_path = "Forms/X.cs" }, legacy, "outside"),                                                    // short path from inside the tree
+                ("Read", new { file_path = "legacy/../../Legacy/AcmeAdmin/Forms/X.cs" }, work, "outside"),                        // dot-dot detour
+                ("Read", new { file_path = "../../etc/hostname" }, work, "outside"),                                              // outside the allow-list, not the legacy tree
+                ("Grep", new { pattern = "Save", path = "../Legacy" }, work, "outside"),
+                ("Grep", new { pattern = "Save" }, legacy, "outside"),                                                            // default search root is the cwd
+                ("Glob", new { pattern = "../Legacy/**/*.cs" }, work, "outside"),
+                ("Write", new { file_path = "../shared/x.txt", content = "x" }, work, "outside"),
+                ("Bash", new { command = "cd ../Legacy/AcmeAdmin && cat Forms/X.cs" }, work, "directory"),                      // cd into the tree, relative reads
+                ("Bash", new { command = "cat Forms/X.cs" }, legacy, "outside"),                                                 // session sitting in the tree
+                ("Bash", new { command = "cat ../Legacy/AcmeAdmin/Forms/X.cs" }, work, "outside"),
+                ("Bash", new { command = "git -C .. log" }, work, "outside"),
+                ("Bash", new { command = "cd $HOME && ls" }, work, "directory"),
+                ("Bash", new { command = "cat ~/notes.txt" }, work, "outside"),
+                ("Bash", new { command = "cat $ROOT/Forms/X.cs" }, work, "resolve"),
+                ("PowerShell", new { command = "Set-Location -Path ..\\Legacy; Get-Content Forms\\X.cs" }, work, "directory"),
+                ("Monitor", new { command = "tail -f ../Legacy/AcmeAdmin/Forms/X.cs" }, work, "outside"),
+                ("Bash", new { command = "cat .''./Legacy/AcmeAdmin/Forms/X.cs" }, work, "resolve"),                              // quote splice of ..
+                ("Bash", new { command = "cat .\\./Legacy/AcmeAdmin/Forms/X.cs" }, work, "resolve"),                              // backslash escape inside ..
+                ("Bash", new { command = "ls .?/Legacy/AcmeAdmin/Forms" }, work, "resolve"),                                      // wildcard that matches ..
+                ("Bash", new { command = "ls -d .*/Legacy" }, work, "resolve"),
+                ("Bash", new { command = "ls .*" }, work, "resolve"),
+                ("Bash", new { command = "ls [.][.]/Legacy" }, work, "resolve"),
+                ("Bash", new { command = "cat .{.,}/Legacy/AcmeAdmin/Forms/X.cs" }, work, "resolve"),                              // brace expansion
+                ("Bash", new { command = "echo \"it's\" && cat .{.,}/Legacy/AcmeAdmin/Forms/X.cs" }, work, "brace"),               // after a quote that holds the other quote
+                ("Bash", new { command = "bash -c \"cat .{.,}/Legacy/AcmeAdmin/Forms/X.cs\"" }, work, "brace"),                  // inside a nested shell's command
+                ("Bash", new { command = "cd .''. && ls" }, work, "resolve"),                                                      // the same through cd
+                ("Monitor", new { command = "tail -f .''./Legacy/AcmeAdmin/Forms/X.cs" }, work, "resolve"),
+                ("PowerShell", new { command = "Get-Content .`.\\Legacy\\AcmeAdmin\\Forms\\X.cs" }, work, "resolve"),             // backtick escape
+                ("PowerShell", new { command = "Get-Content .?\\Legacy\\AcmeAdmin\\Forms\\X.cs" }, work, "resolve"),
+                ("Bash", new { command = "powershell -Command \"gc ..\\Legacy\\AcmeAdmin\\Forms\\X.cs\"" }, work, "outside"),       // backslash path through a Bash call
+                ("Bash", new { command = "powershell -c \"cd ..\\Legacy; gc AcmeAdmin\\Forms\\X.cs\"" }, work, "directory"),
+                ("Bash", new { command = "git commit -m \"cd up\" && cat ../Legacy/App/X.cs" }, work, "outside"),                 // cd inside a message is not a directory change
+                ("Bash", new { command = "git commit -m \"fix; cd legacy/M\" && cat ../../Legacy/App/X.cs" }, work, "outside"),   // nor after a quoted ;
+                ("Bash", new { command = "gcc -I../Legacy/AcmeAdmin x.c" }, work, "outside"),                                    // path glued to a short option
+                ("Bash", new { command = "cat src/*/../../../Legacy/AcmeAdmin/Forms/X.cs" }, work, "resolve"),                   // .. after a wildcard
+                ("Bash", new { command = "cat " + work.Replace('\\', '/') + "*/x" }, work, "outside"),                          // a wildcard on the repo name reaches its siblings
+                ("Glob", new { pattern = "legacy/*/../../../Legacy/**/*.cs" }, work, "resolve"),
+                ("Glob", new { pattern = "{..,x}/Legacy/**/*.cs" }, work, "resolve"),                                            // a brace alternative that is ..
+                ("Grep", new { pattern = "Save", glob = "{..,x}/Legacy/**/*.cs" }, work, "resolve"),
+                ("Glob", new { pattern = "**/{..}/Legacy/*.cs" }, work, "resolve"),
+                ("Read", new { }, work, "path"),                                                                                  // nothing to decide on
+                ("NotAKnownTool", new { x = 1 }, work, "tool"),
+            };
+            // from a cwd below the repo root a missed cd .. leaves ../Legacy looking like a repo path: every form must be followed
+            var below = Path.Combine(work, "legacy");
+            const string Up = "cat ../Legacy/AcmeAdmin/Forms/X.cs";
+            const string PsUp = "gc ..\\Legacy\\AcmeAdmin\\Forms\\X.cs";
+            denied = denied.Concat(new (string Tool, object Input, string Cwd, string Why)[]
+            {
+                ("Bash", new { command = "if true; then cd ..; " + Up + "; fi" }, below, "outside"),                             // reserved words keep command position
+                ("Bash", new { command = "for d in a; do cd ..; " + Up + "; done" }, below, "outside"),
+                ("Bash", new { command = "command cd .. && " + Up }, below, "outside"),                                          // wrappers too
+                ("Bash", new { command = "builtin cd .. && " + Up }, below, "outside"),
+                ("Bash", new { command = "! cd .. && " + Up }, below, "outside"),
+                ("Bash", new { command = "time cd .. && " + Up }, below, "outside"),
+                ("Bash", new { command = "CDPATH= cd .. && " + Up }, below, "outside"),
+                ("Bash", new { command = "bash -c \"cd ..; " + Up + "\"" }, below, "outside"),                                   // a nested shell's command
+                ("Bash", new { command = "sh -c 'cd .. && " + Up + "'" }, below, "outside"),
+                ("PowerShell", new { command = "if ($true) { cd .. }; " + PsUp }, below, "outside"),                            // PowerShell blocks
+                ("PowerShell", new { command = "foreach ($x in 1) { Set-Location .. }; " + PsUp }, below, "outside"),
+                ("PowerShell", new { command = "1 | ForEach-Object { cd .. }; " + PsUp }, below, "outside"),
+                ("Bash", new { command = "bash --norc -c \"cd $HOME && cat Legacy/AcmeAdmin/Forms/X.cs\"" }, below, "directory"),  // long options before -c
+                ("Bash", new { command = "bash --login -c \"cd; cat Legacy/AcmeAdmin/Forms/X.cs\"" }, below, "directory"),
+                ("Bash", new { command = "bash -o pipefail -c \"cd $HOME && cat Legacy/AcmeAdmin/Forms/X.cs\"" }, below, "directory"),
+                ("Bash", new { command = "sudo cd .. && ls" }, below, "first word"),                                             // a cd the guard cannot follow
+                ("Bash", new { command = "sudo cd $HOME && ls" }, below, "first word"),
+                ("Bash", new { command = "sudo cd && ls" }, below, "first word"),
+                ("Bash", new { command = "xargs cd %USERPROFILE%" }, below, "first word"),
+            }).ToArray();
+            var denials = 0;
+            foreach (var phase in new[] { "specify", "implement" })
+            {
+                File.WriteAllText(Path.Combine(work, "legacy", ".phase"), phase + "\n");
+                foreach (var (tool, input, cwd) in allowed)
+                {
+                    var r = GuardHookTests.Run(work, HookCall(tool, input, cwd), hideJq: false);
+                    Assert.True(r.Code == 0, $"{phase}: {tool} {System.Text.Json.JsonSerializer.Serialize(input)} should pass:\n{r.Err}");
+                }
+                foreach (var (tool, input, cwd, why) in denied)
+                {
+                    var r = GuardHookTests.Run(work, HookCall(tool, input, cwd), hideJq: false);
+                    Assert.True(r.Code == 2, $"{phase}: {tool} {System.Text.Json.JsonSerializer.Serialize(input)} should be refused");
+                    Assert.Contains(why, r.Err);
+                    Assert.Single(r.Err.Trim().Split('\n'));                                                                      // a one-line reason
+                    denials++;
+                }
+                // an input the hook cannot parse is refused, not waved through
+                var junk = GuardHookTests.Run(work, "this is not json", hideJq: false);
+                Assert.Equal(2, junk.Code); denials++;
+            }
+            // the log: one line per denial, date, phase, tool, reason; the legitimate calls left no line
+            var lines = File.ReadAllLines(log);
+            Assert.Equal(denials, lines.Length);
+            Assert.All(lines, l => { var f = l.Split('\t'); Assert.Equal(4, f.Length); Assert.Matches(@"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$", f[0]); Assert.Contains(f[1], new[] { "specify", "implement" }); Assert.NotEmpty(f[2]); Assert.NotEmpty(f[3]); });
+            Assert.Contains(lines, l => l.Split('\t')[2] == "mcp__filesystem__read_text_file" && l.Contains("outside"));
+            Assert.Contains(lines, l => l.Split('\t')[2] == "mcp__codegraph__get_symbol");
+
+            // the settings command, run from a session cwd below the repo root: CLAUDE_PROJECT_DIR keeps the phase readable
+            var hookCommand = settings.RootElement.GetProperty("hooks").GetProperty("PreToolUse")[0].GetProperty("hooks")[0].GetProperty("command").GetString()!;
+            File.WriteAllText(Path.Combine(work, "legacy", ".phase"), "specify\n");
+            var sub = Path.Combine(work, "legacy", "M"); Directory.CreateDirectory(sub);
+            var before = File.ReadAllLines(log).Length;
+            var fromSub = GuardHookTests.RunCommand(sub, hookCommand, work, HookCall("Read", new { file_path = "../../../Legacy/AcmeAdmin/Forms/X.cs" }, sub));
+            Assert.Equal(2, fromSub.Code); Assert.Contains("outside", fromSub.Err);
+            Assert.Equal(0, GuardHookTests.RunCommand(sub, hookCommand, work, HookCall("Read", new { file_path = "spec/X.md" }, sub)).Code);
+            Assert.Equal(before + 1, File.ReadAllLines(log).Length);
+            Assert.Equal(2, GuardHookTests.RunCommand(sub, hookCommand, Path.Combine(work, "missing"), HookCall("Read", new { file_path = "spec/X.md" }, sub)).Code);
+
+            // extract phase stays unguarded and logs nothing
+            File.WriteAllText(Path.Combine(work, "legacy", ".phase"), "extract\n");
+            Assert.Equal(0, GuardHookTests.Run(work, HookCall("Read", new { file_path = legacyForm }, work), hideJq: false).Code);
+            Assert.Equal(0, GuardHookTests.Run(work, HookCall("mcp__codegraph__get_symbol", new { symbol = "X" }, work), hideJq: false).Code);
+            Assert.Equal(denials + 1, File.ReadAllLines(log).Length);
+
+            // guard.denyTools extends the deny-list, guard.allowRoots the allow-list
+            File.WriteAllText(Path.Combine(work, "legacy", ".phase"), "specify\n");
+            Assert.Equal(0, GuardHookTests.Run(work, HookCall("mcp__house-lookup__find", new { q = "x" }, work), hideJq: false).Code);
+            Assert.Equal(2, GuardHookTests.Run(work, HookCall("Read", new { file_path = "../shared/x.txt" }, work), hideJq: false).Code);
+            File.WriteAllText(config, "{\n  \"project\": \"" + legacy.Replace('\\', '/') + "/AcmeAdmin.csproj\",\n  \"output\": \".\",\n  \"guard\": { \"denyTools\": [\"mcp__house-lookup__*\"], \"allowRoots\": [\"../../shared\"] }\n}\n");
+            var custom = GuardHookTests.Run(work, HookCall("mcp__house-lookup__find", new { q = "x" }, work), hideJq: false);
+            Assert.Equal(2, custom.Code); Assert.Contains("code-index", custom.Err);
+            Assert.Equal(0, GuardHookTests.Run(work, HookCall("Read", new { file_path = "../shared/x.txt" }, work), hideJq: false).Code);
+            Assert.Equal(2, GuardHookTests.Run(work, HookCall("Read", new { file_path = "../Legacy/AcmeAdmin/Forms/X.cs" }, work), hideJq: false).Code);
+
+            // a config parity accepts (a comment, a trailing comma) that jq cannot read: the refusal names the cause
+            File.WriteAllText(config, "{\n  // the legacy project\n  \"project\": \"" + legacy.Replace('\\', '/') + "/AcmeAdmin.csproj\",\n}\n");
+            Assert.EndsWith("AcmeAdmin.csproj", ExtractConfig.Load(config).Project);
+            var lenient = GuardHookTests.Run(work, HookCall("Read", new { file_path = "legacy/M/manifests/X.md" }, work), hideJq: false);
+            Assert.Equal(2, lenient.Code); Assert.Contains("not strict JSON", lenient.Err);
+
+            // the legacy root named as a Windows drive path, in every spelling a Windows host produces
+            File.WriteAllText(config, "{\n  \"project\": \"C:/src/Legacy/AcmeAdmin/AcmeAdmin.csproj\"\n}\n");
+            foreach (var spelling in new[] { "C:\\src\\Legacy\\AcmeAdmin\\Forms\\X.cs", "c:/SRC/legacy/acmeadmin/Forms/X.cs", "/c/src/Legacy/AcmeAdmin/Forms/X.cs", "/mnt/c/src/Legacy/AcmeAdmin/Forms/X.cs" })
+                Assert.Equal(2, GuardHookTests.Run(work, HookCall("Read", new { file_path = spelling }, work), hideJq: false).Code);
+
+            // a repo whose path starts with the legacy root's path is not the legacy root
+            var next = legacy + "-next";
+            Directory.CreateDirectory(Path.Combine(next, "legacy", "hooks"));
+            File.Copy(Path.Combine(_f.RepoRoot, "adopt", "hooks", "guard-legacy.sh"), Path.Combine(next, "legacy", "hooks", "guard-legacy.sh"));
+            File.WriteAllText(Path.Combine(next, "legacy", "extract.config.json"), "{\n  \"project\": \"../../AcmeAdmin/AcmeAdmin.csproj\"\n}\n");
+            File.WriteAllText(Path.Combine(next, "legacy", ".phase"), "specify\n");
+            Assert.Equal(0, GuardHookTests.Run(next, HookCall("Bash", new { command = "ls" }, next), hideJq: false).Code);
+            Assert.Equal(0, GuardHookTests.Run(next, HookCall("Read", new { file_path = "legacy/M/manifests/X.md" }, next), hideJq: false).Code);
+            Assert.Equal(2, GuardHookTests.Run(next, HookCall("Read", new { file_path = "../AcmeAdmin/Forms/X.cs" }, next), hideJq: false).Code);
+
+            // a legacy root inside the repo: a bare directory name reaches it as surely as a path
+            var inner = Path.Combine(baseDir, "inner");
+            Directory.CreateDirectory(Path.Combine(inner, "legacy", "hooks"));
+            Directory.CreateDirectory(Path.Combine(inner, "LegacyApp"));
+            File.Copy(Path.Combine(_f.RepoRoot, "adopt", "hooks", "guard-legacy.sh"), Path.Combine(inner, "legacy", "hooks", "guard-legacy.sh"));
+            File.WriteAllText(Path.Combine(inner, "legacy", "extract.config.json"), "{\n  \"project\": \"../LegacyApp/LegacyApp.csproj\"\n}\n");
+            File.WriteAllText(Path.Combine(inner, "legacy", ".phase"), "specify\n");
+            foreach (var c in new[] { "grep -r Foo LegacyApp", "ls LegacyApp", "cp -r LegacyApp out" })
+            {
+                var r = GuardHookTests.Run(inner, HookCall("Bash", new { command = c }, inner), hideJq: false);
+                Assert.True(r.Code == 2, $"{c} should be refused"); Assert.Contains("legacy source root", r.Err);
+            }
+            Assert.Equal(2, GuardHookTests.Run(inner, HookCall("mcp__fs__list_directory", new { path = "LegacyApp" }, inner), hideJq: false).Code);
+            foreach (var c in new[] { "ls", "grep -r Foo src", "cat legacy/M/spec/X.md" })
+                Assert.Equal(0, GuardHookTests.Run(inner, HookCall("Bash", new { command = c }, inner), hideJq: false).Code);
+            Assert.Equal(0, GuardHookTests.Run(inner, HookCall("mcp__docs__search_docs", new { query = "Foo" }, inner), hideJq: false).Code);
+            // ... and a search rooted at a directory above it reaches it without naming it
+            foreach (var (tool, input) in new (string, object)[]
+            {
+                ("Grep", new { pattern = "Foo" }),
+                ("Grep", new { pattern = "Foo", path = "." }),
+                ("Glob", new { pattern = "**/*.cs" }),
+                ("Glob", new { pattern = "*/Forms/*.cs" }),
+                ("Grep", new { pattern = "Foo", glob = "*.cs" }),
+                ("mcp__fs__search", new { path = ".", pattern = "x" }),
+                ("mcp__fs__search", new { path = "", pattern = "x" }),
+            })
+            {
+                var r = GuardHookTests.Run(inner, HookCall(tool, input, inner), hideJq: false);
+                Assert.True(r.Code == 2, $"{tool} {System.Text.Json.JsonSerializer.Serialize(input)} should be refused");
+                Assert.Contains("contains the legacy source root", r.Err);
+                Assert.Contains("legacyapp", r.Err);
+            }
+            Assert.Equal(0, GuardHookTests.Run(inner, HookCall("Grep", new { pattern = "Foo", path = "src" }, inner), hideJq: false).Code);
+
+            // without jq nothing in a restricted phase can be parsed: refused, with the reason
+            var nojq = Path.Combine(work, "nojq"); Directory.CreateDirectory(nojq);
+            foreach (var tool in new[] { "cat", "tr", "sed", "grep", "awk", "dirname", "printf", "head", "date", "sh" })
+                foreach (var cand in new[] { "/usr/bin/" + tool, "/bin/" + tool })
+                    if (File.Exists(cand) && !File.Exists(Path.Combine(nojq, tool))) { File.CreateSymbolicLink(Path.Combine(nojq, tool), cand); break; }
+            var noJq = GuardHookTests.Run(work, HookCall("Read", new { file_path = "legacy/M/manifests/X.md" }, work), hideJq: true);
+            Assert.Equal(2, noJq.Code); Assert.Contains("jq", noJq.Err);
+            Assert.Contains(File.ReadAllLines(log), l => l.Contains("jq"));
+        }
+        finally { Directory.Delete(baseDir, true); }
+    }
+
     [Fact]
     public void issue_21_a_spec_cites_evidence_outside_the_manifest_and_lint_reports_it_stale_when_the_source_moves()
     {
@@ -937,13 +1212,29 @@ public sealed class IssueTests
 /// <summary>The guard hook, run through sh. Skipped where no POSIX shell exists (plain Windows without Git Bash).</summary>
 public sealed class GuardHookTests
 {
-    private static string? Sh() => new[] { "/bin/sh", "/usr/bin/sh", "sh" }.FirstOrDefault(p => { try { using var x = Process.Start(new ProcessStartInfo(p, "-c true") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true }); x!.WaitForExit(); return x.ExitCode == 0; } catch { return false; } });
+    internal static string? Sh() => new[] { "/bin/sh", "/usr/bin/sh", "sh" }.FirstOrDefault(p => { try { using var x = Process.Start(new ProcessStartInfo(p, "-c true") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true }); x!.WaitForExit(); return x.ExitCode == 0; } catch { return false; } });
 
-    private static (int Code, string Err) Run(string workDir, string stdin, bool hideJq)
+    internal static (int Code, string Err) Run(string workDir, string stdin, bool hideJq)
     {
         var psi = new ProcessStartInfo(Sh()!, "legacy/hooks/guard-legacy.sh") { WorkingDirectory = workDir, UseShellExecute = false, RedirectStandardInput = true, RedirectStandardError = true, RedirectStandardOutput = true };
         if (hideJq) psi.Environment["PATH"] = Path.Combine(workDir, "nojq");
         psi.Environment.Remove("PARITY_LEGACY_ROOT");
+        psi.Environment.Remove("CLAUDE_PROJECT_DIR");
+        return Exec(psi, stdin);
+    }
+
+    /// <summary>The hook command as settings.json spells it, run by sh -c from <paramref name="procDir"/> with CLAUDE_PROJECT_DIR set.</summary>
+    internal static (int Code, string Err) RunCommand(string procDir, string command, string projectDir, string stdin)
+    {
+        var psi = new ProcessStartInfo(Sh()!) { WorkingDirectory = procDir, UseShellExecute = false, RedirectStandardInput = true, RedirectStandardError = true, RedirectStandardOutput = true };
+        psi.ArgumentList.Add("-c"); psi.ArgumentList.Add(command);
+        psi.Environment.Remove("PARITY_LEGACY_ROOT");
+        psi.Environment["CLAUDE_PROJECT_DIR"] = projectDir;
+        return Exec(psi, stdin);
+    }
+
+    static (int Code, string Err) Exec(ProcessStartInfo psi, string stdin)
+    {
         using var p = Process.Start(psi)!;
         p.StandardInput.Write(stdin); p.StandardInput.Close();
         var err = p.StandardError.ReadToEnd(); p.WaitForExit();
@@ -951,7 +1242,7 @@ public sealed class GuardHookTests
     }
 
     [Fact]
-    public void issue_9_guard_fails_closed_without_a_root_and_works_without_jq()
+    public void issue_9_guard_fails_closed_without_a_root_and_without_jq()
     {
         if (Sh() == null) return; // no POSIX shell: the hook cannot run here at all
         var dir = AppContext.BaseDirectory;
@@ -961,11 +1252,11 @@ public sealed class GuardHookTests
         File.Copy(Path.Combine(dir!, "adopt", "hooks", "guard-legacy.sh"), Path.Combine(work, "legacy", "hooks", "guard-legacy.sh"));
         // a PATH with only the core tools and no jq: cat, tr, sed, grep, dirname resolved via a symlink farm
         var nojq = Path.Combine(work, "nojq"); Directory.CreateDirectory(nojq);
-        foreach (var tool in new[] { "cat", "tr", "sed", "grep", "dirname", "printf", "head", "sh" })
+        foreach (var tool in new[] { "cat", "tr", "sed", "grep", "awk", "dirname", "printf", "head", "date", "sh" })
             foreach (var cand in new[] { "/usr/bin/" + tool, "/bin/" + tool })
                 if (File.Exists(cand) && !File.Exists(Path.Combine(nojq, tool))) { File.CreateSymbolicLink(Path.Combine(nojq, tool), cand); break; }
         var legacyRead = "{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"C:\\\\src\\\\Legacy\\\\AcmeAdmin\\\\Forms\\\\X.cs\"}}";
-        var manifestRead = "{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"/repo/legacy/M/manifests/X.md\"}}";
+        var manifestRead = "{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"legacy/M/manifests/X.md\"}}";
 
         File.WriteAllText(Path.Combine(work, "legacy", ".phase"), "extract\n");
         Assert.Equal(0, Run(work, legacyRead, hideJq: true).Code);                        // extract phase: nothing guarded
@@ -979,7 +1270,10 @@ public sealed class GuardHookTests
         var blocked = Run(work, legacyRead, hideJq: true);                                  // sed fallback finds the root
         Assert.Equal(2, blocked.Code);
         Assert.Contains("off limits", blocked.Err);
-        Assert.Equal(0, Run(work, manifestRead, hideJq: true).Code);                       // manifests stay readable
+        var noJq = Run(work, manifestRead, hideJq: true);                                   // sed finds the root, but parsed input needs jq (#22 d): refused, not waved through
+        Assert.Equal(2, noJq.Code);
+        Assert.Contains("jq is required", noJq.Err);
+        Assert.Equal(0, Run(work, manifestRead, hideJq: false).Code);                      // manifests stay readable with jq
         Assert.Equal(2, Run(work, legacyRead, hideJq: false).Code);                         // and the same with jq if present
         Directory.Delete(work, true);
     }

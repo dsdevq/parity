@@ -2,8 +2,8 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Read|Grep|Glob|Bash|Edit|Write|MultiEdit",
-        "hooks": [{ "type": "command", "command": "sh legacy/hooks/guard-legacy.sh" }]
+        "matcher": "^(Read|Grep|Glob|Bash|PowerShell|Monitor|Edit|Write|MultiEdit|NotebookEdit|mcp__.*)$",
+        "hooks": [{ "type": "command", "command": "sh \"$CLAUDE_PROJECT_DIR\"/legacy/hooks/guard-legacy.sh" }]
       }
     ],
     "Stop": [
