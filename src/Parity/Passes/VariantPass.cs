@@ -14,7 +14,8 @@ public sealed record VariantClass(VariantConfig Config, FormClass Form, FormClas
 /// <summary>
 /// Describes a variant as a delta on its base unit (issue #20): the designer and handler passes run on the subclass,
 /// with the base form's controls in scope, and everything the subclass adds, removes, re-tags, wires or overrides
-/// becomes one var: entry with the variant's file:line. What the variant inherits unchanged is not repeated.
+/// becomes one var: entry with the variant's file:line. What the variant inherits unchanged is not repeated. Constants and
+/// resource texts its code reads are compared with the base's constants[] by Type.Member and value.
 /// </summary>
 public sealed class VariantPass
 {
@@ -54,9 +55,8 @@ public sealed class VariantPass
             if (SymbolEqualityComparer.Default.Equals(t, _v.Base.Symbol)) break;
         }
         var controlNames = _baseControls.Keys.Where(k => k != "$this").Concat(d.Controls.Keys).ToHashSet(StringComparer.Ordinal);
-        // the variant's constant reads are collected and dropped: constants[] is resolved for the base unit only
         var h = new HandlerPass(_v.Form, _compilation, controlNames, cfg, cats, index, loaded, _baseDir, constants, owners).Run(d.Events);
-        foreach (var w in h.WantedFiles) wanted.Add(w);
+        foreach (var w in h.WantedFiles.Concat(constants.WantedFiles)) wanted.Add(w);
 
         var delta = new List<VariantDelta>();
         var layout = new List<VariantChange>();
@@ -139,6 +139,20 @@ public sealed class VariantPass
                 changes, events.Count == 0 ? null : events, null, null, null, null, dyn.Statement, dyn.Loc));
         }
 
+        // constants and resource texts the variant's code reads: the base's Type.Member read again is nothing, the same member
+        // name on another type (or another resource) is the base's value replaced, anything else is a read the base does not make
+        var constantDiags = new List<Diagnostic>();
+        var variantConstants = constants.Freeze(_vName, i => i, constantDiags);
+        var variantReads = variantConstants.Select(k => (k.Type, k.Member)).ToHashSet();
+        foreach (var k in variantConstants)
+        {
+            if (k.FirstUse == null || _base.Constants.Any(b => b.Type == k.Type && b.Member == k.Member)) continue;
+            var counterpart = _base.Constants.FirstOrDefault(b => b.Member == k.Member && (b.Kind == "resource") == (k.Kind == "resource") && !variantReads.Contains((b.Type, b.Member)));
+            var member = System.Text.RegularExpressions.Regex.Replace(k.Member, @"\s+", "_");
+            delta.Add(new VariantDelta($"var:{_id}/constant/{SimpleName(k.Type)}.{member}", "constant", counterpart == null ? null : $"{SimpleName(counterpart.Type)}.{counterpart.Member}", k.Kind, k.Type, null,
+                new List<VariantChange> { new("value", counterpart?.Value, k.Value, k.FirstUse) }, null, null, null, null, null, null, k.FirstUse));
+        }
+
         // wiring the variant adds, in its designer or its code
         foreach (var e in d.Events.Concat(h.Events).Where(e => e.Source is "designer" or "code" or "dynamic").DistinctBy(e => e.Id + "|" + e.Handler))
             delta.Add(new VariantDelta(Map(e.Id), "event", MapControl(e.Control), Map(e.Handler), null, e.Source, null, null, null, null, null, null, null, e.Loc));
@@ -204,7 +218,7 @@ public sealed class VariantPass
             .Select(x => x with { Reads = Ids(x.Reads), Writes = Ids(x.Writes), Calls = Ids(x.Calls) })
             .OrderBy(m => m.Depth).ThenBy(m => m.Id, StringComparer.Ordinal).ToList();
         var baseHandlerNames = _base.Handlers.Select(x => x.Name).ToHashSet(StringComparer.Ordinal);
-        var diags = d.Diagnostics.Where(x => x.Code != "NO-DESIGNER")
+        var diags = d.Diagnostics.Where(x => x.Code != "NO-DESIGNER").Concat(constantDiags)
             .Concat(h.Diagnostics.Where(x => !(x.Code == "HANDLER-MISSING" && baseHandlerNames.Any(n => x.Message.Contains($"'{n}'", StringComparison.Ordinal)))))
             .DistinctBy(x => x.Code + x.Message).OrderBy(x => x.Code, StringComparer.Ordinal).ThenBy(x => x.Message, StringComparer.Ordinal).ToList();
         var files = _v.Form.Declarations.Select(x => Path.GetRelativePath(_baseDir, x.SyntaxTree.FilePath).Replace('\\', '/')).Distinct().OrderBy(x => x, StringComparer.Ordinal).ToList();
@@ -316,6 +330,8 @@ public sealed class VariantPass
         }
         return Syntax.LocOf(init, _baseDir);
     }
+
+    private static string SimpleName(string typeName) => typeName[(typeName.LastIndexOf('.') + 1)..];
 
     private static List<VariantChange>? Props(SortedDictionary<string, string> props)
     {

@@ -8,7 +8,9 @@ namespace Parity.Passes;
 /// <summary>
 /// Reads factory methods (issue #20): which form class a method hands out for which key. Understood shapes are a switch
 /// statement or expression on the key, an if-chain comparing the key to a literal, and a dictionary field from key to
-/// typeof(T) that the method reads; any other new T() / typeof(T) of a form in the method is its "default".
+/// typeof(T) that the method reads. Any other new T() / typeof(T) of a form in the method is its "default" when it is an
+/// unconditional return, an else branch or the miss of a dictionary lookup, and otherwise a case keyed by the source text
+/// of the condition guarding it.
 /// Cases carry full class names; the caller maps them onto a unit and its variants.
 /// </summary>
 public static class FactoryPass
@@ -128,11 +130,52 @@ public static class FactoryPass
             if (cases.Count > before) on.Add(field.Name);
         }
 
-        // whatever form the method still constructs outside the keyed shapes is what an unmatched key gets
-        if (cases.Count > 0 && cases.All(c => c.Key != "default")) Add("default", body);
+        // a form the keyed shapes left over is what an unmatched key gets only when nothing conditional guards it; behind a
+        // condition the pass does not understand it is a case keyed by that condition's source text
+        if (cases.Count > 0)
+        {
+            foreach (var n in body.DescendantNodesAndSelf().Where(n => n is ObjectCreationExpressionSyntax or TypeOfExpressionSyntax).ToList())
+            {
+                if (consumed.Contains(n) || FormOf(n) is not { } cls || Guard(n, body, on) is not { } guard) continue;
+                var key = guard.Length == 0 ? "default" : guard;
+                if (cases.Any(c => c.Key == key)) continue;
+                consumed.Add(n);
+                cases.Add(new FactoryCase(key, cls, null, Syntax.LocOf(n, baseDir)));
+            }
+        }
         if (cases.Count == 0) return null;
         return new FactoryInfo(Syntax.MethodId(sym), string.Join(", ", on.Distinct()), cases, Syntax.LocOf(method, baseDir));
     }
+
+    /// <summary>
+    /// The conditions an unkeyed form sits behind, joined with &amp;&amp; (empty: unconditional, an else branch, or the miss of a
+    /// lookup in a dictionary the method reads); null when it belongs to a keyed case already.
+    /// </summary>
+    private static string? Guard(SyntaxNode form, SyntaxNode body, List<string> keyedOn)
+    {
+        var guards = new List<string>();
+        for (var c = form; c != body; c = c.Parent!)
+        {
+            switch (c.Parent)
+            {
+                case SwitchSectionSyntax or SwitchExpressionArmSyntax:
+                    return null;
+                case IfStatementSyntax iff when iff.Statement == c:
+                    if (Compared(iff.Condition) != null) return null;
+                    if (!IsMiss(iff.Condition, keyedOn)) guards.Insert(0, Syntax.Text(iff.Condition));
+                    break;
+                case ConditionalExpressionSyntax ce when ce.WhenTrue == c:
+                    guards.Insert(0, Syntax.Text(ce.Condition));
+                    break;
+            }
+        }
+        return string.Join(" && ", guards);
+    }
+
+    /// <summary>!map.TryGetValue(...) or !map.ContainsKey(...) on a dictionary the method keys by.</summary>
+    private static bool IsMiss(ExpressionSyntax cond, List<string> keyedOn) =>
+        cond is PrefixUnaryExpressionSyntax { OperatorToken.RawKind: (int)SyntaxKind.ExclamationToken, Operand: InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax { Name.Identifier.Text: "TryGetValue" or "ContainsKey" } ma } }
+        && keyedOn.Contains(Syntax.Text(ma.Expression));
 
     /// <summary>key == "X", "X" == key, key.Equals("X"), string.Equals(key, "X"[, comparison]).</summary>
     private static (string On, string Key)? Compared(ExpressionSyntax cond)

@@ -27,7 +27,8 @@ namespace SampleLegacy.Forms
                 Surname = txtSurname.Text,
                 Postcode = txtPostcode.Text,
                 DateOfBirth = dtDob.EditValue as DateTime?,
-                IncludeDeceased = chkDeceased.Checked
+                IncludeDeceased = chkDeceased.Checked,
+                MaxResults = SearchLimits.MaxResults
             };
             grdResults.DataSource = ServiceLocator.Client.SearchClients(criteria);
             btnSelect.Enabled = false;

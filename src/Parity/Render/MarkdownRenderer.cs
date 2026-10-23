@@ -230,7 +230,7 @@ public static class MarkdownRenderer
                 {
                     sb.AppendLine($"- `{d.Id}`");
                     foreach (var c in d.Changes!)
-                        sb.AppendLine($"  - {c.Property}: {(d.Kind == "retagged" ? (c.Base == null ? "(not set in the base) -> " : $"{Esc(c.Base)} -> ") : "")}{Esc(c.Value)}{(c.Loc == null ? "" : " " + LocStr(c.Loc))}");
+                        sb.AppendLine($"  - {c.Property}: {(d.Kind == "retagged" ? (c.Base == null ? "(not set in the base) -> " : $"{Esc(c.Base)} -> ") : d.Kind == "constant" && c.Base != null ? $"{Esc(c.Base)} -> " : "")}{Esc(c.Value)}{(c.Loc == null ? "" : " " + LocStr(c.Loc))}");
                 }
                 sb.AppendLine();
             }

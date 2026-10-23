@@ -45,7 +45,8 @@ public static class Extractor
         var variantDiags = new List<Diagnostic>();
         var variants = DiscoverVariants(cfg, baseIndex, variantIndexes, index, matcher, variantDiags);
         foreach (var v in variants) foreach (var f in v.Files) loaded.Add(f);
-        var factoryFiles = FactoryFiles(cfg, index, variants);
+        var factoryEntries = ResolveFactories(cfg, index, variantDiags);
+        var factoryFiles = FactoryFiles(index, variants, factoryEntries);
         foreach (var f in factoryFiles) loaded.Add(f);
         foreach (var v in variants.GroupBy(v => v.Config.Id))
             log.WriteLine($"variant {v.Key}: {string.Join(", ", v.Select(x => $"{x.Class} on {x.Base}"))}");
@@ -94,6 +95,7 @@ public static class Extractor
             if (forms.Count == 0)
                 throw new InvalidOperationException($"'{formGlob}' matched classes but none derives from a configured form base type. Matched: {(rejected.Count == 0 ? "(none with a base list)" : string.Join("; ", rejected.Take(8)))}. Unresolved base types: {string.Join(", ", refDiags.Where(d => d.Code == "BASE-UNRESOLVED").Select(d => d.Message))}");
             var factories = factoryFiles.Count == 0 ? new List<FactoryInfo>() : FactoryPass.Find(compilation, factoryFiles, cfg, project.Dir, 1);
+            var roundVariantDiags = variantDiags.Concat(UnreadFactories(factoryEntries, factories)).ToList();
 
             manifests.Clear();
             var wanted = new HashSet<string>(StringComparer.Ordinal);
@@ -107,7 +109,7 @@ public static class Extractor
                 var h = new HandlerPass(form, compilation, controlNames, cfg, cats, index, loaded, project.Dir, constants).Run(d.Events);
                 ModelFacts.Apply(form.Symbol.Name, d, h, constants, compilation, index, loaded, wanted);
                 foreach (var w in h.WantedFiles.Concat(constants.WantedFiles)) wanted.Add(w);
-                var m = Assemble(form, project, d, h, constants, cats, diags.Concat(variantDiags.Where(x => x.Message.StartsWith(form.Symbol.Name + ":", StringComparison.Ordinal) || x.Message.StartsWith("variant", StringComparison.Ordinal))).ToList());
+                var m = Assemble(form, project, d, h, constants, cats, diags.Concat(roundVariantDiags.Where(x => x.Message.StartsWith(form.Symbol.Name + ":", StringComparison.Ordinal) || x.Message.StartsWith("variant", StringComparison.Ordinal))).ToList());
                 var mine = claimed.Values.Where(v => SymbolEqualityComparer.Default.Equals(v.Base.Symbol, form.Symbol)).OrderBy(v => v.Config.Id, StringComparer.Ordinal).ToList();
                 var vinfos = mine.Select(v =>
                 {
@@ -115,7 +117,7 @@ public static class Extractor
                                 ?? (variantResx.TryGetValue(v.Form.Symbol.Name, out var vp) ? ResxReader.Read(vp) : new Dictionary<string, string>());
                     return new VariantPass(v, m, compilation, project.Dir).Run(cfg, cats, index, loaded, vresx, wanted, new ConstantCollector(compilation, resxIndex, index, loaded, project.Dir));
                 }).ToList();
-                var mineFactories = FactoriesFor(factories, form, mine, cfg);
+                var mineFactories = FactoriesFor(factories, form, mine, factoryEntries);
                 manifests.Add(m with { Variants = vinfos.Count == 0 ? null : vinfos, Factories = mineFactories.Count == 0 ? null : mineFactories });
             }
 
@@ -276,8 +278,53 @@ public static class Extractor
         return result;
     }
 
+    /// <summary>A configured factories entry read against the file index: Type (Method null) or Type.Method, both by the type's simple name.</summary>
+    private sealed record FactoryEntry(string Variant, string Entry, string Type, string? Method);
+
+    private static string LastSegment(string name) => name[(name.LastIndexOf('.') + 1)..];
+
+    /// <summary>
+    /// A configured factories entry is a type or Type.Method, simple or namespace-qualified: the whole entry is tried as a
+    /// type first, then the entry without its last segment as the type of a method. An entry that matches no type is VARIANT-CONFIG.
+    /// </summary>
+    private static List<FactoryEntry> ResolveFactories(ExtractConfig cfg, FileIndex index, List<Diagnostic> diags)
+    {
+        var result = new List<FactoryEntry>();
+        foreach (var v in cfg.Variants)
+            foreach (var entry in v.Factories)
+            {
+                var dot = entry.LastIndexOf('.');
+                if (index.FilesFor(LastSegment(entry)).Count > 0) result.Add(new FactoryEntry(v.Id, entry, LastSegment(entry), null));
+                else if (dot > 0 && index.FilesFor(LastSegment(entry[..dot])).Count > 0) result.Add(new FactoryEntry(v.Id, entry, LastSegment(entry[..dot]), entry[(dot + 1)..]));
+                else diags.Add(new Diagnostic("VARIANT-CONFIG", $"variant {v.Id}: factories entry '{entry}' matches no type in the main project or a variant project (write a type, or Type.Method, simple or namespace-qualified)", null));
+            }
+        return result;
+    }
+
+    /// <summary>The declaring type (simple name) and method name of a method: id.</summary>
+    private static (string Type, string Method) Declaring(string methodId)
+    {
+        var sig = methodId["method:".Length..];
+        var qualified = sig.Contains('(') ? sig[..sig.IndexOf('(')] : sig;
+        var dot = qualified.LastIndexOf('.');
+        return (LastSegment(qualified[..Math.Max(dot, 0)]), qualified[(dot + 1)..]);
+    }
+
+    private static bool Reads(FactoryEntry e, FactoryInfo f)
+    {
+        var (type, method) = Declaring(f.Id);
+        return type == e.Type && (e.Method == null || e.Method == method);
+    }
+
+    /// <summary>VARIANT-CONFIG for a configured entry whose file loaded but from which no factory was read.</summary>
+    private static IEnumerable<Diagnostic> UnreadFactories(List<FactoryEntry> entries, List<FactoryInfo> factories) =>
+        entries.Where(e => !factories.Any(f => Reads(e, f))).Select(e => new Diagnostic("VARIANT-CONFIG",
+            $"variant {e.Variant}: factories entry '{e.Entry}' reads no factory: " + (e.Method == null
+                ? $"{e.Type} has no method that hands out a form class by a key"
+                : $"{e.Type} declares no method {e.Method} that hands out a form class by a key"), null));
+
     /// <summary>Files that construct two or more classes of one unit's family (the unit and its variants), plus configured factory types.</summary>
-    private static List<string> FactoryFiles(ExtractConfig cfg, FileIndex index, List<VariantCandidate> variants)
+    private static List<string> FactoryFiles(FileIndex index, List<VariantCandidate> variants, List<FactoryEntry> entries)
     {
         var files = new HashSet<string>(StringComparer.Ordinal);
         foreach (var family in variants.GroupBy(v => v.Base))
@@ -287,28 +334,24 @@ public static class Extractor
                 foreach (var f in index.FilesInstantiating(n)) hits[f] = hits.GetValueOrDefault(f) + 1;
             foreach (var (f, count) in hits) if (count >= 2) files.Add(f);
         }
-        foreach (var entry in cfg.Variants.SelectMany(v => v.Factories))
-        {
-            var type = index.FilesFor(entry).Count > 0 || !entry.Contains('.') ? entry : entry[..entry.LastIndexOf('.')];
-            foreach (var f in index.FilesFor(type[(type.LastIndexOf('.') + 1)..])) files.Add(f);
-        }
+        foreach (var e in entries)
+            foreach (var f in index.FilesFor(e.Type)) files.Add(f);
         return files.OrderBy(f => f, StringComparer.Ordinal).ToList();
     }
 
     /// <summary>The factories that hand out this unit or one of its variants, with each case mapped to "base" or the variant.</summary>
-    private static List<FactoryInfo> FactoriesFor(List<FactoryInfo> factories, FormClass form, List<VariantClass> variants, ExtractConfig cfg)
+    private static List<FactoryInfo> FactoriesFor(List<FactoryInfo> factories, FormClass form, List<VariantClass> variants, List<FactoryEntry> entries)
     {
         var baseName = Syntax.FullName(form.Symbol);
         var byClass = variants.ToDictionary(v => Syntax.FullName(v.Form.Symbol), v => v.Config.Id, StringComparer.Ordinal);
-        var configured = cfg.Variants.Where(v => variants.Any(x => x.Config.Id == v.Id)).SelectMany(v => v.Factories).ToList();
+        var configured = entries.Where(e => variants.Any(x => x.Config.Id == e.Variant)).ToList();
         var result = new List<FactoryInfo>();
         foreach (var f in factories)
         {
             var cases = f.Cases.Select(c => c with { Variant = c.Class == baseName ? "base" : byClass.TryGetValue(c.Class, out var id) ? id : null }).ToList();
             if (cases.All(c => c.Variant == null)) continue;
             var distinct = cases.Select(c => c.Class).Distinct().Count();
-            var isConfigured = configured.Any(e => f.Id.Contains("." + e + "(", StringComparison.Ordinal) || f.Id.Contains("." + e + ".", StringComparison.Ordinal) || f.Id.StartsWith("method:" + e, StringComparison.Ordinal));
-            if (distinct < 2 && !isConfigured) continue;
+            if (distinct < 2 && !configured.Any(e => Reads(e, f))) continue;
             result.Add(f with { Cases = cases });
         }
         return result;

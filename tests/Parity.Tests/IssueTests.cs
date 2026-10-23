@@ -661,6 +661,7 @@ public sealed class IssueTests
         Assert.Equal(new[]
         {
             "var:Larkspur/added/chkLoyaltyOnly",
+            "var:Larkspur/constant/LarkspurLimits.MaxResults",
             "var:Larkspur/event/chkLoyaltyOnly.CheckedChanged",
             "var:Larkspur/handler/chkLoyaltyOnly_CheckedChanged",
             "var:Larkspur/override/btnSearch_Click",
@@ -693,6 +694,14 @@ public sealed class IssueTests
         Assert.Equal("ctrl:ClientSearchForm/dtDob", D(ths, "var:Thistle/removed/dtDob").Target);
         Assert.Equal("ctrl:ClientSearchForm/$this", D(ths, "var:Thistle/added/ctor/lblTenant").Target);
 
+        // a constant the variant reads in place of the base's (same member name, another type, another value) is a delta with both values
+        var limit = D(lrk, "var:Larkspur/constant/LarkspurLimits.MaxResults");
+        Assert.Equal(("constant", "SearchLimits.MaxResults", "const"), (limit.Kind, limit.Target, limit.Detail));
+        var change0 = Assert.Single(limit.Changes!);
+        Assert.Equal(("value", "50", "200"), (change0.Property, change0.Base, change0.Value));
+        Assert.Equal(new Loc("Tenants/Larkspur/LarkspurClientSearchForm.cs", 27, 27), limit.Loc);
+        Assert.DoesNotContain(ths.Delta, d => d.Kind == "constant"); // Thistle reads the base's constant through its base call: nothing to account for
+
         // an override either replaces the base handler or extends it; only a replacement drops the base's service call
         var lo = D(lrk, "var:Larkspur/override/btnSearch_Click");
         Assert.Equal(("handler:ClientSearchForm/btnSearch_Click", "replaces base"), (lo.Target, lo.Detail));
@@ -712,6 +721,12 @@ public sealed class IssueTests
         var region = m.Factories.Single(x => x.Id.Contains("ForRegion", StringComparison.Ordinal));
         Assert.Equal("ByRegion", region.On);
         Assert.Equal(new[] { "Larkspur", "Thistle", "base" }, region.Cases.Select(c => c.Variant!).Distinct().OrderBy(x => x, StringComparer.Ordinal));
+        // a factory branch the pass does not understand is a case keyed by its condition text, never the default
+        var site = m.Factories.Single(x => x.Id.Contains(".ForSite(", StringComparison.Ordinal));
+        Assert.Equal("siteCode", site.On);
+        Assert.Equal(new[] { ("THS-PILOT", "Thistle"), ("siteCode.StartsWith(\"LRK\") && pilot", "Larkspur"), ("default", "base") },
+            site.Cases.Select(c => (c.Key, c.Variant!)));
+        Assert.Equal("default", region.Cases.Single(c => c.Variant == "base").Key);
         // a unit without variants keeps its manifest shape
         Assert.Null(_f.Manifest("PolicyWizardStep3").Variants);
         Assert.Null(_f.Manifest("PolicyWizardStep3").Factories);
@@ -726,6 +741,8 @@ public sealed class IssueTests
         Assert.Contains("### Variant Thistle", md);
         Assert.Contains("## Factories", md);
         Assert.Contains("| `var:Thistle/removed/dtDob` | removed | `ctrl:ClientSearchForm/dtDob` |", md);
+        Assert.Contains("| `var:Larkspur/constant/LarkspurLimits.MaxResults` | constant | `SearchLimits.MaxResults` | const |", md);
+        Assert.Contains("  - value: 50 -> 200 `Tenants/Larkspur/LarkspurClientSearchForm.cs:27-27`", md);
 
         // lint: a delta no rule scoped to its variant describes, and no 'Variant deltas without a rule' row accounts for, fails the gate
         var specDir = Path.Combine(_f.ModuleDir, "spec");
@@ -751,11 +768,16 @@ public sealed class IssueTests
             Assert.Equal("VAR-UNCOVERED", Assert.Single(f).Code);
             Assert.Contains("var:Thistle/removed/dtDob", f[0].Message);
 
+            // the constant delta is gated the same way
+            f = Var("", string.Join("\n", all.Split('\n').Where(l => !l.Contains("var:Larkspur/constant/LarkspurLimits.MaxResults"))));
+            Assert.Equal("VAR-UNCOVERED", Assert.Single(f).Code);
+            Assert.Contains("var:Larkspur/constant/LarkspurLimits.MaxResults", f[0].Message);
+
             // a rule scoped to Larkspur accounts for its entries; the rest stay uncovered
             f = Var(R("R-ClientSearchForm-002", "Larkspur", "var:Larkspur/event/chkLoyaltyOnly.CheckedChanged, var:Larkspur/added/chkLoyaltyOnly",
                 "var:Larkspur/handler/chkLoyaltyOnly_CheckedChanged, var:Larkspur/override/btnSearch_Click"), "| var:Larkspur/retagged/lblPostcode | caption only |");
             Assert.All(f, x => Assert.Equal("VAR-UNCOVERED", x.Code));
-            Assert.Equal(new[] { "var:Larkspur/retagged/$this", "var:Larkspur/service-added/IClientService.SearchLoyaltyClients", "var:Larkspur/service-removed/IClientService.SearchClients" }
+            Assert.Equal(new[] { "var:Larkspur/constant/LarkspurLimits.MaxResults", "var:Larkspur/retagged/$this", "var:Larkspur/service-added/IClientService.SearchLoyaltyClients", "var:Larkspur/service-removed/IClientService.SearchClients" }
                 .Concat(ths.Delta.Select(d => d.Id)), f.Select(x => x.Message.Split(' ')[0]));
 
             // scope errors: an unscoped rule cites a base handler Larkspur replaces; a Larkspur rule names a Thistle delta; an unknown variant
@@ -769,6 +791,27 @@ public sealed class IssueTests
             Assert.Contains("variant 'Ivy'", f[2].Message);
         }
         finally { File.Delete(spec); }
+    }
+
+    [Fact]
+    public void issue_20_a_configured_factories_entry_is_a_type_or_a_type_dot_method_and_one_that_matches_nothing_is_diagnosed()
+    {
+        // input: four entries on the Larkspur variant - a namespace-qualified type, a simple Type.Method, a method the type does
+        // not declare, a type no file declares; output: the first two read their factories silently, the last two are VARIANT-CONFIG
+        var cfg = ExtractConfig.Load(Path.Combine(_f.RepoRoot, "fixtures", "extract.config.json"));
+        cfg.Output = Path.Combine(_f.OutRoot, "issue20-factories");
+        cfg.Variants[0].Factories.AddRange(new[]
+        {
+            "SampleLegacy.Forms.ClientSearchFormFactory", "ClientSearchFormFactory.ForRegion",
+            "SampleLegacy.Forms.ClientSearchFormFactory.Missing", "NoSuchFactory.Create",
+        });
+        Extractor.Run(cfg, "M", "ClientSearchForm", new StringWriter());
+        var m = System.Text.Json.JsonSerializer.Deserialize<FormManifest>(File.ReadAllText(Path.Combine(cfg.Output, "M", "manifests", "ClientSearchForm.json")), Json.Options)!;
+        var problems = m.Diagnostics.Where(d => d.Code == "VARIANT-CONFIG" && d.Message.Contains("factories entry", StringComparison.Ordinal)).Select(d => d.Message).OrderBy(x => x, StringComparer.Ordinal).ToList();
+        Assert.Equal(2, problems.Count);
+        Assert.StartsWith("variant Larkspur: factories entry 'NoSuchFactory.Create' matches no type", problems[0]);
+        Assert.StartsWith("variant Larkspur: factories entry 'SampleLegacy.Forms.ClientSearchFormFactory.Missing' reads no factory", problems[1]);
+        Assert.Contains(m.Factories!, f => f.Id == "method:SampleLegacy.Forms.ClientSearchFormFactory.Create(string)");
     }
 }
 

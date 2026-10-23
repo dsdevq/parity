@@ -43,8 +43,8 @@ public sealed class ExtractConfig
 
 /// <summary>
 /// One variant. Project is the variant's csproj, relative to this config (omit it when the variant lives in the main project).
-/// Subclasses limits the variant to these class names (required without Project). Factories names extra types or
-/// Type.Method factories to read when the factory does not mention two implementations of the same form.
+/// Subclasses limits the variant to these class names (required without Project). Factories names extra factories to read
+/// when the factory does not mention two implementations of the same form: a type, or Type.Method, simple or namespace-qualified.
 /// </summary>
 public sealed class VariantConfig
 {

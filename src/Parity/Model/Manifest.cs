@@ -99,7 +99,8 @@ public sealed record VariantChange(string Property, string? Base, string? Value,
 /// <summary>
 /// One difference between a variant and its base unit, keyed var:&lt;Variant&gt;/&lt;kind&gt;/&lt;name&gt;.
 /// Kinds: added, removed, retagged (controls); event (a wiring the variant adds); override, handler, ctor (code);
-/// service-added, service-removed (the service boundary). Target names what the entry changes in the base.
+/// service-added, service-removed (the service boundary); constant (a constant or resource text the variant reads that the
+/// base does not read as such). Target names what the entry changes in the base.
 /// </summary>
 public sealed record VariantDelta(
     string Id,

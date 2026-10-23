@@ -23,7 +23,8 @@ namespace SampleLegacy.Tenants.Larkspur
             var criteria = new ClientSearchCriteria
             {
                 Surname = txtSurname.Text,
-                Postcode = txtPostcode.Text
+                Postcode = txtPostcode.Text,
+                MaxResults = LarkspurLimits.MaxResults
             };
             grdResults.DataSource = ServiceLocator.Client.SearchLoyaltyClients(criteria, chkLoyaltyOnly.Checked);
             btnSelect.Enabled = false;

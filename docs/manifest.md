@@ -139,14 +139,14 @@ form as written, and `variants[]` says, per variant, what differs.
 | `ctor` | `var:V/ctor`, `var:V/ctor(n)` | - | a constructor doing more than re-tags, removals, added controls and wiring (those become their own entries) |
 | `service-added` | `var:V/service-added/<IService.Method>` | the `svc:` id | a call the variant makes that the base does not |
 | `service-removed` | `var:V/service-removed/<IService.Method>` | the `svc:` id | a base call whose only callers the variant replaces |
+| `constant` | `var:V/constant/<Type>.<Member>` | the base's `<Type>.<Member>` text, null when the base reads no such member | a constant or resource text the variant's code reads that the base does not read as such (`type` is the declaring type or resource, `detail` is `const`, `readonly` or `resource`); `changes[]` has one `value` entry, `base` the base's value (null for a read the base does not make), `value` the variant's, `loc` its first use |
 
 - `layout[]` holds changes to layout-only properties (location, size, tab index) of inherited controls. They
   are reported, not gated.
 - `methods[]` are the variant's sliced callees; `raw[]` and `diagnostics[]` are the variant's own and feed
   `COV-RAW` like the base's.
-- What is not a delta: a constant or resource text the variant reads differently (`constants[]` is
-  resolved for the base unit only), and classes between the base and the configured subclass (diagnosed as
-  `VARIANT-INTERMEDIATE`; only the subclass's own declarations are read).
+- Classes between the base and the configured subclass are not a delta: they are diagnosed as
+  `VARIANT-INTERMEDIATE`, and only the subclass's own declarations are read.
 
 ## Factories
 
@@ -156,8 +156,11 @@ dictionary field, `loc` the method. `cases[]` is `key, class, variant, loc`: `va
 itself, the variant name, or null for another class. Understood shapes: a `switch` statement or expression on
 the key, an if-chain comparing the key to string literals (`==`, `Equals`, `string.Equals`), and a dictionary
 field from key to `typeof(T)` or `new T()` that the method reads. A form the method still creates outside
-these shapes is the `default` case. Methods are read from files that instantiate two or more classes of the
-same form family, plus any `factories` configured on a variant.
+these shapes is the `default` case only when nothing conditional guards it (an unconditional return, an
+`else` branch, or the miss of a dictionary lookup); behind any other condition it is a case keyed by that
+condition's source text. Methods are read from files that instantiate two or more classes of the same form
+family, plus any `factories` configured on a variant: a type, or `Type.Method`, simple or namespace-qualified.
+An entry that matches no type, or from which no factory is read, is a `VARIANT-CONFIG` diagnostic.
 
 ## module.json
 

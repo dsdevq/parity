@@ -12,7 +12,7 @@ public sealed class ProjectTests
         var dir = AppContext.BaseDirectory;
         while (dir != null && !File.Exists(Path.Combine(dir, "Parity.sln"))) dir = Path.GetDirectoryName(dir);
         var p = CsprojReader.Read(Path.Combine(dir!, "fixtures", "SampleLegacy", "SampleLegacy.csproj"));
-        Assert.Equal(28, p.CompileFiles.Count);
+        Assert.Equal(30, p.CompileFiles.Count);
         Assert.Equal(3, p.ResxFiles.Count); // a form resx, and Captions.resx with its fr culture
         Assert.Equal(5, p.References.Count);
         Assert.Single(p.ProjectReferences);

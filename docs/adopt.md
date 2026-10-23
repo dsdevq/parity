@@ -48,8 +48,8 @@ Put the `parity` binary on PATH (`bin/publish.sh win-x64` here, or a release zip
    (one entry per tenant family; see `templates/extract.config.json`): `id` names the variant in specs,
    `subclasses` the class names to describe, `project` and `selfAssembly` the variant's csproj and built
    assembly when it lives outside the module's project (`subclasses` then defaults to every subclass of a
-   module form found there). `factories` names `Type.Method` factories to read when the tool does not find
-   them itself. The log prints `variant <id>: <class> on <form>` per subclass found; a `VARIANT-CONFIG`
+   module form found there). `factories` names factories to read when the tool does not find them itself:
+   a type, or `Type.Method`, simple or namespace-qualified. The log prints `variant <id>: <class> on <form>` per subclass found; a `VARIANT-CONFIG`
    diagnostic means an entry could not be applied.
 4. Commit the manifests. They are generated, deterministic, and the thing specs bind to.
 5. Record fixtures for every id in `module.json` `serviceCalls` with your own runner, one file per

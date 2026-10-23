@@ -99,14 +99,17 @@ designer and handler passes, the base's fields treated as its own, and compared 
   constructor doing something else is a `ctor` entry. An override says whether it calls base: a replacement
   takes its base handler's service calls with it (`service-removed`, when no other caller remains).
 - Factories are read from files that construct two members of a form family, so the tool does not need to
-  be told where they are; each case is cited.
+  be told where they are; each case is cited. A form a factory creates behind a condition the tool does not
+  understand is a case keyed by that condition's text, never the `default`.
+- Constants and resource texts the variant's code reads are compared with the base's `constants[]` by
+  `Type.Member` and value: the same `Type.Member` is nothing, the same member name on another type or
+  resource is the base's value replaced, anything else is a read the base does not make (`constant` entries).
 
 The spec has one grammar for this, not a section per variant: a rule carries `variants:` (absent means every
 tenant), and a delta entry is accounted for by a rule scoped to its variant or by a reasoned row. That keeps
 "what the base does" in one place and makes the lint able to say which tenant a rule is wrong for (`VAR-SCOPE`:
 an unscoped rule citing a handler a variant replaces). Known limits: a replacement form that is not a subclass
-is a separate unit; a variant project is parsed with the main project's defines; a variant's constants and
-resource texts are not compared with the base's (`constants[]` is the base unit's only); classes between the
+is a separate unit; a variant project is parsed with the main project's defines; classes between the
 base and the configured subclass are diagnosed, not described.
 
 **Duplicates.** Token streams with identifiers and literals replaced; exact hash clusters, and for

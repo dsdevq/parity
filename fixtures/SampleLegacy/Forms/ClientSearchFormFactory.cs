@@ -22,6 +22,13 @@ namespace SampleLegacy.Forms
             }
         }
 
+        public static ClientSearchForm ForSite(string siteCode, bool pilot)
+        {
+            if (siteCode == "THS-PILOT") return new ThistleClientSearchForm();
+            if (siteCode.StartsWith("LRK") && pilot) return new LarkspurClientSearchForm();
+            return new ClientSearchForm();
+        }
+
         private static readonly Dictionary<string, Type> ByRegion = new Dictionary<string, Type>
         {
             { "west", typeof(LarkspurClientSearchForm) },
