@@ -252,6 +252,9 @@ public sealed class IssueTests
                 ("mcp__filesystem__read_text_file", new { path = "legacy/M/spec/X.md" }, work),
                 ("mcp__fs__search", new { path = "legacy/M", pattern = "x" }, work),
                 ("Bash", new { command = "echo cd .. && cat ../README.md" }, Path.Combine(work, "legacy")),                     // cd as an argument moves nothing
+                ("Bash", new { command = "(cd legacy/M && ls fixtures); cat legacy/M/spec/X.md" }, work),                        // a subshell's cd ends with it
+                ("Bash", new { command = "bash -c \"cd legacy/M && ls fixtures\" && cat legacy/M/spec/X.md" }, work),           // so does a nested shell's
+                ("Glob", new { pattern = "**/*.{ts,tsx}" }, work),                                                               // brace alternatives that cannot be ..
             };
             // calls it must refuse
             var denied = new (string Tool, object Input, string Cwd, string Why)[]
@@ -294,16 +297,39 @@ public sealed class IssueTests
                 ("PowerShell", new { command = "Get-Content .`.\\Legacy\\AcmeAdmin\\Forms\\X.cs" }, work, "resolve"),             // backtick escape
                 ("PowerShell", new { command = "Get-Content .?\\Legacy\\AcmeAdmin\\Forms\\X.cs" }, work, "resolve"),
                 ("Bash", new { command = "powershell -Command \"gc ..\\Legacy\\AcmeAdmin\\Forms\\X.cs\"" }, work, "outside"),       // backslash path through a Bash call
-                ("Bash", new { command = "powershell -c \"cd ..\\Legacy; gc AcmeAdmin\\Forms\\X.cs\"" }, work, "outside"),
+                ("Bash", new { command = "powershell -c \"cd ..\\Legacy; gc AcmeAdmin\\Forms\\X.cs\"" }, work, "directory"),
                 ("Bash", new { command = "git commit -m \"cd up\" && cat ../Legacy/App/X.cs" }, work, "outside"),                 // cd inside a message is not a directory change
                 ("Bash", new { command = "git commit -m \"fix; cd legacy/M\" && cat ../../Legacy/App/X.cs" }, work, "outside"),   // nor after a quoted ;
                 ("Bash", new { command = "gcc -I../Legacy/AcmeAdmin x.c" }, work, "outside"),                                    // path glued to a short option
                 ("Bash", new { command = "cat src/*/../../../Legacy/AcmeAdmin/Forms/X.cs" }, work, "resolve"),                   // .. after a wildcard
                 ("Bash", new { command = "cat " + work.Replace('\\', '/') + "*/x" }, work, "outside"),                          // a wildcard on the repo name reaches its siblings
                 ("Glob", new { pattern = "legacy/*/../../../Legacy/**/*.cs" }, work, "resolve"),
+                ("Glob", new { pattern = "{..,x}/Legacy/**/*.cs" }, work, "resolve"),                                            // a brace alternative that is ..
+                ("Grep", new { pattern = "Save", glob = "{..,x}/Legacy/**/*.cs" }, work, "resolve"),
+                ("Glob", new { pattern = "**/{..}/Legacy/*.cs" }, work, "resolve"),
                 ("Read", new { }, work, "path"),                                                                                  // nothing to decide on
                 ("NotAKnownTool", new { x = 1 }, work, "tool"),
             };
+            // from a cwd below the repo root a missed cd .. leaves ../Legacy looking like a repo path: every form must be followed
+            var below = Path.Combine(work, "legacy");
+            const string Up = "cat ../Legacy/AcmeAdmin/Forms/X.cs";
+            const string PsUp = "gc ..\\Legacy\\AcmeAdmin\\Forms\\X.cs";
+            denied = denied.Concat(new (string Tool, object Input, string Cwd, string Why)[]
+            {
+                ("Bash", new { command = "if true; then cd ..; " + Up + "; fi" }, below, "outside"),                             // reserved words keep command position
+                ("Bash", new { command = "for d in a; do cd ..; " + Up + "; done" }, below, "outside"),
+                ("Bash", new { command = "command cd .. && " + Up }, below, "outside"),                                          // wrappers too
+                ("Bash", new { command = "builtin cd .. && " + Up }, below, "outside"),
+                ("Bash", new { command = "! cd .. && " + Up }, below, "outside"),
+                ("Bash", new { command = "time cd .. && " + Up }, below, "outside"),
+                ("Bash", new { command = "CDPATH= cd .. && " + Up }, below, "outside"),
+                ("Bash", new { command = "bash -c \"cd ..; " + Up + "\"" }, below, "outside"),                                   // a nested shell's command
+                ("Bash", new { command = "sh -c 'cd .. && " + Up + "'" }, below, "outside"),
+                ("PowerShell", new { command = "if ($true) { cd .. }; " + PsUp }, below, "outside"),                            // PowerShell blocks
+                ("PowerShell", new { command = "foreach ($x in 1) { Set-Location .. }; " + PsUp }, below, "outside"),
+                ("PowerShell", new { command = "1 | ForEach-Object { cd .. }; " + PsUp }, below, "outside"),
+                ("Bash", new { command = "sudo cd .. && ls" }, below, "first word"),                                             // a cd the guard cannot follow
+            }).ToArray();
             var denials = 0;
             foreach (var phase in new[] { "specify", "implement" })
             {

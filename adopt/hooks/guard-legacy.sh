@@ -6,7 +6,10 @@
 # (date, phase, tool, reason; tab separated).
 #   path tools (Read Edit Write MultiEdit NotebookEdit Grep Glob): every path, resolved against the hook's cwd, must be allowed
 #   shell tools (Bash PowerShell Monitor): every path-like token must be allowed, no cd may leave the allowed roots;
-#     a cd counts only as the first word of a command (; | & and newlines outside quotes separate commands)
+#     a cd is followed when it is the first word of a command (after ; | & ( ) { } or a newline outside quotes, a
+#     reserved word such as then or do, or a wrapper such as command or VAR=x); the quoted argument of sh -c,
+#     bash -c, powershell -command or eval is a command of its own, as is a ( ) subshell, so its cd does not
+#     outlive it; any other cd word before a path refuses the call
 #   mcp__* tools: refused when the name matches the code-index deny-list below or "guard.denyTools"; every string
 #     value in the input that contains / or \, or is . .. or ~, must be an allowed path
 #   any other tool, or any input that cannot be decided: refused (fail closed)
@@ -210,6 +213,16 @@ case $tool in
     # a glob may climb out of the search path (../ or an absolute prefix): check its literal prefix
     if [ "$tool" = Glob ]; then g=$(jget '.tool_input.pattern // empty | strings'); else g=$(jget '.tool_input.glob // empty | strings'); fi
     segs "$g"
+    alts=$(printf '%s\n' "$g" | awk '{ while (match($0, /\{[^{}]*\}/)) { print substr($0, RSTART + 1, RLENGTH - 2); $0 = substr($0, RSTART + RLENGTH) } }' | tr ',' '\n')
+    _ifs=$IFS; IFS='
+'
+    set -- $alts
+    IFS=$_ifs
+    for a in "$@"; do
+      # shellcheck disable=SC2254,SC2194
+      case $a in *..*) ;; *) case .. in $a) ;; *) continue ;; esac ;; esac
+      deny "the glob '$g' has a brace alternative ('$a') that can stand for '..' and cannot be resolved, so it may be outside the allowed roots"
+    done
     g=$(printf '%s' "$g" | sed 's#[^/]*[*?[{].*##')
     [ -z "$g" ] || need_allowed "$g" "$base" "the glob prefix"
     ;;
@@ -220,29 +233,60 @@ case $tool in
     cmd=$(printf '%s' "$cmd" | tr 'A-Z' 'a-z' | tr '\n\t' ';;')
     [ "$tool" = PowerShell ] && cmd=$(fwd "$cmd")
     printf '%s' "$cmd" | grep -qE '\{[^ }]*(,|\.\.)[^ }]*\}' && deny "the command uses brace expansion, which cannot be resolved, so it may reach outside the allowed roots"
-    cmd=$(printf '%s\n' "$cmd" | awk -v q="'" '{
+    ps=0; [ "$tool" = PowerShell ] && ps=1
+    cmd=$(printf '%s\n' "$cmd" | awk -v q="'" -v ps="$ps" '{
+      o = ""
       for (i = 1; i <= length($0); i++) {
         c = substr($0, i, 1)
-        if (c == "\\" && w != q) { printf "%s", c substr($0, i + 1, 1); i++; continue }
-        if (w != "") { if (c == w) w = ""; else if (c ~ /[;|&]/) c = " " }
-        else if (c == q || c == "\"") w = c
-        else if (c ~ /[;|&]/) c = " ; "
-        if (c ~ /[(){}<>,=]/) c = " "
-        printf "%s", c
+        if (c == "\\" && (v != "" ? v : w) != q) { o = o c substr($0, i + 1, 1); i++; continue }
+        if (w != "" && !nest) { if (c == w) w = ""; else if (c ~ /[;|&(){}]/) c = " " }
+        else if (v != "") { if (c == v) v = ""; else if (c ~ /[;|&(){}]/) c = " " }
+        else if (nest && c == w) { w = ""; nest = 0; c = " ) " }
+        else if (c == q || c == "\"") {
+          if (nest) v = c
+          else {
+            w = c; t = substr(o, length(o) - 80)
+            if (t ~ /(^|[ ;(\/])(sh|bash|zsh|dash|ksh|powershell|pwsh)(\.exe)? +(-[a-z]+ +)*-[a-z]*c(ommand)? *$/ || t ~ /(^|[ ;(])eval *$/) { nest = 1; c = " ( " }
+          }
+        }
+        else if (c ~ /[;|&{}]/ || (ps && c ~ /[()]/)) c = " ; "
+        else if (c == "(" || c == ")") c = " " c " "
+        if (c ~ /^[<>,]$/) c = " "
+        else if (c == "=") c = "= "
+        o = o c
       }
+      print o
     }')
     set -- $cmd
-    at=1
+    at=1; cw=; stack=
     while [ $# -gt 0 ]; do
       clean "$1"; t=$C; shift
-      case $t in ';') at=1; continue ;; esac
+      case $t in
+        ';') at=1; continue ;;
+        '(') stack="$cwd
+$stack"; at=1; continue ;;
+        ')') [ -z "$stack" ] || { cwd=${stack%%
+*}; stack=${stack#*
+}; }; at=1; continue ;;
+      esac
       w=$at; at=0
+      if [ "$w" = 1 ]; then
+        case $t in then|do|else|elif|if|while|until|!|time|command|builtin|env|exec|[a-z_]*=) at=1; continue ;; esac
+        cw=$t
+      fi
       case $w$t in
+        0cd|0chdir|0pushd|0set-location|0sl|0push-location)
+          case $cw in echo|git|printf) ;; *)
+            [ $# -gt 0 ] && clean "$1" && case $C in
+              */*|*\\*|.|..|~*|-) deny "the directory change '$t $C' is not the first word of a command, so the guard cannot follow it and later relative paths may be outside the allowed roots" ;;
+            esac ;;
+          esac
+          ;;
         1cd|1chdir|1pushd|1set-location|1sl|1push-location)
           tgt=
           while [ $# -gt 0 ]; do
             case $1 in
-              \;) break ;;
+              \;|\(|\)) break ;;
               -) tgt=-; shift; break ;;
               -*:*) tgt=${1#*:}; shift; break ;;
               -[a-z]*[./\\]*) tgt=${1#-?}; shift; break ;;
