@@ -105,8 +105,9 @@ Then delete a rule and run it again to see what the gate says.
 5. **Specify** from `manifests/<Form>.md` only, using `templates/spec.md`. Run `parity lint` until
    green, get the spec reviewed by someone who knows the business, set `status: reviewed`.
 6. **Gate**: `parity lint spec/<Form>.md --gate`. Every control, event, handler and service call is
-   accounted for or the gate is red. `--implement <dir>` additionally wants every rule id to appear
-   in a test or source file under that directory.
+   accounted for or the gate is red. `--implement <dir>` additionally wants every rule id in the
+   title of an active test (`it`, `test`, `describe`, `[Fact]`); `it.todo`, `.skip`, comments and
+   constants do not count (`COV-TODO` says where). See `docs/lint.md`.
 
 The work-side pieces that make the phases stick for an agent (skills, a hook that locks the legacy
 path during specify and implement, a hook that lints on stop) are in `adopt/`. See `docs/adopt.md`.
@@ -258,7 +259,7 @@ Use `referencesFromProject` or list the project's own output folder.
 | A spec is bound to one manifest | `STALE` on hash mismatch |
 | Facts, not guesses | `HEDGE` rejects probably / likely / assume / should / seems / typically / usually / maybe / might; uncertainty goes under Open questions, which keeps the gate closed |
 | Decisions are owned | `DROP-REASON` for dropped controls and quirks; `STATUS` requires a named reviewer and a date |
-| Implementation traces to rules | `COV-TEST` wants each `R-` id in a test |
+| Implementation traces to rules | `COV-TEST` wants each `R-` id in the title of an active, non-skipped test |
 
 Full list: `docs/lint.md`.
 

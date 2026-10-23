@@ -218,9 +218,14 @@ public static partial class SpecLinter
         if (implementDir != null)
         {
             var files = Directory.Exists(implementDir) ? Directory.EnumerateFiles(implementDir, "*.*", SearchOption.AllDirectories).Where(p => p.EndsWith(".ts") || p.EndsWith(".spec.ts") || p.EndsWith(".cs") || p.EndsWith(".js")).ToList() : new();
-            var corpus = string.Concat(files.Select(File.ReadAllText));
+            var tests = TestDeclarations.Scan(files);
             foreach (var r in spec.Rules)
-                if (!corpus.Contains(r.Id, StringComparison.Ordinal)) E(r.Line, "COV-TEST", $"{r.Id} appears in no test or source under {implementDir}");
+            {
+                if (tests.Active.Any(t => TestDeclarations.Mentions(t.Title, r.Id))) continue;
+                E(r.Line, "COV-TEST", $"{r.Id} is in the title of no active test declaration under {implementDir}");
+                foreach (var t in tests.Inactive.Where(t => TestDeclarations.Mentions(t.Title, r.Id)))
+                    W(r.Line, "COV-TODO", $"{r.Id} is only in a {t.Form} declaration in {Path.GetFileName(t.File)}, a placeholder that runs no test");
+            }
         }
 
         return f.OrderBy(x => x.Line).ThenBy(x => x.Code, StringComparer.Ordinal).ThenBy(x => x.Message, StringComparer.Ordinal).ToList();

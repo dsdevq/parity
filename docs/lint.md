@@ -1,7 +1,7 @@
 # Lint codes
 
 `parity lint <spec.md>` runs the structure checks. `--gate` adds coverage and readiness.
-`--implement <dir>` adds `COV-TEST`. Output: `path:line CODE message`, sorted; warnings are suffixed
+`--implement <dir>` adds `COV-TEST` and `COV-TODO`. Output: `path:line CODE message`, sorted; warnings are suffixed
 `[warning]`; exit 1 when any error exists. The manifest is found at `<spec dir>/../manifests/<Form>.json`,
 fixtures at `<spec dir>/../fixtures/`, debt at `<spec dir>/../extractor-debt.md`.
 
@@ -25,7 +25,8 @@ fixtures at `<spec dir>/../fixtures/`, debt at `<spec dir>/../extractor-debt.md`
 | COV-RAW | gate | the manifest has raw statements or diagnostics not acknowledged in `extractor-debt.md`. A raw statement is acknowledged by a line carrying its `file:line`; a diagnostic by a line carrying `CODE: Form.member` (the message's subject) or, for diagnostics without a subject, the full message. The line also needs an owner and a `YYYY-MM-DD`. A bare code acknowledges nothing; one line covers one entry. |
 | OPEN | gate | Open questions is not exactly `- none` |
 | STATUS | gate | status is not `reviewed`, or reviewed-by lacks a name and date |
-| COV-TEST | gate + implement | a rule id appears in no `.ts`, `.js` or `.cs` file under the directory |
+| COV-TEST | gate + implement | a rule id is in the title of no active test declaration in a `.ts`, `.js` or `.cs` file under the directory. Active: `it(`, `test(`, `describe(` (also `.only`, `.each`) or an xunit `[Fact]`/`[Theory]` whose `DisplayName` or method name (`R_Form_001` for `R-Form-001`) holds the id. A comment, a bare string constant, `it.todo`, `.skip`, `xit`, `xtest`, `xdescribe` or `Skip =` is not coverage. Known limit: the match is a regex over declaration titles, not a parser, so a declaration built dynamically or disabled by other means is not seen, and a passing run is not checked. |
+| COV-TODO | implement, warning | an id that `COV-TEST` rejects appears only in a todo or skipped declaration; the message names the file and the form so the placeholder can be found |
 
 Coverage is computed from the manifest. The spec can add rows and rules; it cannot remove what the
 extractor found.

@@ -254,8 +254,8 @@ public sealed class LintTests
     {
         var dir = Path.Combine(_f.OutRoot, "ng");
         Directory.CreateDirectory(dir);
-        File.WriteAllText(Path.Combine(dir, "step3.spec.ts"), "describe('R-PolicyWizardStep3-001', () => {}); // R-PolicyWizardStep3-002 .. R-PolicyWizardStep3-011\n" +
-            string.Join("\n", Enumerable.Range(2, 10).Select(i => $"// R-PolicyWizardStep3-{i:000}")));
+        File.WriteAllText(Path.Combine(dir, "step3.spec.ts"), "describe('R-PolicyWizardStep3-001', () => {});\n" +
+            string.Join("\n", Enumerable.Range(2, 10).Select(i => $"it('R-PolicyWizardStep3-{i:000} holds', () => {{}});")));
         var f = SpecLinter.Lint(_f.InstallExampleSpec("PolicyWizardStep3"), gate: true, implementDir: dir);
         var missing = Assert.Single(f, x => x.Code == "COV-TEST");
         Assert.Contains("R-PolicyWizardStep3-012", missing.Message);

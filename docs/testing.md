@@ -28,6 +28,7 @@ form with invented names, then the extractor is changed until the test passes.
 | #13 one debt line acknowledged a whole code | - | `IssueTests.issue_13_a_debt_line_acknowledges_one_diagnostic_not_a_whole_code` |
 | #14 public setup methods not sliced | `BeneficiarySearchForm.Setup(...)` calling a private helper | `IssueTests.issue_14_non_private_methods_are_entry_points_with_slices_and_their_callees_are_reached` |
 | #15 grid without designer columns is silent | `gvHistory`, columns built in `InitHistoryColumns` | `IssueTests.issue_15_a_grid_view_without_designer_columns_is_a_named_diagnostic_pointing_at_the_code_that_builds_them` |
+| #16 `COV-TEST` satisfied by `it.todo` / comments | - (test writes an implement dir) | `IssueTests.issue_16_a_rule_id_in_a_todo_skip_comment_or_constant_is_not_a_test` |
 
 ## Adding a pattern
 
