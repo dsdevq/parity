@@ -33,7 +33,7 @@ from the manifest, which the agent cannot shrink.
 
 | Artifact | Produced by | Contents |
 |---|---|---|
-| `manifests/<Form>.json` | `parity extract` | control tree (incl. DevExpress layout items and grid columns), resx captions, event wiring from designer, code-behind, lambdas, overrides and constructors, per-handler source slice with controls read and written, calls, service-boundary calls with argument text, transitive methods to a bounded depth with their slices, bindings, provider validation rules, controls created at runtime, and everything it could not interpret under `raw` and `diagnostics` |
+| `manifests/<Form>.json` | `parity extract` | control tree (incl. DevExpress layout items and grid columns), resx captions, event wiring from designer, code-behind, lambdas, overrides and constructors, per-handler source slice with controls read and written, calls, service-boundary calls with argument text, transitive methods to a bounded depth with their slices, bindings, provider validation rules, controls created at runtime, constants and resource texts with their values, and everything it could not interpret under `raw` and `diagnostics` |
 | `manifests/<Form>.md` | same run | the same, rendered for an agent to read instead of the legacy file |
 | `module.json` | same run | forms, every service call id, exact and near duplicate handlers across forms |
 | `evidence/<Form>.json` | `parity evidence add` | quoted legacy lines the manifest lacks (a model class, a config value), each an `ev:` id with its file, range, quote hash and source revision |

@@ -92,7 +92,9 @@ byte-stable for the same input, so `git diff` is meaningful and the spec binds t
 - `firstUse`: the first read inside a handler or method slice, else the first read from a model annotation.
 - `usedBy`: the `handler:`/`method:` ids whose slices read it, and the `ctrl:` column a model annotation feeds.
 
-Resource reads are a generated class's static property (`Captions.lsX`), `R.ResourceManager.GetString("key")`,
+Resource reads are a generated class's static property (`Captions.lsX`; the key is the literal its getter passes to
+`GetString`, so `Policy_log` reads the key `Policy log`, and the property name only when the getter has no source),
+`R.ResourceManager.GetString("key")`,
 `GetString("key")` on a `ResourceManager` created from `typeof(R)` or a name, and `[Display(ResourceType = typeof(R), Name = "key")]`.
 
 ## module.json
@@ -112,7 +114,8 @@ XML or a base class are invisible to the tool and the diagnostic says so.
 The bound model's data annotations are column facts too. A model type comes from `DataSource = typeof(T)`
 (designer or code), or a code `DataSource` whose value is `T`, `T[]` or an `IEnumerable<T>` of a project type,
 and follows BindingSource-to-grid references and the grid to its views; the owner gets `@modelType`. Each
-public property of `T` lands on the column whose `FieldName` or `DataPropertyName` names it:
+public property of `T` and of its project-local base types (the walk stops at the first framework base, so
+`Component.Site` and the like never appear) lands on the column whose `FieldName` or `DataPropertyName` names it:
 `[Display(Name)]` or `[DisplayName]` as `@display` (resolved through the resource when `ResourceType` is set,
 then `@display@resx`), `[Browsable(false)]` as `@browsable = false`, `[Required]` as `@required = true`,
 `[StringLength]` as `@stringLength`. A column without a designer caption takes `@display` as its `caption`, as
