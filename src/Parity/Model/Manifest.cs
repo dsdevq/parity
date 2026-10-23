@@ -52,6 +52,21 @@ public sealed record ServiceCallInfo(string Id, string Type, string Method, List
 
 public sealed record DynamicUiInfo(string Id, string Type, string? AddedTo, string Handler, Loc Loc, string Statement);
 
+/// <summary>
+/// A static fact a slice or a bound model reads by name: a const or static readonly literal, or a resource text.
+/// Not a citable id; rules keep citing the handler or method that uses it.
+/// </summary>
+public sealed record ConstantInfo(
+    string Kind,
+    string Type,
+    string Member,
+    string ValueType,
+    string? Value,
+    Loc? Declared,
+    List<string> Cultures,
+    Loc? FirstUse,
+    List<string> UsedBy);
+
 public sealed record RawStatement(string Statement, Loc Loc);
 
 public sealed record Diagnostic(string Code, string Message, Loc? Loc);
@@ -72,6 +87,7 @@ public sealed record FormManifest(
     List<MethodInfo> Methods,
     List<ServiceCallInfo> ServiceCalls,
     List<DynamicUiInfo> DynamicUi,
+    List<ConstantInfo> Constants,
     List<RawStatement> Raw,
     List<Diagnostic> Diagnostics);
 

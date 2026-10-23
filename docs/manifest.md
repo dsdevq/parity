@@ -29,8 +29,9 @@ that differ (`props.Text`, `source`, `loc`), sorted by id, and exits 0 when iden
 | `methods[]` | MethodInfo | transitive, depth 1..maxCallDepth; `source` null when only metadata was available |
 | `serviceCalls[]` | ServiceCallInfo | aggregated per `svc:` id with callers and argument texts seen |
 | `dynamicUi[]` | DynamicUiInfo | controls created in code |
+| `constants[]` | ConstantInfo | constants and resource texts the slices and bound model read by name; facts, not ids |
 | `raw[]` | RawStatement | designer statements not interpreted |
-| `diagnostics[]` | Diagnostic | `REF-MISSING`, `REF-LOAD`, `BASE-UNRESOLVED`, `NO-DESIGNER`, `TYPE-UNRESOLVED`, `RESX-MISSING`, `MEMBER-UNRESOLVED`, `HANDLER-MISSING`, `WIRING-UNKNOWN`, `UNREACHED-METHOD` (says what it checked and where else the name appears), `GRID-NO-COLUMNS` (a grid view, tree list, list view or DataGridView with no designer column, naming the loaded code that touches its `Columns`) |
+| `diagnostics[]` | Diagnostic | `REF-MISSING`, `REF-LOAD`, `BASE-UNRESOLVED`, `NO-DESIGNER`, `TYPE-UNRESOLVED`, `RESX-MISSING`, `MEMBER-UNRESOLVED`, `HANDLER-MISSING`, `WIRING-UNKNOWN`, `UNREACHED-METHOD` (says what it checked and where else the name appears), `GRID-NO-COLUMNS` (a grid view, tree list, list view or DataGridView with no designer column, naming the loaded code that touches its `Columns`), `RESOURCE-KEY-MISSING` (a resource key read by a slice or a `[Display]` that the resource's default-culture resx in the project does not define; names the resource, the resx and the readers) |
 
 ## Ids
 
@@ -61,6 +62,9 @@ that differ (`props.Text`, `source`, `loc`), sorted by id, and exits 0 when iden
   `@inherited = <declaring type>` a field or property found on a base form (metadata or source), `@declaredOnly`
   a field of the form created elsewhere (a constructor, for instance). A form property path such as
   `this.Appearance.BackColor` folds into the `$this` entry's props. Only a name found nowhere is `MEMBER-UNRESOLVED`.
+- Bound model facts (see Grid columns) are props too: `@modelType` on a BindingSource, grid, view or editor
+  whose `DataSource` carries rows of a project type (several types joined by `; `), and on a column
+  `@display`, `@display@resx = <resource>.<key>`, `@browsable`, `@required`, `@stringLength` (`n` or `min..max`).
 - Calls on a control inside the designer that are not tree, binding or validation shapes are kept as
   `<path>.<Method>()` props with the argument texts, one entry per call joined by `; `
   (`Images.SetKeyName() = 0, "a"; 1, "b"`).
@@ -79,6 +83,30 @@ that differ (`props.Text`, `source`, `loc`), sorted by id, and exits 0 when iden
 
 `id, display, depth, reads, writes, calls, serviceCalls, unresolved, loc, source, assembly`
 
+## ConstantInfo
+
+`kind, type, member, valueType, value, declared, cultures, firstUse, usedBy`
+
+- `kind`: `const` (a `const` field), `readonly` (a `static readonly` field with a constant initializer) or
+  `resource` (a resource text). Only fields of project types are listed, never framework ones or enum members;
+  a `static readonly` set from anything but a literal is state, not a fact, and is skipped.
+- `type`, `member`: the declaring type's full name and the field name; for a resource, the resource name
+  (a generated resource class's full name, or the name given to `new ResourceManager(...)`) and the key.
+- `value`: the literal, invariant culture (`true`/`false`, `40`, the string unquoted, an enum value as
+  `Enum.Member`). For a resource, the default-culture resx text; null when the key is missing (then
+  `RESOURCE-KEY-MISSING`) or when the resource's resx is not one of the project's files (no diagnostic: the
+  tool cannot tell).
+- `declared`: the declarator, or the resx `<data>` element, as `file:line`.
+- `cultures`: for a resource, the other cultures whose resx (`X.fr.resx`, `X.de-CH.resx` beside `X.resx`)
+  defines the key. Only the targeted project's resx files are read.
+- `firstUse`: the first read inside a handler or method slice, else the first read from a model annotation.
+- `usedBy`: the `handler:`/`method:` ids whose slices read it, and the `ctrl:` column a model annotation feeds.
+
+Resource reads are a generated class's static property (`Captions.lsX`; the key is the literal its getter passes to
+`GetString`, so `Policy_log` reads the key `Policy log`, and the property name only when the getter has no source),
+`R.ResourceManager.GetString("key")`,
+`GetString("key")` on a `ResourceManager` created from `typeof(R)` or a name, and `[Display(ResourceType = typeof(R), Name = "key")]`.
+
 ## module.json
 
 `schemaVersion, module, project, forms[], serviceCalls[], duplicates[] { hash, kind: exact|near, tokens, members[] }`
@@ -92,3 +120,15 @@ them: `this.colX = new GridColumn()` plus `view.Columns.AddRange(new[] { this.co
 (`Columns.AddVisible(...)`, `Columns.Add(...)`) are not controls; the view then carries `GRID-NO-COLUMNS`
 naming the method that builds them, whose slice is in the manifest to cite. Columns restored from a layout
 XML or a base class are invisible to the tool and the diagnostic says so.
+
+The bound model's data annotations are column facts too. A model type comes from `DataSource = typeof(T)`
+(designer or code), or a code `DataSource` whose value is `T`, `T[]` or an `IEnumerable<T>` of a project type,
+and follows BindingSource-to-grid references and the grid to its views; the owner gets `@modelType`. Each
+public property of `T` and of its project-local base types (the walk stops at the first framework base, so
+`Component.Site` and the like never appear) lands on the column whose `FieldName` or `DataPropertyName` names it:
+`[Display(Name)]` or `[DisplayName]` as `@display` (resolved through the resource when `ResourceType` is set,
+then `@display@resx`), `[Browsable(false)]` as `@browsable = false`, `[Required]` as `@required = true`,
+`[StringLength]` as `@stringLength`. A column without a designer caption takes `@display` as its `caption`, as
+the grid would. A property no designer column names is summarized on the view as
+`@model.<Property> = Browsable(false), Required, ...`, which is how an auto-generated or code-built grid's
+hidden and required fields show up.

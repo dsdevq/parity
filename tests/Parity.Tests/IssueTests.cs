@@ -436,6 +436,82 @@ public sealed class IssueTests
         Assert.Contains(todo, x => x.Message.Contains("step3.spec.ts") && x.Message.Contains("it.todo"));
         Assert.Contains(todo, x => x.Message.Contains("Step3Tests.cs") && x.Message.Contains("Skip"));
     }
+
+    [Fact]
+    public void issue_19_constants_and_resource_texts_are_resolved_with_their_values_and_a_missing_key_is_diagnosed()
+    {
+        // input: PremiumHistoryForm reads PolicyLimits (const, static readonly), Captions (generated resource class and
+        // ResourceManager.GetString, default resx plus a fr culture, one key missing), and binds PremiumHistoryRow,
+        // whose properties carry [Display], [Browsable(false)], [Required] and [StringLength], to gvHistory via bsHistory
+        var m = _f.Manifest("PremiumHistoryForm");
+        ConstantInfo C(string member) => Assert.Single(m.Constants, c => c.Member == member);
+
+        var max = C("ReasonMaxLength");
+        Assert.Equal(("const", "SampleLegacy.Helpers.PolicyLimits", "int", "40"), (max.Kind, max.Type, max.ValueType, max.Value));
+        Assert.Equal(new Loc("Helpers/PolicyLimits.cs", 5, 5), max.Declared);
+        Assert.Equal("Forms/PremiumHistoryForm.cs", max.FirstUse!.File);
+        Assert.Equal(new[] { "ctrl:PremiumHistoryForm/colReason", "handler:PremiumHistoryForm/btnArchive_Click" }, max.UsedBy); // [StringLength(PolicyLimits.ReasonMaxLength)] too
+        var category = C("HistoryCategory");
+        Assert.Equal(("readonly", "string", "premium-history"), (category.Kind, category.ValueType, category.Value));
+
+        var reasons = C("lsReasons");                                           // Captions.lsReasons, the generated property
+        Assert.Equal(("resource", "SampleLegacy.Resources.Captions", "Reasons are kept for audit"), (reasons.Kind, reasons.Type, reasons.Value));
+        Assert.Equal("Resources/Captions.resx", reasons.Declared!.File);
+        Assert.Equal(new[] { "fr" }, reasons.Cultures);
+        Assert.Equal(new[] { "handler:PremiumHistoryForm/PremiumHistoryForm_Load" }, reasons.UsedBy);
+        var title = C("lsHistoryTitle");                                        // Captions.ResourceManager.GetString("lsHistoryTitle")
+        Assert.Equal(("resource", "Premium history"), (title.Kind, title.Value));
+        Assert.Empty(title.Cultures);                                            // the fr resx does not translate it
+        var policyLog = C("Policy log");                                        // Captions.Policy_log: the resx key is the GetString literal, not the identifier
+        Assert.Equal(("resource", "Policy log"), (policyLog.Kind, policyLog.Value));
+        Assert.Equal("Resources/Captions.resx", policyLog.Declared!.File);
+        Assert.DoesNotContain(m.Constants, c => c.Member == "Policy_log");
+        Assert.DoesNotContain(m.Methods, x => x.Id.Contains("Captions.lsReasons", StringComparison.Ordinal)); // a fact, not a call
+        Assert.DoesNotContain(m.Constants, c => c.Member == "Enter" || c.Type.StartsWith("System.", StringComparison.Ordinal));
+
+        var missing = C("lsArchiveReasonTooLong");
+        Assert.Null(missing.Value);
+        var d = Assert.Single(m.Diagnostics, x => x.Code == "RESOURCE-KEY-MISSING");
+        Assert.Equal("PremiumHistoryForm.lsArchiveReasonTooLong: resource key not found in the default-culture resx of 'SampleLegacy.Resources.Captions' (Resources/Captions.resx); read by handler:PremiumHistoryForm/btnArchive_Click", d.Message);
+        Assert.Equal("$form.$id: resource key not found in the default-culture resx of '$id' (<path>.resx); read by handler:$id", Report.AnonMessage(d.Message));
+
+        // the bound model's annotations are column facts next to the designer columns (#15)
+        var ctl = m.Controls.ToDictionary(c => c.Field);
+        Assert.Equal("SampleLegacy.Models.PremiumHistoryRow", ctl["bsHistory"].Props["@modelType"]);
+        Assert.Equal("SampleLegacy.Models.PremiumHistoryRow", ctl["gvHistory"].Props["@modelType"]);
+        Assert.Equal("Reason for change", ctl["colReason"].Props["@display"]);
+        Assert.Equal("SampleLegacy.Resources.Captions.colReason", ctl["colReason"].Props["@display@resx"]);
+        Assert.Equal("true", ctl["colReason"].Props["@required"]);
+        Assert.Equal("40", ctl["colReason"].Props["@stringLength"]);
+        Assert.Equal("Reason for change", ctl["colReason"].Caption);           // no designer caption: the grid shows the [Display] text
+        Assert.Equal("Effective from", ctl["colEffectiveDate"].Props["@display"]);
+        Assert.Equal("Amount", ctl["colAmount"].Props["@display"]);
+        Assert.Equal("Browsable(false)", ctl["gvHistory"].Props["@model.HistoryId"]); // a property without a designer column
+        Assert.Contains(m.Constants, c => c.Member == "colReason" && c.UsedBy.SequenceEqual(new[] { "ctrl:PremiumHistoryForm/colReason" }));
+
+        // rendered: a Constants table, and the literal beside its first use inside the slice
+        var md = File.ReadAllText(Path.Combine(_f.ModuleDir, "manifests", "PremiumHistoryForm.md"));
+        Assert.Contains("## Constants and resource texts", md);
+        Assert.Contains("| const | `SampleLegacy.Helpers.PolicyLimits.ReasonMaxLength` | `40` |", md);
+        Assert.Contains("if (row.Reason != null && row.Reason.Length > PolicyLimits.ReasonMaxLength)  // PolicyLimits.ReasonMaxLength = 40", md);
+        Assert.Contains("lblReasons.Text = Captions.lsReasons;  // Captions.lsReasons = \"Reasons are kept for audit\"", md);
+    }
+
+    [Fact]
+    public void issue_19_a_resource_key_with_a_space_resolves_when_only_this_form_is_extracted()
+    {
+        // input: extract PremiumHistoryForm alone, so Captions is first seen as metadata of the built assembly (no getter source);
+        // output: the collector loads Captions.Designer.cs and reads the key "Policy log" from the Policy_log getter, no false RESOURCE-KEY-MISSING
+        var cfg = ExtractConfig.Load(Path.Combine(_f.RepoRoot, "fixtures", "extract.config.json"));
+        cfg.Output = Path.Combine(_f.OutRoot, "issue19-single");
+        Extractor.Run(cfg, "M", "PremiumHistoryForm", new StringWriter());
+        var m = System.Text.Json.JsonSerializer.Deserialize<FormManifest>(File.ReadAllText(Path.Combine(cfg.Output, "M", "manifests", "PremiumHistoryForm.json")), Json.Options)!;
+        var policyLog = Assert.Single(m.Constants, c => c.Member == "Policy log");
+        Assert.Equal("Policy log", policyLog.Value);
+        Assert.DoesNotContain(m.Constants, c => c.Member == "Policy_log");
+        Assert.DoesNotContain(m.Diagnostics, d => d.Code == "RESOURCE-KEY-MISSING" && d.Message.Contains("Policy_log", StringComparison.Ordinal));
+        Assert.Single(m.Diagnostics, d => d.Code == "RESOURCE-KEY-MISSING"); // only lsArchiveReasonTooLong
+    }
 }
 
 /// <summary>The guard hook, run through sh. Skipped where no POSIX shell exists (plain Windows without Git Bash).</summary>

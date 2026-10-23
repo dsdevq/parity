@@ -39,6 +39,8 @@ public sealed class DesignerResult
     public List<Diagnostic> Diagnostics = new();
     public string? FormCaption;
     public SortedDictionary<string, string> FormProps = new(StringComparer.Ordinal);
+    public List<(string Field, ITypeSymbol Type)> ModelTypes = new();      // X.DataSource = typeof(T)
+    public List<(string Target, string Source)> DataSourceRefs = new();    // X.DataSource = this.bindingSource
     public bool Found;
 }
 
@@ -196,7 +198,11 @@ public static class DesignerPass
                 if (lhs.Path is "Text" or "Caption" or "Properties.Caption") target.Caption ??= value;
                 if (lhs.Path == "Caption") target.Caption = value;
                 if (lhs.Path is "DataSource" or "Properties.DataSource")
+                {
+                    if (valueRef != null) r.DataSourceRefs.Add((lhs.Root, valueRef));
+                    else if (ModelFacts.RowType(asg.Right, model) is { } rowType) r.ModelTypes.Add((lhs.Root, rowType));
                     r.Bindings.Add(new BindingInfo($"bind:{formName}/{lhs.Root}.{lhs.Path}", $"ctrl:{formName}/{lhs.Root}", lhs.Path, value, "", "designer", loc));
+                }
                 if (lhs.Path == "FieldName")
                     r.Bindings.Add(new BindingInfo($"bind:{formName}/{lhs.Root}.FieldName", $"ctrl:{formName}/{lhs.Root}", "FieldName", "", value, "designer", loc));
                 continue;

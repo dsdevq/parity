@@ -36,7 +36,7 @@ public static class Extractor
             if (matcher(type)) foreach (var f in files) loaded.Add(f);
         if (loaded.Count == 0) throw new InvalidOperationException($"no class in {project.Path} matches '{formGlob}'");
 
-        var resxByForm = project.ResxFiles.ToDictionary(r => Path.GetFileNameWithoutExtension(r), r => r, StringComparer.Ordinal);
+        var resxIndex = new ResxIndex(project);
         var outDir = Path.Combine(cfg.Resolve(cfg.Output), module);
         Directory.CreateDirectory(Path.Combine(outDir, "manifests"));
 
@@ -70,12 +70,15 @@ public static class Extractor
             var wanted = new HashSet<string>(StringComparer.Ordinal);
             foreach (var form in forms)
             {
-                var resx = resxByForm.TryGetValue(form.Symbol.Name, out var rp) ? ResxReader.Read(rp) : new Dictionary<string, string>();
+                var resx = resxIndex.Find(Syntax.FullName(form.Symbol), form.Symbol.Name)?.Default.ToDictionary(kv => kv.Key, kv => kv.Value.Value, StringComparer.Ordinal)
+                           ?? new Dictionary<string, string>();
                 var d = DesignerPass.Run(form, t => compilation.GetSemanticModel(t, true), resx, cats, project.Dir);
                 var controlNames = d.Controls.Keys.ToHashSet(StringComparer.Ordinal);
-                var h = new HandlerPass(form, compilation, controlNames, cfg, cats, index, loaded, project.Dir).Run(d.Events);
-                foreach (var w in h.WantedFiles) wanted.Add(w);
-                manifests.Add(Assemble(form, project, d, h, cats, diags));
+                var constants = new ConstantCollector(compilation, resxIndex, index, loaded, project.Dir);
+                var h = new HandlerPass(form, compilation, controlNames, cfg, cats, index, loaded, project.Dir, constants).Run(d.Events);
+                ModelFacts.Apply(form.Symbol.Name, d, h, constants, compilation, index, loaded, wanted);
+                foreach (var w in h.WantedFiles.Concat(constants.WantedFiles)) wanted.Add(w);
+                manifests.Add(Assemble(form, project, d, h, constants, cats, diags));
             }
 
             // names the compiler could not resolve that the project declares somewhere: load those files too
@@ -122,7 +125,7 @@ public static class Extractor
         return summaries;
     }
 
-    private static FormManifest Assemble(FormClass form, LegacyProject project, DesignerResult d, HandlerResult h, ControlCategories cats, List<Diagnostic> buildDiags)
+    private static FormManifest Assemble(FormClass form, LegacyProject project, DesignerResult d, HandlerResult h, ConstantCollector k, ControlCategories cats, List<Diagnostic> buildDiags)
     {
         var name = form.Symbol.Name;
         var declared = d.Controls.Keys.ToHashSet(StringComparer.Ordinal);
@@ -160,18 +163,19 @@ public static class Extractor
                      : "no code in the loaded files touches its Columns either: a layout XML, a base class, a data-driven grid, or a file outside the loaded set";
             gridDiags.Add(new Diagnostic("GRID-NO-COLUMNS", $"{name}.{g.Field}: no column declared in the designer; {hint}", g.Loc));
         }
+        var constants = k.Freeze(name, i => alias.TryGetValue(i, out var a) ? a : i, gridDiags);
         var diags = buildDiags.Concat(d.Diagnostics).Concat(h.Diagnostics).Concat(gridDiags).DistinctBy(x => x.Code + x.Message).OrderBy(x => x.Code, StringComparer.Ordinal).ThenBy(x => x.Message, StringComparer.Ordinal).ToList();
         var files = form.Declarations.Select(x => Path.GetRelativePath(project.Dir, x.SyntaxTree.FilePath).Replace('\\', '/')).Distinct().OrderBy(x => x, StringComparer.Ordinal).ToList();
 
         return new FormManifest(Extractor.SchemaVersion, $"form:{name}", name, form.Symbol.ContainingNamespace.ToDisplayString(), form.Bases, files, d.FormCaption,
-            controls, events, bindings, rules, handlers, methods, svcs, dyn, d.Raw.OrderBy(r => r.Loc.Start).ToList(), diags);
+            controls, events, bindings, rules, handlers, methods, svcs, dyn, constants, d.Raw.OrderBy(r => r.Loc.Start).ToList(), diags);
     }
 
-    /// <summary>One or more globs separated by commas: 'PolicyWizard*,ClientSearchForm'.</summary>
-    private static bool IsColumnOwner(string type) =>
+    public static bool IsColumnOwner(string type) =>
         type.EndsWith("GridView", StringComparison.Ordinal) || type.EndsWith("ColumnView", StringComparison.Ordinal) || type.EndsWith("BandedGridView", StringComparison.Ordinal)
         || type.EndsWith("TreeList", StringComparison.Ordinal) || type.EndsWith("DataGridView", StringComparison.Ordinal) || type == "System.Windows.Forms.ListView";
 
+    /// <summary>One or more globs separated by commas: 'PolicyWizard*,ClientSearchForm'.</summary>
     public static Func<string, bool> Glob(string pattern)
     {
         var res = pattern.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)

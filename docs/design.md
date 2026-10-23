@@ -80,6 +80,11 @@ a body in source count as calls. Object creations of control-derived types insid
 `dyn:` entries with the container they are added to. A method that is also a handler collapses into the
 handler. `InitializeComponent` is never followed. Private methods neither wired nor reached are diagnosed.
 
+**Constants and resource texts.** Every `const`, literal `static readonly` and resource read a slice or a
+bound model annotation makes is resolved to its literal or default-culture resx text, with the other
+cultures, in `constants[]`. They are facts, not citable ids: a spec writes the value into `then` and still
+cites the handler or method that reads it, so a changed value surfaces as a manifest diff, not a broken cite.
+
 **Duplicates.** Token streams with identifiers and literals replaced; exact hash clusters, and for
 same-named handlers across forms a 3-gram Jaccard similarity above 0.6 as a near cluster.
 

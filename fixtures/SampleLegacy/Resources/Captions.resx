@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype"><value>text/microsoft-resx</value></resheader>
+  <resheader name="version"><value>2.0</value></resheader>
+  <data name="colEffectiveDate" xml:space="preserve">
+    <value>Effective from</value>
+  </data>
+  <data name="colReason" xml:space="preserve">
+    <value>Reason for change</value>
+  </data>
+  <data name="lsHistoryTitle" xml:space="preserve">
+    <value>Premium history</value>
+  </data>
+  <data name="Policy log" xml:space="preserve">
+    <value>Policy log</value>
+  </data>
+  <data name="lsReasons" xml:space="preserve">
+    <value>Reasons are kept for audit</value>
+  </data>
+</root>

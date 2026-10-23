@@ -26,6 +26,13 @@
     <Compile Include="Services\Dto.cs" />
     <Compile Include="Helpers\PremiumRules.cs" />
     <Compile Include="Helpers\UiHelper.cs" />
+    <Compile Include="Helpers\PolicyLimits.cs" />
+    <Compile Include="Models\PremiumHistoryRow.cs" />
+    <Compile Include="Resources\Captions.Designer.cs">
+      <AutoGen>True</AutoGen>
+      <DesignTime>True</DesignTime>
+      <DependentUpon>Captions.resx</DependentUpon>
+    </Compile>
     <Compile Include="Forms\PolicyWizardStep3.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -59,11 +66,24 @@
     <Compile Include="Forms\DynamicRidersForm.Designer.cs">
       <DependentUpon>DynamicRidersForm.cs</DependentUpon>
     </Compile>
+    <Compile Include="Forms\PremiumHistoryForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Forms\PremiumHistoryForm.Designer.cs">
+      <DependentUpon>PremiumHistoryForm.cs</DependentUpon>
+    </Compile>
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Forms\PolicyWizardStep3.resx">
       <DependentUpon>PolicyWizardStep3.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Resources\Captions.resx">
+      <Generator>PublicResXFileCodeGenerator</Generator>
+      <LastGenOutput>Captions.Designer.cs</LastGenOutput>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Resources\Captions.fr.resx">
+      <DependentUpon>Captions.resx</DependentUpon>
     </EmbeddedResource>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />

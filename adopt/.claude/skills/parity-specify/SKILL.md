@@ -25,7 +25,9 @@ evidence file; every id you write must appear there verbatim.
    behavior; a rule may cover several events. `given`/`when`/`then` describe what the legacy code does,
    in user terms, naming controls. Cite the handler and every method the behavior depends on. If a
    handler calls a `svc:` id, name it in `then` and list a fixture.
-5. Anything you cannot establish from the manifest goes under Open questions, phrased as a question.
+5. Constant values and resource texts are in the manifest's Constants and resource texts table and in
+   the comment beside their first use in a slice: write the value into `then`, do not ask for it.
+   Anything you cannot establish from the manifest goes under Open questions, phrased as a question.
    Never resolve it by assumption and never use hedging words in a rule.
 6. Events whose handler needs no port go under No behavior with the reason.
 7. Run `parity lint legacy/<Module>/spec/<Form>.md`. Fix every error. Repeat until `0 error(s)`.
