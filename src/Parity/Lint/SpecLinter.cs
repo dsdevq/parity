@@ -246,22 +246,19 @@ public static partial class SpecLinter
         foreach (var (name, line) in ruleFixtures)
             if (!fixtureFiles.ContainsKey(name)) E(line, "FIXTURE-MISSING", $"fixture '{name}' not found at fixtures/{name}.json");
 
-        // per rule: the fixtures of every service it touches (its Service calls rows, its own fixtures:, a svc: in then)
+        // per rule: its own fixtures: when it lists any, otherwise the Service calls rows of the services it touches (a row naming it, a svc: in then)
         foreach (var r in spec.Rules)
         {
-            var own = SpecParser.SplitIds(r.Get("fixtures")).Where(fixtureFiles.ContainsKey).Select(n => fixtureFiles[n]).ToList();
-            var services = new SortedSet<string>(own.Select(x => x.Service).OfType<string>().Where(svcIds.Contains), StringComparer.Ordinal);
-            foreach (var (id, row) in svcRows) if (RuleIdRx().Matches(row.Cell(1)).Any(x => x.Value == r.Id)) services.Add(id);
-            foreach (Match sm in SvcIdRx().Matches(r.Get("then") ?? "")) if (svcIds.Contains(sm.Value)) services.Add(sm.Value);
-            var usable = new List<FixtureFile>(own);
-            foreach (var svc in services)
+            var names = SpecParser.SplitIds(r.Get("fixtures"));
+            if (names.Count == 0)
             {
-                var forSvc = (svcRows.TryGetValue(svc, out var row) ? SpecParser.SplitIds(row.Cell(2)) : new())
-                    .Where(fixtureFiles.ContainsKey).Select(n => fixtureFiles[n]).Concat(own).Where(x => x.Service == svc).DistinctBy(x => x.Name).ToList();
-                if (forSvc.Count > 0 && forSvc.All(x => x.Synthetic))
-                    W(r.Line, "FIXTURE-SYNTHETIC", $"{r.Id}: every fixture for {svc} is synthetic ({string.Join(", ", forSvc.Select(x => x.Name))}); a test built on them must say it runs on synthetic replies");
-                usable.AddRange(forSvc);
+                var services = svcRows.Where(kv => RuleIdRx().Matches(kv.Value.Cell(1)).Any(x => x.Value == r.Id)).Select(kv => kv.Key).ToHashSet(StringComparer.Ordinal);
+                foreach (Match sm in SvcIdRx().Matches(r.Get("then") ?? "")) if (svcRows.ContainsKey(sm.Value)) services.Add(sm.Value);
+                names = services.SelectMany(svc => SpecParser.SplitIds(svcRows[svc].Cell(2))).ToList();
             }
+            var usable = names.Where(fixtureFiles.ContainsKey).Select(n => fixtureFiles[n]).DistinctBy(x => x.Name).ToList();
+            if (usable.Count > 0 && usable.All(x => x.Synthetic))
+                W(r.Line, "FIXTURE-SYNTHETIC", $"{r.Id}: every fixture it runs on is synthetic ({string.Join(", ", usable.Select(x => x.Name))}); a test built on them must say it runs on synthetic replies");
             var gapped = r.OutcomeGaps.Select(g => OutcomeGapRx().Match(g.Value)).Where(x => x.Success).Select(x => x.Groups[1].Value).ToHashSet(StringComparer.Ordinal);
             foreach (var o in SpecParser.SplitIds(r.Get("outcomes")).Distinct(StringComparer.Ordinal))
                 if (!gapped.Contains(o) && !usable.Any(x => x.Variant == o))

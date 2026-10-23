@@ -29,8 +29,8 @@ keeps the agent out of it, not the tool.
 | FIXTURE-MISSING | gate | a named fixture file does not exist or records a different service |
 | FIXTURE-INVALID | gate | a fixture file is not valid JSON; a listed fixture has no `service`, a `recorded` that is neither a `YYYY-MM-DD` date nor `synthetic`, or a field of the wrong type |
 | FIXTURE-SYNTHETIC | gate | a listed synthetic fixture lacks `shapeVerified: true` or a non-empty `note` |
-| FIXTURE-SYNTHETIC | gate, warning | every fixture of a service a rule touches (its Service calls row, its `fixtures:`, a `svc:` in `then`) is synthetic; a test built on them must say so |
-| FIXTURE-OUTCOME | gate | a rule's declared outcome has no fixture with that `variant` and no `outcome-gap` line |
+| FIXTURE-SYNTHETIC | gate, warning | every fixture a rule uses is synthetic; a test built on them must say so. A rule that lists `fixtures:` is judged by them alone; otherwise by its services' rows (the Service calls rows naming it, a `svc:` in `then`) |
+| FIXTURE-OUTCOME | gate | a rule's declared outcome has no fixture with that `variant` and no `outcome-gap` line. A rule that lists `fixtures:` is judged by them alone; otherwise by its services' rows |
 | COV-RAW | gate | the manifest has raw statements or diagnostics not acknowledged in `extractor-debt.md`. A raw statement is acknowledged by a line carrying its `file:line`; a diagnostic by a line carrying `CODE: Form.member` (the message's subject) or, for diagnostics without a subject, the full message. The line also needs an owner and a `YYYY-MM-DD`. A bare code acknowledges nothing; one line covers one entry. |
 | OPEN | gate | Open questions, less the lines closed by evidence, is not exactly `- none` |
 | STATUS | gate | status is not `reviewed`, or reviewed-by lacks a name and date |

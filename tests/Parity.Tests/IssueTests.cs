@@ -302,7 +302,8 @@ public sealed class IssueTests
         List<Finding> Errors(List<Finding> f) => f.Where(x => x.Severity == "error").ToList();
         try
         {
-            // a hand-made synthetic reply is the only fixture of the service: today's lint accepted it silently
+            // a hand-made synthetic reply is the only fixture of the service: today's lint accepted it silently.
+            // R-001 lists only it and is warned; R-003 lists it beside the recorded riders-term-life, so it is not
             var only = _f.InstallExampleSpec("PolicyWizardStep3", s => s.Replace("limits-term-life", "limits-handmade"));
             Handmade("\"recorded\": \"synthetic\", \"note\": \"hand-made: a product with no limits\"");
             var f = Gate(only, out var tally);
@@ -310,9 +311,8 @@ public sealed class IssueTests
             var unverified = Assert.Single(Errors(f));
             Assert.Equal("FIXTURE-SYNTHETIC", unverified.Code);
             Assert.Equal($"limits-handmade.json is synthetic but lacks shapeVerified: true; check its shape against a real reply of {Svc} and say in the note what it stands for", unverified.Message);
-            var warned = f.Where(x => x.Code == "FIXTURE-SYNTHETIC" && x.Severity == "warning").ToList();
-            Assert.Equal(new[] { "R-PolicyWizardStep3-001", "R-PolicyWizardStep3-003" }, warned.Select(x => x.Message.Split(':')[0]));
-            Assert.All(warned, x => Assert.EndsWith($": every fixture for {Svc} is synthetic (limits-handmade); a test built on them must say it runs on synthetic replies", x.Message));
+            var warned = Assert.Single(f, x => x.Code == "FIXTURE-SYNTHETIC" && x.Severity == "warning");
+            Assert.Equal("R-PolicyWizardStep3-001: every fixture it runs on is synthetic (limits-handmade); a test built on them must say it runs on synthetic replies", warned.Message);
             Assert.Equal(new FixtureTally(4, 1), tally);
             Assert.Equal($"1 error(s), {f.Count - 1} warning(s), fixtures: 4 (1 synthetic)", SpecLinter.Summary(f, tally));
             Assert.DoesNotContain(SpecLinter.Lint(only, gate: false, implementDir: null, out var draftTally), x => x.Code.StartsWith("FIXTURE", StringComparison.Ordinal));
@@ -322,7 +322,7 @@ public sealed class IssueTests
             Handmade("\"recorded\": \"synthetic\", \"shapeVerified\": true, \"note\": \"hand-made: a product with no limits\"");
             f = Gate(only, out _);
             Assert.Empty(Errors(f));
-            Assert.Equal(2, f.Count(x => x.Code == "FIXTURE-SYNTHETIC"));
+            Assert.Single(f, x => x.Code == "FIXTURE-SYNTHETIC");
             Handmade("\"recorded\": \"synthetic\", \"shapeVerified\": true, \"note\": \" \"");
             Assert.Contains("lacks a note;", Assert.Single(Errors(Gate(only, out _))).Message);
             Handmade("\"recorded\": \"synthetic\", \"shapeVerified\": \"yes\", \"note\": \"hand-made\"");
@@ -342,6 +342,17 @@ public sealed class IssueTests
             f = Gate(mixed, out tally);
             Assert.DoesNotContain(f, x => x.Code == "FIXTURE-SYNTHETIC");
             Assert.Equal(new FixtureTally(5, 1), tally);
+
+            // the issue's core case: a rule naming only the synthetic reply is warned although its service row carries the recorded one;
+            // naming both, it is not
+            var ownOnly = _f.InstallExampleSpec("PolicyWizardStep3", s => s.Replace("- fixtures: limits-term-life\n", "- fixtures: limits-handmade\n"));
+            f = Gate(ownOnly, out tally);
+            Assert.Empty(Errors(f));
+            Assert.Equal("R-PolicyWizardStep3-001: every fixture it runs on is synthetic (limits-handmade); a test built on them must say it runs on synthetic replies",
+                Assert.Single(f, x => x.Code == "FIXTURE-SYNTHETIC").Message);
+            Assert.Equal(new FixtureTally(5, 1), tally);
+            var ownBoth = _f.InstallExampleSpec("PolicyWizardStep3", s => s.Replace("- fixtures: limits-term-life\n", "- fixtures: limits-term-life, limits-handmade\n"));
+            Assert.DoesNotContain(Gate(ownBoth, out _), x => x.Code == "FIXTURE-SYNTHETIC");
 
             // a rule that declares its outcomes needs a fixture variant per outcome, or a stated gap
             const string Outcomes = "- fixtures: limits-term-life\n- outcomes: valid, invalid, blank\n";
@@ -373,6 +384,12 @@ public sealed class IssueTests
             copy["note"] = "max below min: the reply a misconfigured product returns";
             File.WriteAllText(scaffolded, copy.ToJsonString());
             Assert.Empty(Errors(Gate(varied, out _)));
+
+            // an outcome is judged by the rule's own fixtures: a variant only on its service row does not count
+            var rowVariant = _f.InstallExampleSpec("PolicyWizardStep3", s => s.Replace("- fixtures: limits-term-life\n", "- fixtures: limits-term-life\n- outcomes: valid, invalid\n")
+                .Replace("| limits-term-life |", "| limits-term-life, limits-term-life.invalid |"));
+            Assert.Equal(new[] { "R-PolicyWizardStep3-001: outcome 'invalid' has no listed fixture with variant 'invalid' and no 'outcome-gap: invalid - <reason>'" },
+                Errors(Gate(rowVariant, out _)).Select(x => x.Message));
 
             // outcome-gap is checked like the rest of the grammar
             var badGap = _f.InstallExampleSpec("PolicyWizardStep3", s => s.Replace("- fixtures: limits-term-life\n", Outcomes + "- outcome-gap: error - no such outcome declared\n- outcome-gap: blank\n"));

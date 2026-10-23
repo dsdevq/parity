@@ -64,9 +64,8 @@ category input, action, grid, column, display or unknown, per container that has
 ```
 
 A rule that distinguishes outcomes of a service reply declares them in `outcomes`; lint never infers
-them from the prose. Each declared outcome needs a fixture the rule uses (its own `fixtures:` or the
-Service calls rows of the services it touches) whose `variant` is that outcome, or an `outcome-gap`
-line saying why there is none (`FIXTURE-OUTCOME` otherwise). `outcome-gap` is the one key a rule may
+them from the prose. Each declared outcome needs a fixture the rule uses whose `variant` is that
+outcome, or an `outcome-gap` line saying why there is none (`FIXTURE-OUTCOME` otherwise). `outcome-gap` is the one key a rule may
 repeat, and it must name a declared outcome.
 
 Ids containing commas (method parameter lists) are split on top-level commas only.
@@ -154,9 +153,10 @@ rules; the old id stays in the file until no spec cites it.
 - A synthetic fixture needs `shapeVerified: true` (its shape was checked against a real reply) and a
   `note` saying what it stands for; without both it is a gate error (`FIXTURE-SYNTHETIC`).
 
-A rule whose every fixture for one of its services is synthetic passes the gate with a
-`FIXTURE-SYNTHETIC` warning: a test built on those fixtures must say it runs on synthetic replies. The
-lint summary counts the fixtures the spec lists, `fixtures: N (M synthetic)`.
+The fixtures a rule uses: a rule that lists `fixtures:` is judged by them alone; otherwise by its
+services' rows (the Service calls rows that name it in `called from`, and those of a `svc:` in `then`).
+A rule whose every such fixture is synthetic passes the gate with a `FIXTURE-SYNTHETIC` warning: a
+test built on those fixtures must say it runs on synthetic replies. The lint summary counts the fixtures the spec lists, `fixtures: N (M synthetic)`.
 
 How replies are recorded is the adopter's business (a headless runner against the old API). A synthetic
 variant starts from a recorded one:
