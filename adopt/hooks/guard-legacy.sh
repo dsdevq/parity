@@ -255,7 +255,7 @@ case $tool in
       case $t in
         ~*) deny "the path '$t' (the home directory) is outside the allowed roots" ;;
         *'$'*/*|*%*%*/*|*/*'$'*|*/*%*%*) deny "the path '$t' cannot be resolved (shell expansion), so it may be outside the allowed roots" ;;
-        */*|.|..|[a-z]:/*|[a-z]:) ;;
+        */*|.|..|[a-z]:) ;;
         *) continue ;;
       esac
       t=$(printf '%s' "$t" | sed 's#[^/]*[*?[].*##')
