@@ -33,6 +33,7 @@ byte-stable for the same input, so `git diff` is meaningful and the spec binds t
 | `handler:` | `handler:Class/method`, `handler:Class/lambda@L<line>`, `handler:Class/ctor(n)` | `cite:` |
 | `method:` | `method:Namespace.Type.Method(paramTypes)`, `...Prop.get` | `cite:` |
 | `svc:` | `svc:IService.Method` (containing type's simple name) | Service calls table; `then` text |
+| `ev:` | `ev:Class/<n>`, not in the manifest: a record in `evidence/<Class>.json` written by `parity evidence add` | `cite:`; a question closed by evidence |
 
 ## ControlInfo
 

@@ -5,9 +5,10 @@ description: Write or extend the parity spec for one form from its manifest, unt
 
 # parity-specify
 
-Your only input is `legacy/<Module>/manifests/<Form>.md` plus `legacy/<Module>/fixtures/`. The legacy
-source is off limits in this phase (a hook enforces it). Everything you may cite is printed in the
-manifest; every id you write must appear there verbatim.
+Your only input is `legacy/<Module>/manifests/<Form>.md` plus `legacy/<Module>/fixtures/` and, when it
+exists, `legacy/<Module>/evidence/<Form>.json`. The legacy source is off limits in this phase (a hook
+enforces it). Everything you may cite is printed in the manifest or recorded as an `ev:` id in the
+evidence file; every id you write must appear there verbatim.
 
 1. Ensure `legacy/.phase` contains `specify`. Open the manifest .md. Copy the `manifest:` hash line.
 2. Start `legacy/<Module>/spec/<Form>.md` from `templates/spec.md` (status `draft`).

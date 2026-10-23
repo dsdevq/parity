@@ -33,7 +33,7 @@ category input, action, grid, column, display or unknown, per container that has
 ### R-<Class>-NNN
 - kind: validation | enablement | navigation | data | calculation | ui | service | lifecycle
 - covers: evt:..., evt:...          at least one; dyn: ids also allowed
-- cite: handler:..., method:...     at least one
+- cite: handler:..., method:..., ev:...   at least one handler: or method:; ev: optional
 - given: ...
 - when: ...
 - then: ...                         must name a control (ctrl:/dyn: id or control name), a svc: or a form:
@@ -59,6 +59,45 @@ whose `service` field equals the id.
 
 `- none`, or lines of questions. Anything other than `- none` keeps the gate closed, by design: the
 spec may be drafted with questions; it may not be implemented with them.
+
+A question is closed one way: by evidence. It stays listed, rewritten as
+
+```
+- closed by evidence ev:<Class>/<n>[, ev:...]: <question> - <answer>
+```
+
+and stops counting against the gate. Any other wording, `closed` or `answered` included, is still an
+open question. A closed line must link at least one `ev:` id (`EV-UNLINKED`
+otherwise) and each id must resolve like a cited one. A question a human answers is not closed; the
+answer goes into the rule or Fields row it changes and the question line is deleted.
+
+## Evidence
+
+The manifest is what the extractor understood. When a rule needs a fact it lacks (a model class, a
+config value, a stored procedure), `parity evidence add <Class> <file>:<start>-<end> --note <text>`
+quotes those lines into `evidence/<Class>.json` next to `manifests/` and prints the new `ev:<Class>/<n>`
+(`templates/evidence.json` shows the shape):
+
+```json
+{ "schemaVersion": "1", "unit": "<Class>", "root": "<legacy root, relative to this file>",
+  "records": [ { "id": "ev:<Class>/1", "file": "Services/Dto.cs", "start": 21, "end": 21,
+                 "quoteHash": "sha256:<16 hex>", "revision": "git:<sha> | manifest:sha256:<16 hex>",
+                 "created": "YYYY-MM-DD", "note": "...", "quote": ["..."] } ] }
+```
+
+- `file` is relative to the legacy root (the directory of `project` in the extract config).
+- `quoteHash` is sha256 of the quoted lines joined by `\n`, first 16 hex, like the manifest hash; line
+  endings never count.
+- `revision` is the legacy root's git HEAD, suffixed `+dirty` when the quoted file differs from it;
+  when the root is not a git work tree it is the unit's manifest hash, named `manifest:`.
+- Ids are numbered one past the highest in the file and never reused. Records are written by the
+  command, not by hand: a `quote` that does not hash to `quoteHash` is `EV-INVALID`.
+
+A rule cites a record in `cite:` beside its handler, never in `covers:`. Lint reads the quoted lines from
+the legacy root (`PARITY_LEGACY_ROOT` when set, else the file's `root`) and reports `EV-STALE` when the
+file is gone, the range is past its end or the lines no longer hash to `quoteHash`, naming where the
+quoted lines sit now when they only moved. Re-record with `parity evidence add` and update the citing
+rules; the old id stays in the file until no spec cites it.
 
 ## Fixtures
 

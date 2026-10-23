@@ -199,6 +199,106 @@ public sealed class IssueTests
     }
 
     [Fact]
+    public void issue_21_a_spec_cites_evidence_outside_the_manifest_and_lint_reports_it_stale_when_the_source_moves()
+    {
+        // input: BeneficiarySearchForm.Setup shows preselected.Surname; ClientDto (Services/Dto.cs:21) is a model class the manifest
+        // does not carry. The legacy root is a copy of the fixture's project directory so the test can move the source under the record.
+        var root = Path.Combine(_f.OutRoot, "src-21");
+        Directory.CreateDirectory(Path.Combine(root, "Services"));
+        File.Copy(Path.Combine(_f.RepoRoot, "fixtures", "SampleLegacy", "SampleLegacy.csproj"), Path.Combine(root, "SampleLegacy.csproj"));
+        var dto = Path.Combine(root, "Services", "Dto.cs");
+        File.Copy(Path.Combine(_f.RepoRoot, "fixtures", "SampleLegacy", "Services", "Dto.cs"), dto);
+        var original = File.ReadAllLines(dto);
+        var cfg = ExtractConfig.Load(Path.Combine(_f.RepoRoot, "fixtures", "extract.config.json"));
+        cfg.Output = Path.Combine(_f.OutRoot, "legacy");
+        cfg.Project = Path.Combine(root, "SampleLegacy.csproj");
+        cfg.BaseDir = cfg.Output;                                                    // the layout's legacy/: config and .phase side by side
+        var phase = Path.Combine(cfg.BaseDir, ".phase");
+        var hash = ManifestHash.Of(Path.Combine(_f.ModuleDir, "manifests", "BeneficiarySearchForm.json"));
+        var specDir = Path.Combine(_f.ModuleDir, "spec"); Directory.CreateDirectory(specDir);
+        var spec = Path.Combine(specDir, "BeneficiarySearchForm.md");
+        var evFile = Evidence.PathOf(_f.ModuleDir, "BeneficiarySearchForm");
+        const string Answer = "- closed by evidence ev:BeneficiarySearchForm/1: which client field fills txtName? - Surname\n";
+        List<Finding> Lint(string cite = "handler:BeneficiarySearchForm/Setup, ev:BeneficiarySearchForm/1", string closed = Answer, bool gate = false)
+        {
+            File.WriteAllText(spec, $"---\nform: form:BeneficiarySearchForm\nmanifest: {hash}\nstatus: draft\n---\n# x\n## Fields\n## Rules\n### R-BeneficiarySearchForm-001\n- kind: data\n- covers: evt:BeneficiarySearchForm/$this.Setup\n- cite: {cite}\n- given: a hosting form passes a preselected client\n- when: Setup runs\n- then: txtName shows the client's Surname\n## No behavior\n## Service calls\n## Open questions\n{closed}- none\n");
+            return SpecLinter.Lint(spec, gate, implementDir: null);
+        }
+        try
+        {
+            // specify and implement may read evidence, never the source
+            foreach (var p in new[] { "specify", "implement" })
+            {
+                File.WriteAllText(phase, p + "\n");
+                var refused = Assert.Throws<InvalidOperationException>(() => Evidence.AddFromConfig(cfg, null, "BeneficiarySearchForm", "Services/Dto.cs:21-21", null));
+                Assert.Equal($"phase '{p}' may read evidence but not the source; record evidence in the extract phase", refused.Message);
+            }
+            Assert.False(File.Exists(evFile));
+            File.WriteAllText(phase, "extract\n");
+            var ev = Evidence.AddFromConfig(cfg, null, "BeneficiarySearchForm", "Services/Dto.cs:21-21", "the Surname Setup shows");
+            Assert.Equal("ev:BeneficiarySearchForm/1", ev.Id);
+            Assert.Equal(("Services/Dto.cs", 21, 21), (ev.File, ev.Start, ev.End));
+            Assert.Equal(new[] { original[20] }, ev.Quote);
+            Assert.Equal(Evidence.QuoteHash(new[] { original[20] }), ev.QuoteHash);
+            Assert.Matches("^sha256:[0-9a-f]{16}$", ev.QuoteHash);
+            Assert.Equal("manifest:" + hash, ev.Revision);                           // not a git work tree: the fallback is named
+            Assert.Equal("../../../src-21", Evidence.Load(evFile).Root);              // relative to the evidence file, so the pair can move together
+
+            Assert.Empty(Lint());                                                       // cited like a manifest id, and the line still reads the same
+            Assert.DoesNotContain(Lint(gate: true), x => x.Code == "OPEN");             // a question closed by evidence no longer blocks the gate
+            Assert.Contains(Lint(cite: "handler:BeneficiarySearchForm/Setup, ev:BeneficiarySearchForm/2"), x => x.Code == "CITE-UNKNOWN" && x.Message == "R-BeneficiarySearchForm-001: 'ev:BeneficiarySearchForm/2' is not recorded in evidence/BeneficiarySearchForm.json");
+            Assert.Contains(Lint(cite: "ev:BeneficiarySearchForm/1"), x => x.Code == "CITE-KIND");          // evidence supplements a handler, never replaces it
+            Assert.Contains(Lint(closed: "- closed by evidence: which client field fills txtName? - Surname\n"), x => x.Code == "EV-UNLINKED");
+            Assert.Contains(Lint(closed: "- closed: which client field fills txtName? - Surname\n", gate: true), x => x.Code == "OPEN");   // only evidence closes a question
+
+            // the source moves under the record: every citing line is EV-STALE, naming the record, the file and what moved
+            List<string> Stale() => Lint().Where(x => x.Code == "EV-STALE").Select(x => x.Message).ToList();
+            File.WriteAllLines(dto, original.Select((l, i) => i == 20 ? l.Replace("Surname", "FamilyName") : l));
+            var edited = Stale();
+            Assert.Equal(2, edited.Count);                                              // the rule's cite and the closed question
+            Assert.StartsWith("R-BeneficiarySearchForm-001: 'ev:BeneficiarySearchForm/1' no longer matches the source: Services/Dto.cs:21-21 changed since manifest:sha256:", edited[0]);
+            Assert.EndsWith("; the quoted lines are nowhere in the file", edited[0]);
+            File.WriteAllLines(dto, new[] { "// a line inserted above" }.Concat(original));
+            Assert.EndsWith("; the quoted lines are now at Services/Dto.cs:22-22", Stale()[0]);
+            File.WriteAllLines(dto, original.Take(10));
+            Assert.Contains("Services/Dto.cs:21-21 is past the end of Services/Dto.cs, which now has 10 line(s)", Stale()[0]);
+            File.Delete(dto);
+            Assert.Contains("Services/Dto.cs does not exist under the legacy root", Stale()[0]);
+            File.WriteAllLines(dto, original);
+            Assert.Empty(Lint());
+
+            // a quote edited by hand no longer proves anything
+            var json = File.ReadAllText(evFile);
+            File.WriteAllText(evFile, json.Replace("public string Surname", "public string Forename"));
+            Assert.Contains(Lint(), x => x.Code == "EV-INVALID");
+            File.WriteAllText(evFile, json);
+
+            // in a git work tree the revision is HEAD, marked dirty when the quoted file differs from it
+            if (Git(root, "init -q") && Git(root, "add -A") && Git(root, "-c user.name=fixture -c user.email=fixture@example.invalid -c commit.gpgsign=false commit -q -m fixture"))
+            {
+                var clean = Evidence.AddFromConfig(cfg, null, "BeneficiarySearchForm", "Services/Dto.cs:20-20", null);
+                Assert.Equal("ev:BeneficiarySearchForm/2", clean.Id);
+                Assert.Matches("^git:[0-9a-f]{40,64}$", clean.Revision);
+                File.AppendAllText(dto, "// uncommitted\n");
+                Assert.Matches("^git:[0-9a-f]{40,64}\\+dirty$", Evidence.AddFromConfig(cfg, null, "BeneficiarySearchForm", "Services/Dto.cs:20-20", null).Revision);
+            }
+        }
+        finally { File.Delete(spec); File.Delete(phase); if (Directory.Exists(Path.GetDirectoryName(evFile))) Directory.Delete(Path.GetDirectoryName(evFile)!, true); }
+    }
+
+    private static bool Git(string dir, string args)
+    {
+        try
+        {
+            using var p = Process.Start(new ProcessStartInfo("git", args) { WorkingDirectory = dir, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true })!;
+            var err = p.StandardError.ReadToEndAsync();
+            p.StandardOutput.ReadToEnd(); p.WaitForExit(); err.Wait();
+            return p.ExitCode == 0;
+        }
+        catch (System.ComponentModel.Win32Exception) { return false; }
+    }
+
+    [Fact]
     public void issue_7_references_load_once_and_each_phase_is_timed()
     {
         Assert.Matches(@"references: \d+ loaded in \d+\.\ds", _f.Log);
