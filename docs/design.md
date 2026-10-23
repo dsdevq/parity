@@ -36,7 +36,7 @@ A fix that ends as only a code patch has escaped the system.
 | probe | script | csproj | counts, statement shapes | none, it is reconnaissance |
 | extract | script | config, form glob | manifests, module index | `raw == 0 && diag == 0` or each entry acknowledged in `extractor-debt.md` |
 | capture | script (yours) | module service-call ids | `fixtures/*.json` | every `svc:` id has at least one fixture; a synthetic one is labelled, shape-verified and explained |
-| map | agent, then human | legacy source, manifests, `module.json`, fixtures | `registry/*.json`, `evidence/` | `parity registry check --gate` green and the registry stamped against this extract |
+| map | agent, then human | legacy source, manifests, `module.json`, fixtures | `registry/*.json`, `evidence/` | `parity registry check` without an error (scenario warnings allowed) and the registry stamped against this extract |
 | specify | agent, then human | rendered manifest, fixtures, evidence | `spec/<Form>.md` | `parity lint` green; human sets `status: reviewed` |
 | scaffold | script (yours, optional) | manifest, categories | component skeleton | every control mapped or explicitly dropped |
 | implement | agent | spec, fixtures, skeleton | components, tests | `parity lint --gate --implement <dir>` green |

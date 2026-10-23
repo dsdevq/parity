@@ -136,8 +136,10 @@ Pick the phases to fit the work a person does in between (recording fixtures aft
    collect it.
 6. Set `legacy/.phase` to `map`, fresh session, `parity-map` skill (`sh legacy/run-phases.sh <Module> <Form> map`
    does both): the agent reads the legacy source and the manifests and records the module's context in
-   `legacy/<Module>/registry/` (next section). The stop hook runs `parity registry check legacy/<Module> --gate`
-   and refuses the turn while it is red.
+   `legacy/<Module>/registry/` (next section). The stop hook runs `parity registry check legacy/<Module>` and
+   refuses the turn while it has an error. Unverified and unreferenced scenarios are warnings it lists for the
+   user: the specs that reference a scenario are written in `specify`, and `lastVerified` is set only after a
+   real run against the host, so map never has to invent a date.
 7. Set `legacy/.phase` to `specify`, start a fresh agent session, run the `parity-specify` skill for
    the form (`sh legacy/run-phases.sh <Module> <Form> specify` does both when `init --phase-driver` wrote it). The hook denies anything outside the consuming repo in this phase; the agent works from
    `manifests/<Form>.md` and `evidence/<Form>.json`. Iterate until `parity lint` is green. The linter

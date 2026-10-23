@@ -229,6 +229,40 @@ public sealed partial class IssueTests
         Assert.All(findings, x => Assert.Contains("scn:deceased-beneficiary-refused", x.Message));
         Assert.All(Registry.Check(dir, gate: true), x => Assert.Equal("error", x.Severity));
 
+        // the map stop hook, with the real binary: the two scenario warnings are listed and do not block; a stale stamp does
+        var root = Path.GetDirectoryName(Path.GetDirectoryName(dir))!;
+        if (!OperatingSystem.IsWindows() && GuardHookTests.Sh() != null && Git(root, "init", "-q"))
+        {
+            Directory.CreateDirectory(Path.Combine(root, "legacy", "hooks"));
+            File.Copy(Path.Combine(_f.RepoRoot, "adopt", "hooks", "lint-on-stop.sh"), Path.Combine(root, "legacy", "hooks", "lint-on-stop.sh"), overwrite: true);
+            File.WriteAllText(Path.Combine(root, "legacy", ".phase"), "map\n");
+            var wrapper = Path.Combine(Path.GetDirectoryName(root)!, "parity-17e.sh");
+            File.WriteAllText(wrapper, $"#!/bin/sh\nexec '{Environment.ProcessPath}' '{Path.Combine(AppContext.BaseDirectory, "parity.dll")}' \"$@\"\n");
+            File.SetUnixFileMode(wrapper, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            Assert.True(Git(root, "add", "-A") && Git(root, "-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-q", "-m", "extract"));
+            var scn = Path.Combine(dir, "registry", "scenarios.json");
+            var reviewed = File.ReadAllText(scn);
+            (int Code, string Err) Stop()
+            {
+                var psi = new ProcessStartInfo(GuardHookTests.Sh()!, "legacy/hooks/lint-on-stop.sh") { WorkingDirectory = root, UseShellExecute = false, RedirectStandardError = true, RedirectStandardOutput = true, RedirectStandardInput = true };
+                psi.Environment["PARITY_BIN"] = wrapper;
+                using var p = Process.Start(psi)!;
+                p.StandardInput.Close();
+                var err = p.StandardError.ReadToEnd(); p.WaitForExit();
+                return (p.ExitCode, err);
+            }
+            File.WriteAllText(scn, reviewed + "\n");                                                   // map touched the registry
+            var warned = Stop();
+            Assert.True(warned.Code == 0, $"map: scenario warnings must not block: {warned.Err}");
+            Assert.Contains("SCENARIO-UNVERIFIED", warned.Err);
+            Assert.Contains("SCENARIO-UNREFERENCED", warned.Err);
+            File.WriteAllText(scn, reviewed.Replace(Registry.Revision(dir), "sha256:0000000000000000"));
+            var stale = Stop();
+            Assert.Equal(2, stale.Code);
+            Assert.Contains("REGISTRY-STALE", stale.Err);
+            File.WriteAllText(scn, reviewed);
+        }
+
         // a rule references a scenario by id and version; an unknown id or a version the registry moved past is a lint error
         var spec = Path.Combine(dir, "spec", "BeneficiarySearchForm.md");
         Directory.CreateDirectory(Path.GetDirectoryName(spec)!);
@@ -417,7 +451,8 @@ public sealed partial class IssueTests
             File.WriteAllText(phase, "map\n");
             File.WriteAllText(Path.Combine(work, "legacy", "M", "registry", "scenarios.json"), "{}");
             Assert.Equal(0, Stop().Code);
-            Assert.Contains("registry check legacy/M --gate", File.ReadAllText(calls));
+            Assert.Contains("registry check legacy/M", File.ReadAllText(calls));
+            Assert.DoesNotContain("--gate", File.ReadAllText(calls));
             File.WriteAllText(Path.Combine(baseDir, "red"), "");
             var red = Stop();
             Assert.Equal(2, red.Code);
