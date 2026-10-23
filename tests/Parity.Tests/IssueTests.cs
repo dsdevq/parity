@@ -256,6 +256,10 @@ public sealed class IssueTests
                 ("Bash", new { command = "bash -c \"cd legacy/M && ls fixtures\" && cat legacy/M/spec/X.md" }, work),           // so does a nested shell's
                 ("Bash", new { command = "bash --norc -o pipefail -c \"cd legacy/M && ls fixtures\"" }, work),                  // option words before -c
                 ("Glob", new { pattern = "**/*.{ts,tsx}" }, work),                                                               // brace alternatives that cannot be ..
+                ("Bash", new { command = "grep -E \"[0-9]{2,4}\" src/x.cs" }, work),                                            // braces inside quotes are not expansion
+                ("Bash", new { command = "curl -d '{\"a\":1,\"b\":2}' http://localhost:5000/x" }, work),
+                ("Bash", new { command = "dotnet build /p:Configuration=Release && msbuild x.sln /t:Rebuild /v:m" }, work),     // MSBuild switches are options
+                ("PowerShell", new { command = "dotnet test /p:Foo=1" }, work),
             };
             // calls it must refuse
             var denied = new (string Tool, object Input, string Cwd, string Why)[]
@@ -293,6 +297,8 @@ public sealed class IssueTests
                 ("Bash", new { command = "ls .*" }, work, "resolve"),
                 ("Bash", new { command = "ls [.][.]/Legacy" }, work, "resolve"),
                 ("Bash", new { command = "cat .{.,}/Legacy/AcmeAdmin/Forms/X.cs" }, work, "resolve"),                              // brace expansion
+                ("Bash", new { command = "echo \"it's\" && cat .{.,}/Legacy/AcmeAdmin/Forms/X.cs" }, work, "brace"),               // after a quote that holds the other quote
+                ("Bash", new { command = "bash -c \"cat .{.,}/Legacy/AcmeAdmin/Forms/X.cs\"" }, work, "brace"),                  // inside a nested shell's command
                 ("Bash", new { command = "cd .''. && ls" }, work, "resolve"),                                                      // the same through cd
                 ("Monitor", new { command = "tail -f .''./Legacy/AcmeAdmin/Forms/X.cs" }, work, "resolve"),
                 ("PowerShell", new { command = "Get-Content .`.\\Legacy\\AcmeAdmin\\Forms\\X.cs" }, work, "resolve"),             // backtick escape
@@ -391,6 +397,12 @@ public sealed class IssueTests
             Assert.Equal(2, custom.Code); Assert.Contains("code-index", custom.Err);
             Assert.Equal(0, GuardHookTests.Run(work, HookCall("Read", new { file_path = "../shared/x.txt" }, work), hideJq: false).Code);
             Assert.Equal(2, GuardHookTests.Run(work, HookCall("Read", new { file_path = "../Legacy/AcmeAdmin/Forms/X.cs" }, work), hideJq: false).Code);
+
+            // a config parity accepts (a comment, a trailing comma) that jq cannot read: the refusal names the cause
+            File.WriteAllText(config, "{\n  // the legacy project\n  \"project\": \"" + legacy.Replace('\\', '/') + "/AcmeAdmin.csproj\",\n}\n");
+            Assert.EndsWith("AcmeAdmin.csproj", ExtractConfig.Load(config).Project);
+            var lenient = GuardHookTests.Run(work, HookCall("Read", new { file_path = "legacy/M/manifests/X.md" }, work), hideJq: false);
+            Assert.Equal(2, lenient.Code); Assert.Contains("not strict JSON", lenient.Err);
 
             // the legacy root named as a Windows drive path, in every spelling a Windows host produces
             File.WriteAllText(config, "{\n  \"project\": \"C:/src/Legacy/AcmeAdmin/AcmeAdmin.csproj\"\n}\n");

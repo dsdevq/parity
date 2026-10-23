@@ -18,7 +18,7 @@
 # The hook works from CLAUDE_PROJECT_DIR (else its cwd), so a session cwd below the repo root cannot hide the phase.
 # Shell tokens are judged per path segment, with \ both as an escape and as a separator: a segment a wildcard or a
 # quote/backslash splice can turn into '..' (.''./x  .\./x  .?/x  .*/x  [.]*), a '..' after a wildcard segment and
-# brace expansion are refused, since the guard cannot see where they resolve. A wildcard segment cuts the path checked.
+# unquoted brace expansion are refused, since the guard cannot see where they resolve. A wildcard segment cuts the path checked.
 # Phase: legacy/.phase. Legacy root: PARITY_LEGACY_ROOT, else the directory of "project" in the config.
 # jq is required to read tool input; without it a restricted phase refuses every call. The sed fallback below
 # only finds the legacy root (and a label for the log) so the refusal can say what is wrong.
@@ -128,6 +128,9 @@ repo=$(pwd)
 repo=$(lc "$(fwd "$repo")")
 root="${PARITY_LEGACY_ROOT:-}"
 rootbase=$repo
+if [ -f "$cfg" ] && command -v jq >/dev/null 2>&1 && ! jq empty "$cfg" >/dev/null 2>&1; then
+  deny "$cfg is not strict JSON (a // comment or a trailing comma, which parity accepts, stops jq), so the guard cannot read it. Refusing the call rather than failing open" "Remove the comments and trailing commas from $cfg"
+fi
 if [ -z "$root" ] && [ -f "$cfg" ]; then
   if command -v jq >/dev/null 2>&1; then
     proj=$(jq -r '.project // empty' "$cfg" 2>/dev/null)
@@ -233,13 +236,13 @@ case $tool in
     [ -n "$cmd" ] || deny "no command in the tool input to check"
     cmd=$(printf '%s' "$cmd" | tr 'A-Z' 'a-z' | tr '\n\t' ';;')
     [ "$tool" = PowerShell ] && cmd=$(fwd "$cmd")
-    printf '%s' "$cmd" | grep -qE '\{[^ }]*(,|\.\.)[^ }]*\}' && deny "the command uses brace expansion, which cannot be resolved, so it may reach outside the allowed roots"
     ps=0; [ "$tool" = PowerShell ] && ps=1
     cmd=$(printf '%s\n' "$cmd" | awk -v q="'" -v ps="$ps" '{
-      o = ""
+      o = ""; u = ""
       for (i = 1; i <= length($0); i++) {
         c = substr($0, i, 1)
-        if (c == "\\" && (v != "" ? v : w) != q) { o = o c substr($0, i + 1, 1); i++; continue }
+        u = u ((w != "" && !nest) || v != "" ? " " : c)
+        if (c == "\\" && (v != "" ? v : w) != q) { o = o c substr($0, i + 1, 1); i++; u = u " "; continue }
         if (w != "" && !nest) { if (c == w) w = ""; else if (c ~ /[;|&(){}]/) c = " " }
         else if (v != "") { if (c == v) v = ""; else if (c ~ /[;|&(){}]/) c = " " }
         else if (nest && c == w) { w = ""; nest = 0; c = " ) " }
@@ -257,7 +260,8 @@ case $tool in
         o = o c
       }
       print o
-    }')
+      if (u ~ /\{[^ }]*(,|\.\.)[^ }]*\}/) exit 3
+    }') || deny "the command uses brace expansion, which cannot be resolved, so it may reach outside the allowed roots"
     set -- $cmd
     at=1; cw=; stack=
     while [ $# -gt 0 ]; do
@@ -319,6 +323,8 @@ $stack"; at=1; continue ;;
       case $t in \\*) ;; *\\*) t=$(fwd "$t") ;; esac
       case $t in
         ~*) deny "the path '$t' (the home directory) is outside the allowed roots" ;;
+        /[a-z]*:*/*) ;;
+        /[a-z]*:*) continue ;;
         *'$'*/*|*%*%*/*|*/*'$'*|*/*%*%*) deny "the path '$t' cannot be resolved (shell expansion), so it may be outside the allowed roots" ;;
         */*|.|..|[a-z]:) ;;
         *) case $legacy in "$cwd"/*) ;; *) continue ;; esac ;;

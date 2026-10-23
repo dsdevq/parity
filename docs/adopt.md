@@ -83,7 +83,7 @@ refused, even when an allowed root contains it.
 |---|---|
 | `Read`, `Edit`, `Write`, `MultiEdit`, `NotebookEdit` | the file path, resolved against the `cwd` in the hook input, must be allowed |
 | `Grep`, `Glob` | the search path (the `cwd` when omitted) and the glob up to its first wildcard segment must be allowed; a `..` after a wildcard segment and a brace alternative that can stand for `..` (`{..,x}`, `{.?,x}`) are refused, `*.{ts,tsx}` is fine |
-| `Bash`, `PowerShell`, `Monitor` | the `cwd`; every path-like token (contains `/` or `\`, is `.` or `..`, a drive path), also when glued to a short option (`-I../x`); a `cd`, `pushd`, `Set-Location` and friends as the first word of a command must stay inside the allowed roots, and later relative paths resolve from there. A command starts after `;`, `|`, `&`, `(`, `)`, `{`, `}` or a newline outside quotes, and after a reserved word (`then`, `do`, `else`, `elif`, `if`, `while`, `until`, `!`, `time`) or a wrapper (`command`, `builtin`, `env`, `exec`, `VAR=x`). The quoted argument of `sh`/`bash`/`zsh`/`dash`/`ksh`/`powershell`/`pwsh` `-c`/`-command` and of `eval` is a command of its own, and its `cd`, like one in a `( )` subshell, ends with it. Option words before `-c` (`--norc`, `--login`, `-o pipefail`) do not change that. A `cd` word anywhere else that is followed by a path, a variable (`$HOME`, `%USERPROFILE%`) or nothing refuses the call, unless it is an argument of `echo`, `git` or `printf`. A word without a separator that names the legacy root from the `cwd` (`ls LegacyApp` with the root inside the repo) is refused too. Each path segment is judged: a segment a wildcard or a quote/backslash splice can turn into `..` (`.''./x`, `.\./x`, `.?/x`, `.*/x`, `[.]*`), a `..` after a wildcard segment (`src/*/../..`), brace expansion, `~` and `$VAR/...` cannot be resolved and are refused. Other wildcards (`src/**/*.ts`), regexes (`s/a.*b/c/`, `[a-z]+`) and quoted arguments are fine; the path is checked up to its first wildcard segment |
+| `Bash`, `PowerShell`, `Monitor` | the `cwd`; every path-like token (contains `/` or `\`, is `.` or `..`, a drive path), also when glued to a short option (`-I../x`); a `cd`, `pushd`, `Set-Location` and friends as the first word of a command must stay inside the allowed roots, and later relative paths resolve from there. A command starts after `;`, `|`, `&`, `(`, `)`, `{`, `}` or a newline outside quotes, and after a reserved word (`then`, `do`, `else`, `elif`, `if`, `while`, `until`, `!`, `time`) or a wrapper (`command`, `builtin`, `env`, `exec`, `VAR=x`). The quoted argument of `sh`/`bash`/`zsh`/`dash`/`ksh`/`powershell`/`pwsh` `-c`/`-command` and of `eval` is a command of its own, and its `cd`, like one in a `( )` subshell, ends with it. Option words before `-c` (`--norc`, `--login`, `-o pipefail`) do not change that. A `cd` word anywhere else that is followed by a path, a variable (`$HOME`, `%USERPROFILE%`) or nothing refuses the call, unless it is an argument of `echo`, `git` or `printf`. A word without a separator that names the legacy root from the `cwd` (`ls LegacyApp` with the root inside the repo) is refused too. Each path segment is judged: a segment a wildcard or a quote/backslash splice can turn into `..` (`.''./x`, `.\./x`, `.?/x`, `.*/x`, `[.]*`), a `..` after a wildcard segment (`src/*/../..`), unquoted brace expansion, `~` and `$VAR/...` cannot be resolved and are refused. Other wildcards (`src/**/*.ts`), regexes (`s/a.*b/c/`, `[a-z]+`), quoted arguments (`grep -E "[0-9]{2,4}"`) and MSBuild switches (`/p:Configuration=Release`, `/t:Rebuild`) are fine; the path is checked up to its first wildcard segment |
 | `mcp__*` | refused when the tool name matches the deny-list (below); otherwise every string value in the input that contains `/` or `\`, or is `.`, `..` or `~`, must be an allowed path, and any other value must not name the legacy root from the `cwd` |
 | anything else | refused: the hook cannot decide |
 
@@ -100,7 +100,9 @@ directory the call is refused.
 
 **Fail closed.** If the hook cannot decide in a restricted phase it exits 2 with a one-line reason: root
 unknown, input not JSON, no path in a path tool's input, unresolvable `cd`, unknown tool, unreadable
-`guard` settings, **or no `jq`**. `jq` is required to read tool input; the `sed` fallback only finds the
+`guard` settings, a `legacy/extract.config.json` that is not strict JSON, **or no `jq`**. The hook reads the
+config with `jq`, so keep it free of the `//` comments and trailing commas parity itself accepts; the refusal
+says so when it finds them, even with `PARITY_LEGACY_ROOT` set. `jq` is required to read tool input; the `sed` fallback only finds the
 legacy root so the message can say what is wrong. Install it with `winget install jqlang.jq`,
 `scoop install jq`, `brew install jq` or `apt install jq`.
 
@@ -136,11 +138,14 @@ If your Claude Code version names a tool differently, or adds another shell or f
 matcher; a tool the matcher does not select is never checked. A name the matcher selects but the hook does
 not know is refused. The hook command itself runs under `sh` (Git Bash on Windows) on every platform.
 
-**Proof.** Every denial appends one tab-separated line to `legacy/.guard-denials.log`: UTC date, phase,
-tool, reason. The reason carries the resolved path or the tool name, so the file is a record of every
-attempt on the legacy source during the run, all of them blocked. Keep it with the run's evidence; an
-absent or empty file after a specify or implement session says the agent never asked for the source
-through a guarded tool. This is a guard for a cooperative agent, not a sandbox: it does not follow
+**Proof.** Every denied call appends one tab-separated line to `legacy/.guard-denials.log`: UTC date,
+phase, tool, reason. The reason carries the resolved path or the tool name. Keep it with the run's
+evidence: after a cooperative run an absent or empty file means the agent never asked for the source
+through a guarded tool. It is not tamper-proof: the log, `legacy/.phase`, the hook and
+`.claude/settings.json` live in the allowed repo root, and an agent that rewrites or deletes them is outside
+what a PreToolUse hook can prevent.
+
+**Limits.** This is a guard for a cooperative agent, not a sandbox: it does not follow
 symlinks or junctions, cannot see inside a script or program the agent runs, and does not expand shell
 variables or command substitutions. It reads a command as tokens, so what a program does with a name it was
 handed (a tool that opens its own wildcards, a path assembled by `eval` or `xargs`) is outside it, and a
@@ -148,6 +153,9 @@ token that starts with `\` (a drive-rooted Windows path or a regex escape) is no
 handed to a program other than the shells above (`su -c`, `watch`, `ssh`) is read as plain arguments. With the
 legacy root inside the repo, a recursive search or a wildcard over a directory that contains it (`grep -r Foo .`,
 `cat */Forms/X.cs` from the repo root) reaches it without naming it, which token checks cannot catch; keep the
-legacy tree outside the repo. An MCP server with
-its own index of the legacy tree takes no path, so only its name can refuse it.
+legacy tree outside the repo. A `cd` is followed as if it ran unconditionally and succeeded: a conditional
+(`false && cd src`, `cd src || ...`), backgrounded (`cd src &`) or piped (`cd src | ...`) `cd`, a `cd` that
+fails, and `popd` are not modelled, so a later relative path may resolve elsewhere than the guard thinks. An
+MCP server with its own index of the legacy tree takes no path, so only its name can refuse it. Neither the
+log, `legacy/.phase`, the hook nor the settings are protected from the agent (see Proof).
 Enforce a hard guarantee with file permissions or a separate machine user.
