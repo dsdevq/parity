@@ -727,6 +727,14 @@ public sealed class IssueTests
         Assert.Equal(new[] { ("THS-PILOT", "Thistle"), ("siteCode.StartsWith(\"LRK\") && pilot", "Larkspur"), ("default", "base") },
             site.Cases.Select(c => (c.Key, c.Variant!)));
         Assert.Equal("default", region.Cases.Single(c => c.Variant == "base").Key);
+        // a when clause or a condition inside a keyed case joins its key, and every form the case guards is a case of its own
+        var desk = m.Factories.Single(x => x.Id.Contains(".ForDesk(", StringComparison.Ordinal));
+        Assert.Equal("deskCode", desk.On);
+        Assert.Equal(new[] { ("LRK && pilot", "Larkspur"), ("THS && pilot", "Thistle"), ("THS", "base"), ("default", "base") },
+            desk.Cases.Select(c => (c.Key, c.Variant!)));
+        var kiosk = m.Factories.Single(x => x.Id.Contains(".ForKiosk(", StringComparison.Ordinal));
+        Assert.Equal(new[] { ("LRK && pilot", "Larkspur"), ("THS", "Thistle"), ("default", "base") },
+            kiosk.Cases.Select(c => (c.Key, c.Variant!)));
         // a unit without variants keeps its manifest shape
         Assert.Null(_f.Manifest("PolicyWizardStep3").Variants);
         Assert.Null(_f.Manifest("PolicyWizardStep3").Factories);

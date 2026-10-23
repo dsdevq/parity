@@ -41,5 +41,26 @@ namespace SampleLegacy.Forms
             if (!ByRegion.TryGetValue(region, out type)) type = typeof(ClientSearchForm);
             return (ClientSearchForm)Activator.CreateInstance(type);
         }
+
+        public static ClientSearchForm ForDesk(string deskCode, bool pilot)
+        {
+            switch (deskCode)
+            {
+                case "LRK" when pilot:
+                    return new LarkspurClientSearchForm();
+                case "THS":
+                    if (pilot) return new ThistleClientSearchForm();
+                    return new ClientSearchForm();
+                default:
+                    return new ClientSearchForm();
+            }
+        }
+
+        public static ClientSearchForm ForKiosk(string kioskCode, bool pilot) => kioskCode switch
+        {
+            "LRK" when pilot => new LarkspurClientSearchForm(),
+            "THS" => new ThistleClientSearchForm(),
+            _ => new ClientSearchForm(),
+        };
     }
 }

@@ -54,7 +54,7 @@ category input, action, grid, column, display or unknown, per container that has
 ### R-<Class>-NNN
 - kind: validation | enablement | navigation | data | calculation | ui | service | lifecycle
 - variants: base, A, B               optional; absent means base and every variant
-- covers: evt:..., evt:...          at least one; dyn: ids also allowed, var: event/added/removed/retagged/service ids
+- covers: evt:..., evt:...          at least one; dyn: ids also allowed, var: event/added/removed/retagged/service/constant ids
 - cite: handler:..., method:..., ev:...   at least one handler: or method:; ev: optional; var: override/handler/ctor ids also allowed
 - given: ...
 - when: ...

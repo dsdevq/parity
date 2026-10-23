@@ -8,9 +8,10 @@ namespace Parity.Passes;
 /// <summary>
 /// Reads factory methods (issue #20): which form class a method hands out for which key. Understood shapes are a switch
 /// statement or expression on the key, an if-chain comparing the key to a literal, and a dictionary field from key to
-/// typeof(T) that the method reads. Any other new T() / typeof(T) of a form in the method is its "default" when it is an
-/// unconditional return, an else branch or the miss of a dictionary lookup, and otherwise a case keyed by the source text
-/// of the condition guarding it.
+/// typeof(T) that the method reads. A when clause, or a condition between a keyed label and the new T(), joins the key with
+/// &amp;&amp;, and every form a keyed shape guards is a case. Any other new T() / typeof(T) of a form in the method is its
+/// "default" when it is an unconditional return, an else branch or the miss of a dictionary lookup, and otherwise a case
+/// keyed by the source text of the condition guarding it.
 /// Cases carry full class names; the caller maps them onto a unit and its variants.
 /// </summary>
 public static class FactoryPass
@@ -51,19 +52,21 @@ public static class FactoryPass
             if (type is not INamedTypeSymbol nt || nt.TypeKind == TypeKind.Error) return null;
             return Syntax.TypeChain(nt).Skip(1).Any(b => Syntax.Matches(b, cfg.FormBaseTypes)) ? Syntax.FullName(nt) : null;
         }
-        (string Class, SyntaxNode Node)? FirstForm(SyntaxNode scope)
+        void Add(IReadOnlyList<string> keys, SyntaxNode scope)
         {
-            foreach (var n in scope.DescendantNodesAndSelf().Where(n => n is ObjectCreationExpressionSyntax or TypeOfExpressionSyntax))
-                if (!consumed.Contains(n) && FormOf(n) is { } cls) return (cls, n);
-            return null;
-        }
-        void Add(string key, SyntaxNode scope)
-        {
-            if (FirstForm(scope) is not { } hit) return;
-            consumed.Add(hit.Node);
-            cases.Add(new FactoryCase(key, hit.Class, null, Syntax.LocOf(hit.Node, baseDir)));
+            foreach (var n in scope.DescendantNodesAndSelf().Where(n => n is ObjectCreationExpressionSyntax or TypeOfExpressionSyntax).ToList())
+            {
+                if (consumed.Contains(n) || FormOf(n) is not { } cls || Guard(n, scope, on) is not { } guard) continue;
+                consumed.Add(n);
+                foreach (var k in keys) cases.Add(new FactoryCase(guard.Length == 0 ? k : $"{k} && {guard}", cls, null, Syntax.LocOf(n, baseDir)));
+            }
         }
         static string Key(SyntaxNode n) => n is LiteralExpressionSyntax lit ? lit.Token.ValueText : Syntax.Text(n);
+        static string PatternKey(PatternSyntax p, WhenClauseSyntax? when)
+        {
+            var key = p is DiscardPatternSyntax ? "default" : p is ConstantPatternSyntax cp ? Key(cp.Expression) : Syntax.Text(p);
+            return when == null ? key : $"{key} && {Syntax.Text(when.Condition)}";
+        }
 
         foreach (var sw in body.DescendantNodes().OfType<SwitchStatementSyntax>())
         {
@@ -74,12 +77,10 @@ public static class FactoryPass
                 {
                     CaseSwitchLabelSyntax c => Key(c.Value),
                     DefaultSwitchLabelSyntax => "default",
-                    CasePatternSwitchLabelSyntax p => Syntax.Text(p.Pattern),
+                    CasePatternSwitchLabelSyntax p => PatternKey(p.Pattern, p.WhenClause),
                     _ => Syntax.Text(l),
                 }).ToList();
-                if (FirstForm(section) is not { } hit) continue;
-                consumed.Add(hit.Node);
-                foreach (var k in keys) cases.Add(new FactoryCase(k, hit.Class, null, Syntax.LocOf(hit.Node, baseDir)));
+                Add(keys, section);
             }
             if (cases.Count > before) on.Add(Syntax.Text(sw.Expression));
         }
@@ -87,14 +88,14 @@ public static class FactoryPass
         {
             var before = cases.Count;
             foreach (var arm in sw.Arms)
-                Add(arm.Pattern is DiscardPatternSyntax ? "default" : arm.Pattern is ConstantPatternSyntax cp ? Key(cp.Expression) : Syntax.Text(arm.Pattern), arm.Expression);
+                Add(new[] { PatternKey(arm.Pattern, arm.WhenClause) }, arm.Expression);
             if (cases.Count > before) on.Add(Syntax.Text(sw.GoverningExpression));
         }
         foreach (var iff in body.DescendantNodes().OfType<IfStatementSyntax>())
         {
             if (Compared(iff.Condition) is not { } cmp) continue;
             var before = cases.Count;
-            Add(cmp.Key, iff.Statement);
+            Add(new[] { cmp.Key }, iff.Statement);
             if (cases.Count > before) on.Add(cmp.On);
         }
 
@@ -148,13 +149,14 @@ public static class FactoryPass
     }
 
     /// <summary>
-    /// The conditions an unkeyed form sits behind, joined with &amp;&amp; (empty: unconditional, an else branch, or the miss of a
-    /// lookup in a dictionary the method reads); null when it belongs to a keyed case already.
+    /// The conditions a form sits behind within <paramref name="scope"/> (the method body, or a keyed section, arm or if),
+    /// joined with &amp;&amp; (empty: unconditional, an else branch, or the miss of a lookup in a dictionary the method reads);
+    /// null when it belongs to a keyed case nested in the scope.
     /// </summary>
-    private static string? Guard(SyntaxNode form, SyntaxNode body, List<string> keyedOn)
+    private static string? Guard(SyntaxNode form, SyntaxNode scope, List<string> keyedOn)
     {
         var guards = new List<string>();
-        for (var c = form; c != body; c = c.Parent!)
+        for (var c = form; c != scope && c.Parent != scope; c = c.Parent!)
         {
             switch (c.Parent)
             {

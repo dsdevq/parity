@@ -155,7 +155,9 @@ get" is a cited fact. `id` is the method's `method:` id (citeable from a rule), 
 dictionary field, `loc` the method. `cases[]` is `key, class, variant, loc`: `variant` is `base` for the form
 itself, the variant name, or null for another class. Understood shapes: a `switch` statement or expression on
 the key, an if-chain comparing the key to string literals (`==`, `Equals`, `string.Equals`), and a dictionary
-field from key to `typeof(T)` or `new T()` that the method reads. A form the method still creates outside
+field from key to `typeof(T)` or `new T()` that the method reads. A `when` clause, or a condition between a
+keyed label and the `new T()`, joins the key with `&&` (`LRK && pilot`), and every form a keyed case guards
+is a case of its own. A form the method still creates outside
 these shapes is the `default` case only when nothing conditional guards it (an unconditional return, an
 `else` branch, or the miss of a dictionary lookup); behind any other condition it is a case keyed by that
 condition's source text. Methods are read from files that instantiate two or more classes of the same form
