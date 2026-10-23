@@ -207,6 +207,43 @@ public sealed class IssueTests
         Assert.Matches(@"peak-rss-mb: \d+", _f.Log);
         Assert.Single(System.Text.RegularExpressions.Regex.Matches(_f.Log, "references: "));
     }
+
+    [Fact]
+    public void issue_16_a_rule_id_in_a_todo_skip_comment_or_constant_is_not_a_test()
+    {
+        // input: the example spec (rules 001..012); 001 and 012 sit in active declarations, the rest only in placeholders
+        var dir = Path.Combine(_f.OutRoot, "ng16");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "step3.spec.ts"), string.Join("\n",
+            "it('R-PolicyWizardStep3-001 holds', () => {});",
+            "it.todo('R-PolicyWizardStep3-002 later');",
+            "// R-PolicyWizardStep3-003 is covered somewhere else",
+            "it.skip('R-PolicyWizardStep3-004 flaky', () => {});",
+            "xit('R-PolicyWizardStep3-005 flaky', () => {});",
+            "describe.skip('R-PolicyWizardStep3-006', () => {});",
+            "const ids = ['R-PolicyWizardStep3-007'];",
+            "test.todo(\"R-PolicyWizardStep3-008 later\");",
+            "xdescribe(`R-PolicyWizardStep3-009`, () => {});",
+            "test.skip('R-PolicyWizardStep3-010 flaky', () => {});"));
+        File.WriteAllText(Path.Combine(dir, "Step3Tests.cs"), string.Join("\n",
+            "public class Step3Tests {",
+            "  [Fact(Skip = \"later\")] public void R_PolicyWizardStep3_011() {}",
+            "  [Fact(DisplayName = \"R-PolicyWizardStep3-012 holds\")] public void Holds() {}",
+            "}"));
+        var f = SpecLinter.Lint(_f.InstallExampleSpec("PolicyWizardStep3"), gate: true, implementDir: dir);
+
+        var uncovered = f.Where(x => x.Code == "COV-TEST").Select(x => x.Message.Split(' ')[0]).OrderBy(x => x).ToList();
+        Assert.Equal(Enumerable.Range(2, 10).Select(i => $"R-PolicyWizardStep3-{i:000}"), uncovered);
+        Assert.All(f.Where(x => x.Code == "COV-TEST"), x => Assert.Equal("error", x.Severity));
+
+        // the placeholders get their own warning naming the file and the form; comments and constants do not
+        var todo = f.Where(x => x.Code == "COV-TODO").ToList();
+        Assert.All(todo, x => Assert.Equal("warning", x.Severity));
+        var ids = todo.Select(x => x.Message.Split(' ')[0]).OrderBy(x => x).ToList();
+        Assert.Equal(new[] { 2, 4, 5, 6, 8, 9, 10, 11 }.Select(i => $"R-PolicyWizardStep3-{i:000}"), ids);
+        Assert.Contains(todo, x => x.Message.Contains("step3.spec.ts") && x.Message.Contains("it.todo"));
+        Assert.Contains(todo, x => x.Message.Contains("Step3Tests.cs") && x.Message.Contains("Skip"));
+    }
 }
 
 /// <summary>The guard hook, run through sh. Skipped where no POSIX shell exists (plain Windows without Git Bash).</summary>
