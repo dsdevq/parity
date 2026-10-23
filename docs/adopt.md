@@ -83,13 +83,14 @@ refused, even when an allowed root contains it.
 |---|---|
 | `Read`, `Edit`, `Write`, `MultiEdit`, `NotebookEdit` | the file path, resolved against the `cwd` in the hook input, must be allowed |
 | `Grep`, `Glob` | the search path (the `cwd` when omitted) and the glob up to its first wildcard segment must be allowed; a `..` after a wildcard segment is refused |
-| `Bash`, `PowerShell`, `Monitor` | the `cwd`; every path-like token (contains `/` or `\`, is `.` or `..`, a drive path), also when glued to a short option (`-I../x`); a `cd`, `pushd`, `Set-Location` and friends must stay inside the allowed roots. Each path segment is judged: a segment a wildcard or a quote/backslash splice can turn into `..` (`.''./x`, `.\./x`, `.?/x`, `.*/x`, `[.]*`), a `..` after a wildcard segment (`src/*/../..`), brace expansion, `~` and `$VAR/...` cannot be resolved and are refused. Other wildcards (`src/**/*.ts`), regexes (`s/a.*b/c/`, `[a-z]+`) and quoted arguments are fine; the path is checked up to its first wildcard segment |
+| `Bash`, `PowerShell`, `Monitor` | the `cwd`; every path-like token (contains `/` or `\`, is `.` or `..`, a drive path), also when glued to a short option (`-I../x`); a `cd`, `pushd`, `Set-Location` and friends as the first word of a command (after `;`, `|`, `&` or a newline outside quotes) must stay inside the allowed roots, and later relative paths resolve from there. Each path segment is judged: a segment a wildcard or a quote/backslash splice can turn into `..` (`.''./x`, `.\./x`, `.?/x`, `.*/x`, `[.]*`), a `..` after a wildcard segment (`src/*/../..`), brace expansion, `~` and `$VAR/...` cannot be resolved and are refused. Other wildcards (`src/**/*.ts`), regexes (`s/a.*b/c/`, `[a-z]+`) and quoted arguments are fine; the path is checked up to its first wildcard segment |
 | `mcp__*` | refused when the tool name matches the deny-list (below); otherwise every string value in the input that contains `/` or `\`, or is `.`, `..` or `~`, must be an allowed path |
 | anything else | refused: the hook cannot decide |
 
 Paths are compared case-insensitively with `/` and `\` equal and `C:\x`, `/c/x`, `/mnt/c/x` and
-`/cygdrive/c/x` the same place. After those checks the legacy root is also searched for as a plain
-substring of the whole input, which catches a root named in the input of a tool the hook does not parse.
+`/cygdrive/c/x` the same place. After those checks the legacy root is also searched for anywhere in the
+input as a whole path (followed by `/`, a quote, whitespace or the end), which catches a root named in the
+input of a tool the hook does not parse; a sibling such as `<root>-next` is not a match.
 
 **Where it runs.** The settings start the hook as `sh "$CLAUDE_PROJECT_DIR"/legacy/hooks/guard-legacy.sh`
 and the script changes into `$CLAUDE_PROJECT_DIR` (else its own cwd) before it reads `legacy/.phase`, the

@@ -251,6 +251,7 @@ public sealed class IssueTests
                 ("Bash", new { command = "git commit -m \"fix user's/admin's\"" }, work),                                         // apostrophes inside a message
                 ("mcp__filesystem__read_text_file", new { path = "legacy/M/spec/X.md" }, work),
                 ("mcp__fs__search", new { path = "legacy/M", pattern = "x" }, work),
+                ("Bash", new { command = "echo cd .. && cat ../README.md" }, Path.Combine(work, "legacy")),                     // cd as an argument moves nothing
             };
             // calls it must refuse
             var denied = new (string Tool, object Input, string Cwd, string Why)[]
@@ -293,7 +294,9 @@ public sealed class IssueTests
                 ("PowerShell", new { command = "Get-Content .`.\\Legacy\\AcmeAdmin\\Forms\\X.cs" }, work, "resolve"),             // backtick escape
                 ("PowerShell", new { command = "Get-Content .?\\Legacy\\AcmeAdmin\\Forms\\X.cs" }, work, "resolve"),
                 ("Bash", new { command = "powershell -Command \"gc ..\\Legacy\\AcmeAdmin\\Forms\\X.cs\"" }, work, "outside"),       // backslash path through a Bash call
-                ("Bash", new { command = "powershell -c \"cd ..\\Legacy; gc AcmeAdmin\\Forms\\X.cs\"" }, work, "directory"),
+                ("Bash", new { command = "powershell -c \"cd ..\\Legacy; gc AcmeAdmin\\Forms\\X.cs\"" }, work, "outside"),
+                ("Bash", new { command = "git commit -m \"cd up\" && cat ../Legacy/App/X.cs" }, work, "outside"),                 // cd inside a message is not a directory change
+                ("Bash", new { command = "git commit -m \"fix; cd legacy/M\" && cat ../../Legacy/App/X.cs" }, work, "outside"),   // nor after a quoted ;
                 ("Bash", new { command = "gcc -I../Legacy/AcmeAdmin x.c" }, work, "outside"),                                    // path glued to a short option
                 ("Bash", new { command = "cat src/*/../../../Legacy/AcmeAdmin/Forms/X.cs" }, work, "resolve"),                   // .. after a wildcard
                 ("Bash", new { command = "cat " + work.Replace('\\', '/') + "*/x" }, work, "outside"),                          // a wildcard on the repo name reaches its siblings
@@ -361,9 +364,19 @@ public sealed class IssueTests
             foreach (var spelling in new[] { "C:\\src\\Legacy\\AcmeAdmin\\Forms\\X.cs", "c:/SRC/legacy/acmeadmin/Forms/X.cs", "/c/src/Legacy/AcmeAdmin/Forms/X.cs", "/mnt/c/src/Legacy/AcmeAdmin/Forms/X.cs" })
                 Assert.Equal(2, GuardHookTests.Run(work, HookCall("Read", new { file_path = spelling }, work), hideJq: false).Code);
 
+            // a repo whose path starts with the legacy root's path is not the legacy root
+            var next = legacy + "-next";
+            Directory.CreateDirectory(Path.Combine(next, "legacy", "hooks"));
+            File.Copy(Path.Combine(_f.RepoRoot, "adopt", "hooks", "guard-legacy.sh"), Path.Combine(next, "legacy", "hooks", "guard-legacy.sh"));
+            File.WriteAllText(Path.Combine(next, "legacy", "extract.config.json"), "{\n  \"project\": \"../../AcmeAdmin/AcmeAdmin.csproj\"\n}\n");
+            File.WriteAllText(Path.Combine(next, "legacy", ".phase"), "specify\n");
+            Assert.Equal(0, GuardHookTests.Run(next, HookCall("Bash", new { command = "ls" }, next), hideJq: false).Code);
+            Assert.Equal(0, GuardHookTests.Run(next, HookCall("Read", new { file_path = "legacy/M/manifests/X.md" }, next), hideJq: false).Code);
+            Assert.Equal(2, GuardHookTests.Run(next, HookCall("Read", new { file_path = "../AcmeAdmin/Forms/X.cs" }, next), hideJq: false).Code);
+
             // without jq nothing in a restricted phase can be parsed: refused, with the reason
             var nojq = Path.Combine(work, "nojq"); Directory.CreateDirectory(nojq);
-            foreach (var tool in new[] { "cat", "tr", "sed", "grep", "dirname", "printf", "head", "date", "sh" })
+            foreach (var tool in new[] { "cat", "tr", "sed", "grep", "awk", "dirname", "printf", "head", "date", "sh" })
                 foreach (var cand in new[] { "/usr/bin/" + tool, "/bin/" + tool })
                     if (File.Exists(cand) && !File.Exists(Path.Combine(nojq, tool))) { File.CreateSymbolicLink(Path.Combine(nojq, tool), cand); break; }
             var noJq = GuardHookTests.Run(work, HookCall("Read", new { file_path = "legacy/M/manifests/X.md" }, work), hideJq: true);
@@ -656,7 +669,7 @@ public sealed class GuardHookTests
         File.Copy(Path.Combine(dir!, "adopt", "hooks", "guard-legacy.sh"), Path.Combine(work, "legacy", "hooks", "guard-legacy.sh"));
         // a PATH with only the core tools and no jq: cat, tr, sed, grep, dirname resolved via a symlink farm
         var nojq = Path.Combine(work, "nojq"); Directory.CreateDirectory(nojq);
-        foreach (var tool in new[] { "cat", "tr", "sed", "grep", "dirname", "printf", "head", "date", "sh" })
+        foreach (var tool in new[] { "cat", "tr", "sed", "grep", "awk", "dirname", "printf", "head", "date", "sh" })
             foreach (var cand in new[] { "/usr/bin/" + tool, "/bin/" + tool })
                 if (File.Exists(cand) && !File.Exists(Path.Combine(nojq, tool))) { File.CreateSymbolicLink(Path.Combine(nojq, tool), cand); break; }
         var legacyRead = "{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"C:\\\\src\\\\Legacy\\\\AcmeAdmin\\\\Forms\\\\X.cs\"}}";

@@ -5,11 +5,12 @@
 # the one-line reason to the agent; every denial is also appended to legacy/.guard-denials.log
 # (date, phase, tool, reason; tab separated).
 #   path tools (Read Edit Write MultiEdit NotebookEdit Grep Glob): every path, resolved against the hook's cwd, must be allowed
-#   shell tools (Bash PowerShell Monitor): every path-like token must be allowed, no cd may leave the allowed roots
+#   shell tools (Bash PowerShell Monitor): every path-like token must be allowed, no cd may leave the allowed roots;
+#     a cd counts only as the first word of a command (; | & and newlines outside quotes separate commands)
 #   mcp__* tools: refused when the name matches the code-index deny-list below or "guard.denyTools"; every string
 #     value in the input that contains / or \, or is . .. or ~, must be an allowed path
 #   any other tool, or any input that cannot be decided: refused (fail closed)
-# After those checks the legacy root is still looked for as a plain substring of the whole input (second net).
+# After those checks the legacy root is still looked for as a whole path anywhere in the input (second net).
 # The hook works from CLAUDE_PROJECT_DIR (else its cwd), so a session cwd below the repo root cannot hide the phase.
 # Shell tokens are judged per path segment, with \ both as an escape and as a separator: a segment a wildcard or a
 # quote/backslash splice can turn into '..' (.''./x  .\./x  .?/x  .*/x  [.]*), a '..' after a wildcard segment and
@@ -153,7 +154,9 @@ second_net() {
   set -- $needles
   IFS=$_ifs
   for _n in "$@"; do
-    [ -n "$_n" ] && [ "$_n" != / ] && printf '%s' "$lowin" | grep -qF -e "$_n" &&
+    [ -n "$_n" ] && [ "$_n" != / ] && printf '%s\n' "$lowin" | awk -v n="$_n" -v q="'" '
+      { s = $0; while ((i = index(s, n)) > 0) { c = substr(s, i + length(n), 1); if (c == "" || c == "/" || c == "\"" || c == q || c == "`" || c == " " || c == "\t" || c == "\r") { f = 1; exit } s = substr(s, i + 1) } }
+      END { exit !f }' &&
       deny "the legacy source is off limits (the call names '$_n')"
   done
   return 0
@@ -217,13 +220,25 @@ case $tool in
     cmd=$(printf '%s' "$cmd" | tr 'A-Z' 'a-z' | tr '\n\t' ';;')
     [ "$tool" = PowerShell ] && cmd=$(fwd "$cmd")
     printf '%s' "$cmd" | grep -qE '\{[^ }]*(,|\.\.)[^ }]*\}' && deny "the command uses brace expansion, which cannot be resolved, so it may reach outside the allowed roots"
-    cmd=$(printf '%s' "$cmd" | sed 's/[;|&]/ ; /g; s/[(){}<>,=]/ /g')
+    cmd=$(printf '%s\n' "$cmd" | awk -v q="'" '{
+      for (i = 1; i <= length($0); i++) {
+        c = substr($0, i, 1)
+        if (c == "\\" && w != q) { printf "%s", c substr($0, i + 1, 1); i++; continue }
+        if (w != "") { if (c == w) w = ""; else if (c ~ /[;|&]/) c = " " }
+        else if (c == q || c == "\"") w = c
+        else if (c ~ /[;|&]/) c = " ; "
+        if (c ~ /[(){}<>,=]/) c = " "
+        printf "%s", c
+      }
+    }')
     set -- $cmd
+    at=1
     while [ $# -gt 0 ]; do
       clean "$1"; t=$C; shift
-      case $t in
-        ';') continue ;;
-        cd|chdir|pushd|set-location|sl|push-location)
+      case $t in ';') at=1; continue ;; esac
+      w=$at; at=0
+      case $w$t in
+        1cd|1chdir|1pushd|1set-location|1sl|1push-location)
           tgt=
           while [ $# -gt 0 ]; do
             case $1 in
