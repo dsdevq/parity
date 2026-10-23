@@ -9,11 +9,15 @@
 #   mcp__* tools: refused when the name matches the code-index deny-list below or "guard.denyTools"
 #   any other tool, or any input that cannot be decided: refused (fail closed)
 # After those checks the legacy root is still looked for as a plain substring of the whole input (second net).
+# The hook works from CLAUDE_PROJECT_DIR (else its cwd), so a session cwd below the repo root cannot hide the phase.
+# Shell tokens are never normalised: a token with a quote, backslash or wildcard in a path segment that could
+# name another place (.''./x  .\./x  .?/x  .*/x  .{.,}/x) is refused, since the guard cannot see where it resolves.
 # Phase: legacy/.phase. Legacy root: PARITY_LEGACY_ROOT, else the directory of "project" in the config.
 # jq is required to read tool input; without it a restricted phase refuses every call. The sed fallback below
 # only finds the legacy root (and a label for the log) so the refusal can say what is wrong.
 set -u
 set -f
+cd "${CLAUDE_PROJECT_DIR:-.}" 2>/dev/null || { printf '%s\n' "parity: CLAUDE_PROJECT_DIR '${CLAUDE_PROJECT_DIR:-}' is not a directory, so the phase cannot be read. Refusing the call rather than failing open" >&2; exit 2; }
 phase=$(cat legacy/.phase 2>/dev/null | tr -d '[:space:]')
 case "$phase" in specify|implement) ;; *) exit 0 ;; esac
 input=$(cat)
@@ -25,6 +29,31 @@ default_deny='*code?index* *codeindex* *code?graph* *codegraph* *code?search* *c
 
 lc() { printf '%s' "$1" | tr 'A-Z' 'a-z'; }
 fwd() { printf '%s' "$1" | sed 's#\\\\#/#g; s#\\#/#g'; }
+
+# clean TOKEN: drop the quotes around a shell token and refuse one whose path part cannot be resolved; result in C
+clean() {
+  _t=$1; _q=0
+  case $_t in [\'\"\`]*) _q=1 ;; esac
+  while :; do case $_t in [\'\"\`]*) _t=${_t#?} ;; *) break ;; esac; done
+  while :; do case $_t in *[\'\"\`]) _t=${_t%?} ;; *) break ;; esac; done
+  case $_t in
+    *[\'\"\`\\]*)
+      _s=$(printf '%s' "$_t" | tr -d "\"'\`\\\\")
+      case $_s in */*|.|..|\~*|*'$'*|*[\?\*\[]*) deny "the path '$1' uses quotes, escapes or wildcards the guard cannot resolve, so it may be outside the allowed roots" ;; esac
+      ;;
+  esac
+  case $_t in
+    */*) _dir=${_t%/*}; _last=${_t##*/}; _slash=1 ;;
+    *) _dir=; _last=$_t; _slash=0 ;;
+  esac
+  case $_dir in *[\?\*\[]*) deny "the path '$1' has a wildcard before its last segment and cannot be resolved, so it may be outside the allowed roots" ;; esac
+  if [ "$_slash" = 1 ] || [ "$_q" = 0 ]; then
+    case $_last in
+      .[\?\*\[]*|..*[\?\*\[]*|\[*\]*) deny "the wildcard '$1' may match '..' and cannot be resolved, so it may be outside the allowed roots" ;;
+    esac
+  fi
+  C=$_t
+}
 
 # deny REASON [HINT]: log, tell the agent in one line, block
 deny() {
@@ -181,7 +210,10 @@ case $tool in
     need_allowed "$cwd" "$repo" "the working directory"
     cmd=$(jget '.tool_input.command // empty | strings')
     [ -n "$cmd" ] || deny "no command in the tool input to check"
-    cmd=$(printf '%s' "$cmd" | tr 'A-Z' 'a-z' | sed 's#\\#/#g' | tr '\n\t' ';;' | sed 's/[;|&]/ ; /g; s/[][()<>"'"'"'`{},=]/ /g')
+    cmd=$(printf '%s' "$cmd" | tr 'A-Z' 'a-z' | tr '\n\t' ';;')
+    [ "$tool" = PowerShell ] && cmd=$(fwd "$cmd")
+    printf '%s' "$cmd" | grep -qE '\{[^ }]*(,|\.\.)[^ }]*\}' && deny "the command uses brace expansion, which cannot be resolved, so it may reach outside the allowed roots"
+    cmd=$(printf '%s' "$cmd" | sed 's/[;|&]/ ; /g; s/[(){}<>,=]/ /g')
     set -- $cmd
     while [ $# -gt 0 ]; do
       t=$1; shift
@@ -199,6 +231,8 @@ case $tool in
             esac
           done
           [ -n "$tgt" ] || deny "a directory change without a target goes to the home directory, which is outside the allowed roots"
+          clean "$tgt"; tgt=$C
+          [ -n "$tgt" ] || deny "a directory change without a target goes to the home directory, which is outside the allowed roots"
           case $tgt in
             -|~*|*'$'*|*%*%*) deny "the directory change to '$tgt' cannot be resolved, so it may leave the allowed roots" ;;
           esac
@@ -208,6 +242,7 @@ case $tool in
           continue
           ;;
       esac
+      clean "$t"; t=$C
       case $t in
         -[a-z]/*|-[a-z]:/*) t=${t#-?} ;;
         -[a-z]*:*) t=${t#*:} ;;

@@ -243,6 +243,8 @@ public sealed class IssueTests
                 ("PowerShell", new { command = "Get-Content legacy\\M\\spec\\X.md" }, work),
                 ("Monitor", new { command = "tail -f legacy/M/evidence/run.log" }, work),
                 ("mcp__docs__search_docs", new { query = "angular signals" }, work),
+                ("Bash", new { command = "grep \"Rule.*\" 'legacy/M/spec/X.md' && echo \"it's fine\"" }, work),               // quoted arguments and whole-token quoted paths are not splices
+                ("Bash", new { command = "cat legacy/M/manifests/*.md" }, work),                                                 // a wildcard in the last segment only
             };
             // calls it must refuse
             var denied = new (string Tool, object Input, string Cwd, string Why)[]
@@ -269,6 +271,17 @@ public sealed class IssueTests
                 ("Bash", new { command = "cat $ROOT/Forms/X.cs" }, work, "resolve"),
                 ("PowerShell", new { command = "Set-Location -Path ..\\Legacy; Get-Content Forms\\X.cs" }, work, "directory"),
                 ("Monitor", new { command = "tail -f ../Legacy/AcmeAdmin/Forms/X.cs" }, work, "outside"),
+                ("Bash", new { command = "cat .''./Legacy/AcmeAdmin/Forms/X.cs" }, work, "resolve"),                              // quote splice of ..
+                ("Bash", new { command = "cat .\\./Legacy/AcmeAdmin/Forms/X.cs" }, work, "resolve"),                              // backslash escape inside ..
+                ("Bash", new { command = "ls .?/Legacy/AcmeAdmin/Forms" }, work, "resolve"),                                      // wildcard that matches ..
+                ("Bash", new { command = "ls -d .*/Legacy" }, work, "resolve"),
+                ("Bash", new { command = "ls .*" }, work, "resolve"),
+                ("Bash", new { command = "ls [.][.]/Legacy" }, work, "resolve"),
+                ("Bash", new { command = "cat .{.,}/Legacy/AcmeAdmin/Forms/X.cs" }, work, "resolve"),                              // brace expansion
+                ("Bash", new { command = "cd .''. && ls" }, work, "resolve"),                                                      // the same through cd
+                ("Monitor", new { command = "tail -f .''./Legacy/AcmeAdmin/Forms/X.cs" }, work, "resolve"),
+                ("PowerShell", new { command = "Get-Content .`.\\Legacy\\AcmeAdmin\\Forms\\X.cs" }, work, "resolve"),             // backtick escape
+                ("PowerShell", new { command = "Get-Content .?\\Legacy\\AcmeAdmin\\Forms\\X.cs" }, work, "resolve"),
                 ("Read", new { }, work, "path"),                                                                                  // nothing to decide on
                 ("NotAKnownTool", new { x = 1 }, work, "tool"),
             };
@@ -300,11 +313,22 @@ public sealed class IssueTests
             Assert.Contains(lines, l => l.Split('\t')[2] == "mcp__docs__search_docs" && l.Contains("off limits"));
             Assert.Contains(lines, l => l.Split('\t')[2] == "mcp__codegraph__get_symbol");
 
+            // the settings command, run from a session cwd below the repo root: CLAUDE_PROJECT_DIR keeps the phase readable
+            var hookCommand = settings.RootElement.GetProperty("hooks").GetProperty("PreToolUse")[0].GetProperty("hooks")[0].GetProperty("command").GetString()!;
+            File.WriteAllText(Path.Combine(work, "legacy", ".phase"), "specify\n");
+            var sub = Path.Combine(work, "legacy", "M"); Directory.CreateDirectory(sub);
+            var before = File.ReadAllLines(log).Length;
+            var fromSub = GuardHookTests.RunCommand(sub, hookCommand, work, HookCall("Read", new { file_path = "../Legacy/AcmeAdmin/Forms/X.cs" }, sub));
+            Assert.Equal(2, fromSub.Code); Assert.Contains("outside", fromSub.Err);
+            Assert.Equal(0, GuardHookTests.RunCommand(sub, hookCommand, work, HookCall("Read", new { file_path = "spec/X.md" }, sub)).Code);
+            Assert.Equal(before + 1, File.ReadAllLines(log).Length);
+            Assert.Equal(2, GuardHookTests.RunCommand(sub, hookCommand, Path.Combine(work, "missing"), HookCall("Read", new { file_path = "spec/X.md" }, sub)).Code);
+
             // extract phase stays unguarded and logs nothing
             File.WriteAllText(Path.Combine(work, "legacy", ".phase"), "extract\n");
             Assert.Equal(0, GuardHookTests.Run(work, HookCall("Read", new { file_path = legacyForm }, work), hideJq: false).Code);
             Assert.Equal(0, GuardHookTests.Run(work, HookCall("mcp__codegraph__get_symbol", new { symbol = "X" }, work), hideJq: false).Code);
-            Assert.Equal(denials, File.ReadAllLines(log).Length);
+            Assert.Equal(denials + 1, File.ReadAllLines(log).Length);
 
             // guard.denyTools extends the deny-list, guard.allowRoots the allow-list
             File.WriteAllText(Path.Combine(work, "legacy", ".phase"), "specify\n");
@@ -583,6 +607,22 @@ public sealed class GuardHookTests
         var psi = new ProcessStartInfo(Sh()!, "legacy/hooks/guard-legacy.sh") { WorkingDirectory = workDir, UseShellExecute = false, RedirectStandardInput = true, RedirectStandardError = true, RedirectStandardOutput = true };
         if (hideJq) psi.Environment["PATH"] = Path.Combine(workDir, "nojq");
         psi.Environment.Remove("PARITY_LEGACY_ROOT");
+        psi.Environment.Remove("CLAUDE_PROJECT_DIR");
+        return Exec(psi, stdin);
+    }
+
+    /// <summary>The hook command as settings.json spells it, run by sh -c from <paramref name="procDir"/> with CLAUDE_PROJECT_DIR set.</summary>
+    internal static (int Code, string Err) RunCommand(string procDir, string command, string projectDir, string stdin)
+    {
+        var psi = new ProcessStartInfo(Sh()!) { WorkingDirectory = procDir, UseShellExecute = false, RedirectStandardInput = true, RedirectStandardError = true, RedirectStandardOutput = true };
+        psi.ArgumentList.Add("-c"); psi.ArgumentList.Add(command);
+        psi.Environment.Remove("PARITY_LEGACY_ROOT");
+        psi.Environment["CLAUDE_PROJECT_DIR"] = projectDir;
+        return Exec(psi, stdin);
+    }
+
+    static (int Code, string Err) Exec(ProcessStartInfo psi, string stdin)
+    {
         using var p = Process.Start(psi)!;
         p.StandardInput.Write(stdin); p.StandardInput.Close();
         var err = p.StandardError.ReadToEnd(); p.WaitForExit();

@@ -83,13 +83,19 @@ refused, even when an allowed root contains it.
 |---|---|
 | `Read`, `Edit`, `Write`, `MultiEdit`, `NotebookEdit` | the file path, resolved against the `cwd` in the hook input, must be allowed |
 | `Grep`, `Glob` | the search path (the `cwd` when omitted) and the literal prefix of the glob must be allowed |
-| `Bash`, `PowerShell`, `Monitor` | the `cwd`; every path-like token (contains a slash, is `.` or `..`, a drive path); a `cd`, `pushd`, `Set-Location` and friends must stay inside the allowed roots. `~` and `$VAR/...` paths cannot be resolved and are refused |
+| `Bash`, `PowerShell`, `Monitor` | the `cwd`; every path-like token (contains a slash, is `.` or `..`, a drive path); a `cd`, `pushd`, `Set-Location` and friends must stay inside the allowed roots. `~` and `$VAR/...` paths, brace expansion, and a token that splices a path from quotes, backslashes (Bash) or wildcards (`.''./x`, `.\./x`, `.?/x`, `.*/x`, `[.]*`) cannot be resolved and are refused. Quotes around a whole token and wildcards in the last segment (`legacy/M/*.md`) are fine |
 | `mcp__*` | refused when the tool name matches the deny-list (below) |
 | anything else | refused: the hook cannot decide |
 
 Paths are compared case-insensitively with `/` and `\` equal and `C:\x`, `/c/x`, `/mnt/c/x` and
 `/cygdrive/c/x` the same place. After those checks the legacy root is also searched for as a plain
 substring of the whole input, which catches a root named in the input of a tool the hook does not parse.
+
+**Where it runs.** The settings start the hook as `sh "$CLAUDE_PROJECT_DIR"/legacy/hooks/guard-legacy.sh`
+and the script changes into `$CLAUDE_PROJECT_DIR` (else its own cwd) before it reads `legacy/.phase`, the
+config and the log. Claude Code sets the variable for hook commands; keep it in any hand-merged entry, or a
+session that `cd`s below the repo root cannot find the script or the phase. If the variable names a missing
+directory the call is refused.
 
 **Fail closed.** If the hook cannot decide in a restricted phase it exits 2 with a one-line reason: root
 unknown, input not JSON, no path in a path tool's input, unresolvable `cd`, unknown tool, unreadable
@@ -135,4 +141,6 @@ attempt on the legacy source during the run, all of them blocked. Keep it with t
 absent or empty file after a specify or implement session says the agent never asked for the source
 through a guarded tool. This is a guard for a cooperative agent, not a sandbox: it does not follow
 symlinks or junctions, cannot see inside a script or program the agent runs, and does not expand shell
-variables. Enforce a hard guarantee with file permissions or a separate machine user.
+variables or command substitutions. It reads a command as tokens, so what a program does with a name it was
+handed (a tool that opens its own wildcards, a path assembled by `eval` or `xargs`) is outside it.
+Enforce a hard guarantee with file permissions or a separate machine user.
