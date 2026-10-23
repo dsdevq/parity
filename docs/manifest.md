@@ -235,7 +235,10 @@ Each entry is another unit of the module that this unit creates. `mode` is one o
 `factory` is the `method:` id when the instance comes from a factory rather than `new`. That factory's cases
 (Factories, #20) say which variant each host key gets. `calls`, `sets` and `reads` are `member, args, loc,
 reflection?`: what the host does with the instance. A `GetMethod(...).Invoke` on it is a call with
-`reflection: true`.
+`reflection: true`. They come from the body that creates the instance; when the host keeps it in a field or
+property, `reads` also holds what the host's other handlers and methods read from it (a pay button reading
+the embedded panel's `SelectedAccount`), each at the line of the read. Calls and sets made from those other
+bodies are not recorded yet (`docs/pilot-metrics.md`, Known gaps).
 
 ## Schema history
 

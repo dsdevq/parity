@@ -265,24 +265,27 @@ public sealed class ContextPass
                 var calls = new List<EmbedUse>();
                 var sets = new List<EmbedUse>();
                 var reads = new List<EmbedUse>();
-                void Use(ExpressionSyntax e)
+                // readsOnly: a use outside the creating handler, where only what the host reads back is recorded, never setup
+                void Use(ExpressionSyntax e, bool readsOnly = false)
                 {
                     if (e.Parent is MemberAccessExpressionSyntax ma && ma.Expression == e)
                     {
                         var member = ma.Name.Identifier.Text;
                         if (ma.Parent is InvocationExpressionSyntax mi && mi.Expression == ma)
                         {
+                            if (readsOnly) return;
                             if (member == "ShowDialog") mode = Math.Max(mode, 2);
                             else if (member == "Show") mode = Math.Max(mode, 1);
                             else calls.Add(new EmbedUse(member, mi.ArgumentList.Arguments.Select(a => Syntax.Text(a.Expression)).ToList(), Syntax.LocOf(mi, _baseDir)));
                             return;
                         }
                         var (read, write) = Access(ma);
+                        if (write && readsOnly) return;
                         if (write && ma.Parent is AssignmentExpressionSyntax sa) sets.Add(new EmbedUse(member, new() { Syntax.Text(sa.Right) }, Syntax.LocOf(sa, _baseDir)));
                         else if (read && reads.All(r => r.Member != member)) reads.Add(new EmbedUse(member, new(), Syntax.LocOf(ma, _baseDir)));
                         return;
                     }
-                    if (e.Parent is ArgumentSyntax arg && arg.Parent?.Parent is InvocationExpressionSyntax call && call.Expression is MemberAccessExpressionSyntax cm)
+                    if (!readsOnly && e.Parent is ArgumentSyntax arg && arg.Parent?.Parent is InvocationExpressionSyntax call && call.Expression is MemberAccessExpressionSyntax cm)
                     {
                         if (cm.Name.Identifier.Text == "Add" && Syntax.RootAndPath(cm.Expression) is { } rp && (rp.Path.EndsWith("Controls", StringComparison.Ordinal) || rp is ("Controls", "")))
                             mode = 3;
@@ -297,6 +300,14 @@ public sealed class ContextPass
                 else
                     foreach (var id in b.Body.DescendantNodesAndSelf().OfType<IdentifierNameSyntax>())
                         if (id.Identifier.Text == local && id.SpanStart > creation.SpanStart && SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(id).Symbol, holder)) Use(id);
+                // a field or property outlives the handler: the host reads what the unit hands back from its other handlers
+                if (holder is IFieldSymbol or IPropertySymbol)
+                    foreach (var other in _bodies.Where(x => x.Own && x != b))
+                    {
+                        var otherModel = _h.Model(other.Body!.SyntaxTree);
+                        foreach (var id in other.Body.DescendantNodesAndSelf().OfType<IdentifierNameSyntax>())
+                            if (id.Identifier.Text == local && SymbolEqualityComparer.Default.Equals(otherModel.GetSymbolInfo(id).Symbol, holder)) Use(id, readsOnly: true);
+                    }
                 var embedId = $"embed:{_form.Symbol.Name}/{b.Name}/{local}";
                 if (result.ContainsKey(embedId)) embedId += $"@L{loc.Start}";
                 var stmt = creation.FirstAncestorOrSelf<StatementSyntax>();

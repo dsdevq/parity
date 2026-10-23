@@ -1,6 +1,7 @@
 {
   "module": "sha256:0000000000000000",
   "dependencies": [
+    { "id": "svc:IClientService.GetPayeeAccounts", "errors": [] },
     { "id": "svc:IClientService.SearchClients", "errors": [] },
     {
       "id": "svc:IPolicyService.AddBeneficiary",
@@ -11,6 +12,12 @@
     { "id": "svc:IPolicyService.GetAvailableRiders", "errors": [] },
     { "id": "svc:IPolicyService.GetPremiumLimits", "errors": [] },
     { "id": "svc:IPolicyService.GetProducts", "errors": [] },
-    { "id": "svc:IPolicyService.SavePolicyStep", "errors": [] }
+    { "id": "svc:IPolicyService.SavePolicyStep", "errors": [] },
+    {
+      "id": "svc:IPolicyService.VerifyPayoutAccount",
+      "errors": [
+        { "case": "closed-account", "reply": "Valid false, Reason \"Account is closed\"", "cite": ["handler:PayeeLookupPanel/btnVerify_Click"] }
+      ]
+    }
   ]
 }

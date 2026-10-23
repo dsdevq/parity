@@ -1,0 +1,13 @@
+{
+  "module": "sha256:0000000000000000",
+  "decisions": [
+    {
+      "id": "dec:refund-offers-own-accounts-only",
+      "question": "The refund host never sets AllowThirdParty, so a refund lists only the policyholder's own accounts. Keep that, or offer third-party accounts as the claim host does?",
+      "answer": "Keep it. A refund goes back to the policyholder's own accounts; only a claim may pay a third party.",
+      "owner": "example-reviewer",
+      "date": "2026-10-23",
+      "cite": ["handler:RefundPayoutForm/btnChoosePayee_Click", "embed:RefundPayoutForm/btnChoosePayee_Click/_refundPayee", "handler:PayeeLookupPanel/Setup"]
+    }
+  ]
+}

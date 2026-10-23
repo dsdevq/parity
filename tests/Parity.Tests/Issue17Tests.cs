@@ -152,7 +152,7 @@ public sealed partial class IssueTests
         Assert.Equal(("form:ClientSearchForm", Create, "dialog"), (finder.Unit, finder.Factory, finder.Mode));
 
         var comp = _f.Module().Composition!;
-        Assert.Equal(new[] { "form:BeneficiarySearchForm", "form:ClientSearchForm", "form:CoverSummaryForm" }, comp.Select(x => x.Unit));
+        Assert.Equal(new[] { "form:BeneficiarySearchForm", "form:ClientSearchForm", "form:CoverSummaryForm", "form:PayeeLookupPanel" }, comp.Select(x => x.Unit));   // the last is #18's
         var bs = Assert.Single(Assert.Single(comp, x => x.Unit == "form:BeneficiarySearchForm").Hosts);
         Assert.Equal(("form:BeneficiaryHostForm", "embed:BeneficiaryHostForm/btnChoose_Click/search", "dialog"), (bs.Unit, bs.Embed, bs.Mode));
         Assert.Equal(new[] { "Setup(WizardSession.Current.PolicyId, AllowDeceased, null)" }, bs.Setup);

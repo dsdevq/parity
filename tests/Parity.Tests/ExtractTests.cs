@@ -18,6 +18,7 @@ public sealed class ExtractTests
             ["BeneficiarySearchForm"] = new[] { "GRID-NO-COLUMNS", "UNREACHED-METHOD" }, // gvHistory's columns are built in code; btnExport_Click is never wired
             ["PremiumHistoryForm"] = new[] { "RESOURCE-KEY-MISSING" },  // lsArchiveReasonTooLong is not in Captions.resx (#19)
             // BeneficiaryHostForm and CoverSummaryForm (#17) have none: the reflection-invoked ApplyDefaults is an entry, not unreached
+            // PayeeLookupPanel, ClaimPayoutForm and RefundPayoutForm (#18) have none: the acceptance unit and its hosts are clean
         };
         foreach (var s in _f.Summaries)
         {
@@ -26,7 +27,7 @@ public sealed class ExtractTests
             Assert.True((expected.GetValueOrDefault(s.Form) ?? Array.Empty<string>()).OrderBy(x => x).SequenceEqual(codes),
                 $"{s.Form}: diagnostics " + string.Join("; ", _f.Manifest(s.Form).Diagnostics.Select(d => d.Code + " " + d.Message)));
         }
-        Assert.Equal(9, _f.Summaries.Count);
+        Assert.Equal(12, _f.Summaries.Count);
     }
 
     [Fact]
@@ -187,7 +188,7 @@ public sealed class ExtractTests
     [Fact]
     public void only_the_files_the_module_needs_are_loaded()
     {
-        Assert.Contains("files loaded: 34 of 35 (+1 from variant projects)", _f.Log);
+        Assert.Contains("files loaded: 42 of 43 (+2 from variant projects)", _f.Log);
         Assert.Contains("references: ", _f.Log);
         Assert.Contains("round 1:", _f.Log);
     }

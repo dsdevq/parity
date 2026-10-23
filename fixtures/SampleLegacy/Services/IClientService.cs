@@ -7,5 +7,6 @@ namespace SampleLegacy.Services
         List<ClientDto> SearchClients(ClientSearchCriteria criteria);
         List<ClientDto> SearchLoyaltyClients(ClientSearchCriteria criteria, bool membersOnly);
         ClientDto GetClient(int clientId);
+        List<PayeeAccountDto> GetPayeeAccounts(int policyId, bool includeThirdParty);
     }
 }

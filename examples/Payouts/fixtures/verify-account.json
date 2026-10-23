@@ -1,0 +1,9 @@
+{
+  "service": "svc:IPolicyService.VerifyPayoutAccount",
+  "recorded": "2026-10-22",
+  "environment": "training",
+  "variant": "valid",
+  "scenario": "scn:claim-paid-to-verified-account",
+  "request": { "policyId": 5001, "accountId": 71, "purpose": "claim" },
+  "response": { "valid": true, "reason": null }
+}

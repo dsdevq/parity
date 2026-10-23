@@ -1,0 +1,27 @@
+{
+  "module": "sha256:0000000000000000",
+  "scenarios": [
+    {
+      "id": "scn:claim-paid-to-verified-account",
+      "version": 1,
+      "title": "a claim payout embeds the payee panel, offers third-party accounts, and pays to the account the host verified",
+      "role": "claims-handler",
+      "rights": ["claim.pay"],
+      "negative": false,
+      "exercises": ["handler:ClaimPayoutForm/ClaimPayoutForm_Load", "embed:ClaimPayoutForm/ClaimPayoutForm_Load/_payee", "handler:PayeeLookupPanel/Setup", "handler:PayeeLookupPanel/btnVerify_Click", "svc:IClientService.GetPayeeAccounts", "svc:IPolicyService.VerifyPayoutAccount"],
+      "lastVerified": "2026-10-22",
+      "cite": ["handler:PayeeLookupPanel/btnVerify_Click"]
+    },
+    {
+      "id": "scn:refund-to-closed-account-refused",
+      "version": 1,
+      "title": "a premium refund to an account the host reports closed is refused and nothing is selected",
+      "role": "agent",
+      "rights": ["policy.refund"],
+      "negative": true,
+      "exercises": ["handler:RefundPayoutForm/btnChoosePayee_Click", "embed:RefundPayoutForm/btnChoosePayee_Click/_refundPayee", "handler:PayeeLookupPanel/btnVerify_Click", "svc:IPolicyService.VerifyPayoutAccount"],
+      "lastVerified": "2026-10-22",
+      "cite": ["handler:PayeeLookupPanel/btnVerify_Click"]
+    }
+  ]
+}
