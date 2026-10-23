@@ -49,8 +49,8 @@ Put the `parity` binary on PATH (`bin/publish.sh win-x64` here, or a release zip
    `subclasses` the class names to describe, `project` and `selfAssembly` the variant's csproj and built
    assembly when it lives outside the module's project (`subclasses` then defaults to every subclass of a
    module form found there). `factories` names factories to read when the tool does not find them itself:
-   a type, or `Type.Method`, simple or namespace-qualified. The log prints `variant <id>: <class> on <form>` per subclass found; a `VARIANT-CONFIG`
-   diagnostic means an entry could not be applied.
+   a type, or `Type.Method`, simple or namespace-qualified. The log prints `variant <id>: <class> on <form>`
+   per variant, listing each subclass found; a `VARIANT-CONFIG` diagnostic means an entry could not be applied.
 4. Commit the manifests. They are generated, deterministic, and the thing specs bind to.
 5. Record fixtures for every id in `module.json` `serviceCalls` with your own runner, one file per
    recording, `service` and `recorded` set. An outcome the host cannot be made to return is a synthetic

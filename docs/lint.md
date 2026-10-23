@@ -10,7 +10,7 @@ keeps the agent out of it, not the tool.
 
 | Code | Level | Meaning |
 |---|---|---|
-| GRAMMAR | lint | front matter, section, table or rule-block shape is wrong; unknown kind or disposition; `then` names no observable outcome; event both covered and no-behavior; an empty or repeated `outcomes` entry, an `outcome-gap` that is not `<outcome> - <reason>`, names an undeclared outcome or repeats one; an empty `variants:`; a Variant deltas without a rule row with no reason or whose id a rule also describes |
+| GRAMMAR | lint | front matter, section, table or rule-block shape is wrong; unknown kind or disposition; `then` names no observable outcome; event both covered and no-behavior; an empty or repeated `outcomes` entry, an `outcome-gap` that is not `<outcome> - <reason>`, names an undeclared outcome or repeats one; an empty `variants:`; a row under Variant deltas without a rule that has no reason or whose id a rule also describes |
 | STALE | lint | front-matter hash differs from the manifest on disk, or the manifest is missing. Nothing else is checked. Remedy: `parity rebind <spec.md>` rewrites the hash when nothing the spec cites changed, else prints the rules to re-read (`docs/spec.md`). |
 | CITE-UNKNOWN | lint | an id in `covers`, `cite`, Fields, No behavior or Service calls is not in the manifest; an `ev:` id has no record in `evidence/<Class>.json` |
 | CITE-KIND | lint | `covers` holds something other than `evt:`/`dyn:`/a non-code `var:` entry; `cite` something other than `handler:`/`method:`/`ev:`/a `var:` override, handler or ctor entry, or only `ev:` ids |
