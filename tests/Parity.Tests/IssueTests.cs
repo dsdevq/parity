@@ -404,6 +404,22 @@ public sealed class IssueTests
         Assert.Contains("if (row.Reason != null && row.Reason.Length > PolicyLimits.ReasonMaxLength)  // PolicyLimits.ReasonMaxLength = 40", md);
         Assert.Contains("lblReasons.Text = Captions.lsReasons;  // Captions.lsReasons = \"Reasons are kept for audit\"", md);
     }
+
+    [Fact]
+    public void issue_19_a_resource_key_with_a_space_resolves_when_only_this_form_is_extracted()
+    {
+        // input: extract PremiumHistoryForm alone, so Captions is first seen as metadata of the built assembly (no getter source);
+        // output: the collector loads Captions.Designer.cs and reads the key "Policy log" from the Policy_log getter, no false RESOURCE-KEY-MISSING
+        var cfg = ExtractConfig.Load(Path.Combine(_f.RepoRoot, "fixtures", "extract.config.json"));
+        cfg.Output = Path.Combine(_f.OutRoot, "issue19-single");
+        Extractor.Run(cfg, "M", "PremiumHistoryForm", new StringWriter());
+        var m = System.Text.Json.JsonSerializer.Deserialize<FormManifest>(File.ReadAllText(Path.Combine(cfg.Output, "M", "manifests", "PremiumHistoryForm.json")), Json.Options)!;
+        var policyLog = Assert.Single(m.Constants, c => c.Member == "Policy log");
+        Assert.Equal("Policy log", policyLog.Value);
+        Assert.DoesNotContain(m.Constants, c => c.Member == "Policy_log");
+        Assert.DoesNotContain(m.Diagnostics, d => d.Code == "RESOURCE-KEY-MISSING" && d.Message.Contains("Policy_log", StringComparison.Ordinal));
+        Assert.Single(m.Diagnostics, d => d.Code == "RESOURCE-KEY-MISSING"); // only lsArchiveReasonTooLong
+    }
 }
 
 /// <summary>The guard hook, run through sh. Skipped where no POSIX shell exists (plain Windows without Git Bash).</summary>

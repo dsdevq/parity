@@ -87,6 +87,8 @@ public sealed class ConstantCollector
                     && m.GetConstantValue(inv.ArgumentList.Arguments[0].Expression) is { HasValue: true, Value: string key })
                     return key;
         }
+        else
+            foreach (var w in _index.FilesFor(p.ContainingType.Name)) if (!_loadedFiles.Contains(w)) WantedFiles.Add(w); // metadata only: load the generated class so the next round reads the getter
         return p.Name;
     }
 
