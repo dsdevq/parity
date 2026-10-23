@@ -43,7 +43,8 @@ public static class Extractor
 
         // ... plus every configured variant's subclasses of a matched class, and the factories that choose between them (#20)
         var variantDiags = new List<Diagnostic>();
-        var variants = DiscoverVariants(cfg, baseIndex, variantIndexes, index, matcher, variantDiags);
+        var undescribed = new Dictionary<string, Diagnostic>(StringComparer.Ordinal);
+        var variants = DiscoverVariants(cfg, baseIndex, variantIndexes, index, matcher, variantDiags, undescribed);
         foreach (var v in variants) foreach (var f in v.Files) loaded.Add(f);
         var factoryEntries = ResolveFactories(cfg, index, variantDiags);
         var factoryFiles = FactoryFiles(index, variants, factoryEntries);
@@ -66,6 +67,7 @@ public static class Extractor
         log.WriteLine($"references: {refs.Count} loaded in {tRefs.Elapsed.TotalSeconds:0.0}s" + (refDiags.Count > 0 ? $" ({refDiags.Count} problem(s), see diagnostics)" : ""));
 
         List<FormManifest> manifests = new();
+        var compilerVariantDiags = new List<Diagnostic>();
         var round = 0;
         var baseChecked = false;
         while (true)
@@ -77,7 +79,7 @@ public static class Extractor
             if (!baseChecked)
             {
                 baseChecked = true;
-                foreach (var b in cfg.FormBaseTypes)
+                foreach (var b in cfg.FormBaseTypes.Where(b => !b.EndsWith('*')))
                     if (compilation.GetTypeByMetadataName(b) == null)
                         refDiags.Add(new Diagnostic("BASE-UNRESOLVED", $"formBaseTypes entry '{b}' does not resolve against the loaded references (typo, or its assembly is missing from references)", null));
                 diags = new List<Diagnostic>(refDiags);
@@ -87,6 +89,7 @@ public static class Extractor
             var byName = found.GroupBy(f => f.Symbol.Name, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
             var claimed = new Dictionary<string, VariantClass>(StringComparer.Ordinal);
             var unclaimed = new List<Diagnostic>();
+            var spoken = new HashSet<string>(StringComparer.Ordinal);
             foreach (var v in variants)
             {
                 var derives = false;
@@ -95,9 +98,17 @@ public static class Extractor
                     for (var t = vf.Symbol.BaseType; t != null && !derives; t = t.BaseType) derives = SymbolEqualityComparer.Default.Equals(t, bf.Symbol);
                     if (derives) claimed[v.Class] = new VariantClass(v.Config, vf, bf, v.Config.Project?.Replace('\\', '/'));
                 }
-                if (!derives)
+                if (derives) continue;
+                if (byName.ContainsKey(v.Base))
                     unclaimed.Add(new Diagnostic("VARIANT-CONFIG", $"{v.Base}: variant {v.Config.Id}: {v.Class} is written as a subclass of {v.Base} but the compiler does not resolve it as a form deriving from it (another type of the same name, or a base outside formBaseTypes), so the variant class is not described", null));
+                else if (v.Config.Subclasses.Contains(v.Class))
+                    unclaimed.Add(new Diagnostic("VARIANT-CONFIG", $"variant {v.Config.Id}: subclass '{v.Class}' derives from no form of the main project (the compiler's base chain of {v.Base} reaches no formBaseTypes entry)", null));
+                else continue;
+                spoken.Add(v.Config.Id);
             }
+            foreach (var (id, d) in undescribed)
+                if (!spoken.Contains(id) && !claimed.Values.Any(c => c.Config.Id == id)) unclaimed.Add(d);
+            compilerVariantDiags = unclaimed;
             var forms = found.Where(f => !claimed.ContainsKey(f.Symbol.Name) && (matcher(f.Symbol.Name) || !variantNames.Contains(f.Symbol.Name))).ToList();
             if (forms.Count == 0)
                 throw new InvalidOperationException($"'{formGlob}' matched classes but none derives from a configured form base type. Matched: {(rejected.Count == 0 ? "(none with a base list)" : string.Join("; ", rejected.Take(8)))}. Unresolved base types: {string.Join(", ", refDiags.Where(d => d.Code == "BASE-UNRESOLVED").Select(d => d.Message))}");
@@ -142,6 +153,8 @@ public static class Extractor
             foreach (var w in wanted) loaded.Add(w);
         }
 
+        foreach (var d in compilerVariantDiags.Where(d => d.Message.StartsWith("variant", StringComparison.Ordinal)))
+            log.WriteLine($"{d.Code}: {d.Message}");
         var tWrite = Stopwatch.StartNew();
         var summaries = new List<ExtractSummary>();
         foreach (var m in manifests)
@@ -226,14 +239,14 @@ public static class Extractor
     /// <summary>
     /// Per configured variant, the classes it declares that derive (by written base name) from a form of the main project;
     /// the nearest such form is the unit the variant customises, and only units the glob selects are described in this run. Variant classes in between are loaded but folded
-    /// into the most derived one. The first variant to claim a class keeps it.
+    /// into the most derived one. The first variant to claim a class keeps it. A variant with candidates and nothing else to say
+    /// has its 'declares no subclass' diagnostic in <paramref name="undescribed"/>: the compiler's verdict decides whether it applies.
     /// </summary>
     private static List<VariantCandidate> DiscoverVariants(ExtractConfig cfg, FileIndex baseIndex, List<FileIndex> variantIndexes, FileIndex index,
-        Func<string, bool> matcher, List<Diagnostic> diags)
+        Func<string, bool> matcher, List<Diagnostic> diags, Dictionary<string, Diagnostic> undescribed)
     {
         var result = new List<VariantCandidate>();
         var taken = new Dictionary<string, string>(StringComparer.Ordinal);
-        var formRoots = cfg.FormBaseTypes.Select(LastSegment).ToHashSet(StringComparer.Ordinal);
         for (var i = 0; i < cfg.Variants.Count; i++)
         {
             var v = cfg.Variants[i];
@@ -256,7 +269,7 @@ public static class Extractor
                 var cur = n;
                 for (var depth = 0; depth < 16; depth++)
                 {
-                    var b = index.BasesOf(cur).FirstOrDefault(x => names.Contains(x) || MainProjectForm(x, baseIndex, formRoots, 0));
+                    var b = index.BasesOf(cur).FirstOrDefault(x => names.Contains(x) || MayBeMainProjectForm(x, baseIndex, cfg.FormBaseTypes, 0));
                     if (b == null) { chain.Clear(); break; }
                     chain.Add(b);
                     if (!names.Contains(b)) break;
@@ -288,16 +301,24 @@ public static class Extractor
                 foreach (var mid in chain.Take(chain.Count - 1))
                     diags.Add(new Diagnostic("VARIANT-INTERMEDIATE", $"{baseName}: variant {v.Id} reaches it through {mid}; only {cls}'s own declarations are described as the delta", null));
             }
-            if (diags.Count == before && !elsewhere && !result.Any(r => ReferenceEquals(r.Config, v)))
-                diags.Add(new Diagnostic("VARIANT-CONFIG", $"variant {v.Id}: {(inBase ? "the main project" : v.Project)} declares no subclass of a form of the main project, so the variant is not described", null));
+            if (diags.Count > before || elsewhere) continue;
+            var none = new Diagnostic("VARIANT-CONFIG", $"variant {v.Id}: {(inBase ? "the main project" : v.Project)} declares no subclass of a form of the main project, so the variant is not described", null);
+            if (result.Any(r => ReferenceEquals(r.Config, v))) undescribed.TryAdd(v.Id, none);
+            else diags.Add(none);
         }
         return result;
     }
 
-    /// <summary>A main-project class whose written base chain reaches a formBaseTypes entry (by simple name).</summary>
-    private static bool MainProjectForm(string type, FileIndex baseIndex, HashSet<string> formRoots, int depth) =>
-        depth < 16 && baseIndex.FilesFor(type).Count > 0
-        && baseIndex.BasesOf(type).Any(b => formRoots.Contains(b) || MainProjectForm(b, baseIndex, formRoots, depth + 1));
+    /// <summary>
+    /// A main-project class that may be a form by its written base chain: false only when every written base is indexed in the
+    /// main project and none is, or reaches, a formBaseTypes entry (full or simple name, wildcards allowed). A base the index does
+    /// not know (one from a referenced assembly) leaves the chain possible, and the compiler's type chain decides.
+    /// </summary>
+    private static bool MayBeMainProjectForm(string type, FileIndex baseIndex, List<string> formBaseTypes, int depth) =>
+        baseIndex.FilesFor(type).Count > 0 && (depth >= 16 || baseIndex.BasesOf(type).Any(b =>
+            baseIndex.FilesFor(b).Count == 0 || Syntax.Matches(b, formBaseTypes)
+            || baseIndex.FilesFor(b).Any(f => baseIndex.NamespaceOf(f) is { } ns && Syntax.Matches(ns + "." + b, formBaseTypes))
+            || MayBeMainProjectForm(b, baseIndex, formBaseTypes, depth + 1)));
 
     /// <summary>A configured factories entry read against the file index: Type (Method null) or Type.Method, both by the type's simple name.</summary>
     private sealed record FactoryEntry(string Variant, string Entry, string Type, string? Method);

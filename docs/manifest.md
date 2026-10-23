@@ -88,7 +88,10 @@ that differ (`props.Text`, `source`, `loc`), sorted by id, and exits 0 when iden
   claimed twice) and `VARIANT-INTERMEDIATE` (see Variants). One that names a unit (`<Form>: ...`) is on that
   unit's manifest only; one tied to no unit (`variant <id>: ...`) is on every manifest of the run and in the
   extract log, so a tenant that is not described is never silent. A subclass of a form the run's glob does not
-  select is not diagnosed: that form's own run describes it.
+  select is not diagnosed: that form's own run describes it. Before compiling, only a written base chain that stays
+  in the main project's files and reaches no `formBaseTypes` entry (full or simple name, `Ns.*` wildcards included)
+  is diagnosed; a chain through a base the main project does not declare (one from a referenced assembly) is
+  loaded as a candidate, and the compiler's type chain decides.
 
 ## MethodInfo
 

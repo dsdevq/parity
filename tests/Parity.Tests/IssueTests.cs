@@ -849,6 +849,80 @@ public sealed class IssueTests
         Assert.Null(m.Variants);
         Assert.DoesNotContain(m.Diagnostics, d => d.Code is "VARIANT-CONFIG" or "VARIANT-INTERMEDIATE");
     }
+
+    [Fact]
+    public void issue_20_a_base_chain_that_leaves_the_main_project_is_left_to_the_compiler()
+    {
+        // input: a project Wren whose OrderSearchForm derives from Common.BaseForm, declared in a referenced Wren.Common.dll
+        // (BaseForm : XtraForm), and whose InvoiceForm derives from Shell.ShellForm, a main-project class with no base list that
+        // formBaseTypes selects with the wildcard Wren.Shell.*; a variant project Heron lists a subclass of each.
+        // output: both forms carry var:Heron with a delta and no VARIANT-CONFIG; without the wildcard, InvoiceForm's written chain
+        // is fully indexed and reaches no form, so HeronInvoiceForm is VARIANT-CONFIG and OrderSearchForm keeps its variant
+        var root = Path.Combine(_f.OutRoot, "issue20-referenced");
+        void Write(string rel, string text) { var p = Path.Combine(root, rel); Directory.CreateDirectory(Path.GetDirectoryName(p)!); File.WriteAllText(p, text); }
+        string Csproj(params string[] files) => "<Project ToolsVersion=\"4.0\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\n  <ItemGroup>\n"
+            + string.Concat(files.Select(f => $"    <Compile Include=\"{f}\" />\n")) + "  </ItemGroup>\n</Project>\n";
+        string Form(string ns, string name, string baseName, string button) =>
+            $"using System;\n\nnamespace {ns}\n{{\n    public class {name} : {baseName}\n    {{\n        private DevExpress.XtraEditors.SimpleButton {button};\n\n"
+            + $"        public {name}()\n        {{\n            InitializeComponent();\n        }}\n\n        private void InitializeComponent()\n        {{\n"
+            + $"            this.{button} = new DevExpress.XtraEditors.SimpleButton();\n            this.{button}.Name = \"{button}\";\n"
+            + $"            this.{button}.Click += new System.EventHandler(this.{button}_Click);\n            this.Controls.Add(this.{button});\n        }}\n\n"
+            + $"        protected virtual void {button}_Click(object sender, EventArgs e)\n        {{\n            Text = \"{name}\";\n        }}\n    }}\n}}\n";
+        string Variant(string name, string baseName, string button) =>
+            $"using System;\n\nnamespace Wren.Tenants.Heron\n{{\n    public class {name} : {baseName}\n    {{\n"
+            + $"        protected override void {button}_Click(object sender, EventArgs e)\n        {{\n            base.{button}_Click(sender, e);\n        }}\n    }}\n}}\n";
+        Write("Wren/Wren.csproj", Csproj("Forms\\OrderSearchForm.cs", "Forms\\InvoiceForm.cs", "Shell\\ShellForm.cs"));
+        Write("Wren/Forms/OrderSearchForm.cs", Form("Wren.Orders", "OrderSearchForm", "Common.BaseForm", "btnFind"));
+        Write("Wren/Forms/InvoiceForm.cs", Form("Wren.Invoices", "InvoiceForm", "Shell.ShellForm", "btnPay"));
+        Write("Wren/Shell/ShellForm.cs", "namespace Wren.Shell\n{\n    public class ShellForm\n    {\n        public string Text { get; set; }\n"
+            + "        public System.Collections.Generic.List<object> Controls { get; } = new System.Collections.Generic.List<object>();\n    }\n}\n");
+        Write("Heron/Heron.csproj", Csproj("Forms\\HeronOrderSearchForm.cs", "Forms\\HeronInvoiceForm.cs"));
+        Write("Heron/Forms/HeronOrderSearchForm.cs", Variant("HeronOrderSearchForm", "Wren.Orders.OrderSearchForm", "btnFind"));
+        Write("Heron/Forms/HeronInvoiceForm.cs", Variant("HeronInvoiceForm", "Wren.Invoices.InvoiceForm", "btnPay"));
+
+        // the referenced assembly: built against the fixture's references, never part of the Wren project's files
+        var fixtureCfg = ExtractConfig.Load(Path.Combine(_f.RepoRoot, "fixtures", "extract.config.json"));
+        var refs = Parity.Project.CompilationBuilder.BuildReferences(Parity.Project.CsprojReader.Read(fixtureCfg.Resolve(fixtureCfg.Project)), fixtureCfg, new List<Diagnostic>());
+        var common = Microsoft.CodeAnalysis.CSharp.CSharpCompilation.Create("Wren.Common",
+            new[] { Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText("namespace Wren.Common\n{\n    public class BaseForm : DevExpress.XtraEditors.XtraForm { }\n}\n") },
+            refs, new Microsoft.CodeAnalysis.CSharp.CSharpCompilationOptions(Microsoft.CodeAnalysis.OutputKind.DynamicallyLinkedLibrary));
+        var dll = Path.Combine(root, "lib", "Wren.Common.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(dll)!);
+        using (var fs = File.Create(dll)) Assert.True(common.Emit(fs).Success);
+
+        ExtractConfig Config(string output, bool wildcard)
+        {
+            var cfg = ExtractConfig.Load(Path.Combine(_f.RepoRoot, "fixtures", "extract.config.json"));
+            cfg.Project = Path.Combine(root, "Wren", "Wren.csproj");
+            cfg.Output = Path.Combine(_f.OutRoot, output);
+            cfg.SelfAssembly = null;
+            cfg.References.Add(dll);
+            if (wildcard) cfg.FormBaseTypes.Add("Wren.Shell.*");
+            cfg.Variants = new() { new VariantConfig { Id = "Heron", Project = Path.Combine(root, "Heron", "Heron.csproj"), Subclasses = { "HeronOrderSearchForm", "HeronInvoiceForm" } } };
+            return cfg;
+        }
+        FormManifest Read(ExtractConfig cfg, string form) =>
+            System.Text.Json.JsonSerializer.Deserialize<FormManifest>(File.ReadAllText(Path.Combine(cfg.Output, "M", "manifests", form + ".json")), Json.Options)!;
+
+        var wild = Config("issue20-referenced-wildcard", wildcard: true);
+        Extractor.Run(wild, "M", "*", new StringWriter());
+        foreach (var (form, cls, button) in new[] { ("OrderSearchForm", "HeronOrderSearchForm", "btnFind"), ("InvoiceForm", "HeronInvoiceForm", "btnPay") })
+        {
+            var m = Read(wild, form);
+            var v = Assert.Single(m.Variants!);
+            Assert.Equal(("var:Heron", $"Wren.Tenants.Heron.{cls}"), (v.Id, v.Class));
+            Assert.Contains($"var:Heron/override/{button}_Click", v.Delta.Select(d => d.Id));
+            Assert.DoesNotContain(m.Diagnostics, d => d.Code is "VARIANT-CONFIG" or "BASE-UNRESOLVED");
+        }
+
+        var plain = Config("issue20-referenced-plain", wildcard: false);
+        Extractor.Run(plain, "M", "*", new StringWriter());
+        Assert.False(File.Exists(Path.Combine(plain.Output, "M", "manifests", "InvoiceForm.json")), "InvoiceForm is no form without the wildcard");
+        var order = Read(plain, "OrderSearchForm");
+        Assert.Equal("var:Heron", Assert.Single(order.Variants!).Id);
+        var problem = Assert.Single(order.Diagnostics, d => d.Code == "VARIANT-CONFIG");
+        Assert.Equal("variant Heron: subclass 'HeronInvoiceForm' derives from no form of the main project (its base chain stops at 'InvoiceForm')", problem.Message);
+    }
 }
 
 /// <summary>The guard hook, run through sh. Skipped where no POSIX shell exists (plain Windows without Git Bash).</summary>
