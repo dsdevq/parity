@@ -129,7 +129,7 @@ the consuming repo does not have, hooks ordered after a repo's own. `parity init
   with the files in the repo and fails on a kit file the binary does not carry.
 - **`init` is data-driven.** `adopt/kit.json` says which folders and files go where, which are the repo's own after
   the first write (config, control categories, `.phase`), which `settings.json` block is merged, and what the phases
-  are (name, prompt, pause message). A new skill folder, hook script or template, or a new phase, is a kit change; `init`
+  are (name, prompt). A new skill folder, hook script or template, or a new phase, is a kit change; `init`
   and `doctor` iterate the manifest and need no code change.
 - **Ownership decides overwriting.** Tool-owned files are created, then reported as `would-update` when they differ
   and rewritten only by `--merge`; repo-owned files are written once. A second `init` is a no-op that exits 0; a
@@ -146,9 +146,9 @@ the consuming repo does not have, hooks ordered after a repo's own. `parity init
 - **The phase driver is a process per phase.** "A fresh session per phase" is only true if the agent is a new
   process with the phase file already set, so the script writes `.phase` and starts `PARITY_AGENT` (default
   `claude -p`) once per phase with that phase's prompt. It is generated from the kit's phases so it cannot drift.
-  Phases that need a person end the run by default (a headless session cannot record fixtures or review a spec).
-  The script is POSIX `sh`, like the hooks, so the Windows file is a `.cmd` that hands over to `sh` (Git for Windows,
-  already required by the hooks), following the `bin/parity.cmd` convention.
+  The caller names the phases to run, so the steps only a person can do (recording fixtures, reviewing a spec) sit
+  between runs. The script is POSIX `sh`, like the hooks, and runs on Windows through the Git for Windows `sh` the
+  hooks already require.
 - Not in `init`: what the phases do, the guard's matching rules (issue 22), and a map phase (issue 17).
 
 ## What it deliberately does not do

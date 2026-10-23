@@ -1314,14 +1314,19 @@ public sealed class IssueTests
         Assert.Equal(0, fresh.Parity("init").Code);
         Assert.True(System.Text.Json.Nodes.JsonNode.DeepEquals(kitSettings, fresh.Settings()));
 
-        // settings.json with comments is refused, untouched: rewriting it would drop them
-        using var commented = new ConsumingRepo(_f.RepoRoot, foreignSetup: false);
-        Directory.CreateDirectory(commented.Path_(".claude"));
-        File.WriteAllText(commented.SettingsPath, "{\n  // keep me\n  \"hooks\": {}\n}\n");
-        var refused = commented.Parity("init", "--merge");
-        Assert.Equal(3, refused.Code);
-        Assert.Contains("not strict JSON", refused.Err);
-        Assert.Contains("// keep me", commented.Read(".claude/settings.json"));
+        // settings.json that is not strict JSON (comments: rewriting would drop them; a duplicate key: which one counts is
+        // unclear) is refused as a failure, not a usage error, before init writes anything
+        foreach (var bad in new[] { "{\n  // keep me\n  \"hooks\": {}\n}\n", "{ \"hooks\": {}, \"hooks\": {} }\n" })
+        {
+            using var refusing = new ConsumingRepo(_f.RepoRoot, foreignSetup: false);
+            Directory.CreateDirectory(refusing.Path_(".claude"));
+            File.WriteAllText(refusing.SettingsPath, bad);
+            var before = Snapshot(refusing);
+            var refused = refusing.Parity("init", "--merge");
+            Assert.Equal(3, refused.Code);
+            Assert.Contains("not strict JSON", refused.Err);
+            Assert.Equal(before, Snapshot(refusing));
+        }
     }
 
     [Fact]
@@ -1518,23 +1523,12 @@ public sealed class IssueTests
     {
         // input: parity init --phase-driver, then the generated script with a stand-in for the headless agent that logs its
         // process id, legacy/.phase and prompt. Expected: one process per phase, in order, each with the phase file set and
-        // that phase's prompt; a phase that needs a person ends the run; a failing session stops it.
+        // that phase's prompt; the phases named on the command line, or all driven ones; a failing session stops the run.
         using var repo = new ConsumingRepo(_f.RepoRoot, foreignSetup: false);
-        var shOnly = repo.Parity("init", "--phase-driver", "sh");
-        Assert.Equal(0, shOnly.Code);
+        Assert.False(repo.Exists("legacy/run-phases.sh"));
+        Assert.Equal(0, repo.Parity("init", "--phase-driver").Code);
         Assert.True(repo.Exists("legacy/run-phases.sh"));
-        Assert.False(repo.Exists("legacy/run-phases.cmd"));
-        var both = repo.Parity("init", "--phase-driver", "cmd");
-        Assert.Equal(0, both.Code);
-        var cmd = repo.Read("legacy/run-phases.cmd");
-        Assert.DoesNotContain("\n", cmd.Replace("\r\n", ""));   // CRLF only
-        Assert.Equal("unchanged", InitActions(repo.Parity("init", "--phase-driver", "cmd").Out)["legacy/run-phases.sh"]);
-
-        // a mistyped driver kind is refused before anything is written
-        using var untouched = new ConsumingRepo(_f.RepoRoot, foreignSetup: false);
-        var before = Snapshot(untouched);
-        Assert.Equal(2, untouched.Parity("init", "--phase-driver", "bat").Code);
-        Assert.Equal(before, Snapshot(untouched));
+        Assert.Equal("unchanged", InitActions(repo.Parity("init", "--phase-driver").Out)["legacy/run-phases.sh"]);
 
         if (OperatingSystem.IsWindows() || GuardHookTests.Sh() == null) return;
         var log = Path.Combine(repo.Dir, "..", "agent.log");
@@ -1546,7 +1540,7 @@ public sealed class IssueTests
             psi.ArgumentList.Add(Path.Combine(repo.Dir, "legacy", "run-phases.sh"));
             foreach (var a in args) psi.ArgumentList.Add(a);
             psi.Environment["PARITY_AGENT"] = "sh " + agent; psi.Environment["AGENT_LOG"] = log;
-            psi.Environment.Remove("PARITY_NO_PAUSE"); psi.Environment.Remove("AGENT_FAIL");
+            psi.Environment.Remove("AGENT_FAIL");
             foreach (var (k, v) in env) { if (v == null) psi.Environment.Remove(k); else psi.Environment[k] = v; }
             using var pr = Process.Start(psi)!;
             var err = pr.StandardError.ReadToEndAsync(); var o = pr.StandardOutput.ReadToEnd(); pr.WaitForExit();
@@ -1561,7 +1555,7 @@ public sealed class IssueTests
         };
 
         // run from outside the repo: the script finds its own repo. The module name has a space: the prompt stays one argument
-        var straight = Drive(new() { ["PARITY_NO_PAUSE"] = "1" }, "Order Entry", "OrderForm");
+        var straight = Drive(new(), "Order Entry", "OrderForm");
         Assert.Equal(0, straight.Code);
         var lines = Log().Select(l => l.Split('|')).ToList();
         Assert.Equal(new[] { "extract", "specify", "implement" }, lines.Select(l => l[1]));
@@ -1569,22 +1563,16 @@ public sealed class IssueTests
         Assert.Equal(new[] { "extract", "specify", "implement" }.Select(p => Prompt(p, "OrderForm", "Order Entry")), lines.Select(l => l[2]));
         Assert.Equal("implement\n", repo.Read("legacy/.phase"));
 
-        // by default a phase that needs a person ends the run and says what to do and how to go on
+        // named phases run alone, in the order given
         File.Delete(log);
-        var paused = Drive(new(), "Orders", "OrderForm", "extract", "specify", "implement");
-        Assert.Equal(0, paused.Code);
-        Assert.Equal(new[] { "extract" }, Log().Select(l => l.Split('|')[1]));
-        Assert.Contains("record a fixture for every service call", paused.Out);
-        Assert.Contains("sh legacy/run-phases.sh Orders OrderForm specify implement", paused.Out);
+        Assert.Equal(0, Drive(new(), "Orders", "OrderForm", "specify", "extract").Code);
+        Assert.Equal(new[] { "specify|" + Prompt("specify", "OrderForm", "Orders"), "extract|" + Prompt("extract", "OrderForm", "Orders") },
+            Log().Select(l => l.Split('|')).Select(l => l[1] + "|" + l[2]));
         Assert.Equal("extract\n", repo.Read("legacy/.phase"));
-        // the last requested phase does not pause
-        File.Delete(log);
-        Assert.Equal(0, Drive(new(), "Orders", "OrderForm", "specify").Code);
-        Assert.Equal(new[] { Prompt("specify", "OrderForm", "Orders") }, Log().Select(l => l.Split('|')[2]));
 
         // a failing session stops the run; an unknown phase and missing arguments are refused before anything runs
         File.Delete(log);
-        var failed = Drive(new() { ["PARITY_NO_PAUSE"] = "1", ["AGENT_FAIL"] = "specify" }, "Orders", "OrderForm");
+        var failed = Drive(new() { ["AGENT_FAIL"] = "specify" }, "Orders", "OrderForm");
         Assert.Equal(1, failed.Code);
         Assert.Equal(new[] { "extract", "specify" }, Log().Select(l => l.Split('|')[1]));
         File.Delete(log);

@@ -10,7 +10,7 @@ using Parity.Tools;
 const string Usage = """
 parity - reverse-engineer a legacy WinForms module into a citable manifest and gate its spec.
 
-  parity init     [--merge] [--project <legacy.csproj>] [--module <Name>] [--phase-driver [sh|cmd]]
+  parity init     [--merge] [--project <legacy.csproj>] [--module <Name>] [--phase-driver]
                                                        lay the adopt kit out in this repo (skills, hooks, templates, config skeleton, settings);
                                                        without --merge, files that differ or need merging are reported, not changed
   parity doctor   [--config <extract.config.json>]     one line per setup check (pass, warn, fail); exit 1 on any fail
@@ -38,8 +38,7 @@ try
     {
         case "init":
         {
-            var phaseDriver = opts.TryGetValue("phase-driver", out var pd) ? pd : null;
-            var r = Init.Run(Kit.Load(), new InitOptions(Directory.GetCurrentDirectory(), opts.ContainsKey("merge"), Opt(opts, "project"), Opt(opts, "module"), phaseDriver));
+            var r = Init.Run(Kit.Load(), new InitOptions(Directory.GetCurrentDirectory(), opts.ContainsKey("merge"), Opt(opts, "project"), Opt(opts, "module"), opts.ContainsKey("phase-driver")));
             foreach (var l in r.Lines) Console.WriteLine(l);
             foreach (var n in r.Notes) Console.Error.WriteLine($"note: {n}");
             if (!r.Pending) Console.Error.WriteLine("next: parity doctor");

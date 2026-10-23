@@ -16,7 +16,7 @@ public static class SettingsMerge
     /// <summary>Strict JSON only: rewriting a file with comments would silently drop them.</summary>
     public static JsonObject Parse(string text, string what)
     {
-        try { return JsonNode.Parse(text) as JsonObject ?? throw new InvalidOperationException($"{what} is not a JSON object"); }
+        try { return JsonNode.Parse(text, null, new JsonDocumentOptions { AllowDuplicateProperties = false }) as JsonObject ?? throw new InvalidOperationException($"{what} is not a JSON object"); }
         catch (JsonException ex) { throw new InvalidOperationException($"{what} is not strict JSON ({ex.Message}); parity will not rewrite it and drop its comments. Add the hooks block from adopt/.claude/settings.json by hand"); }
     }
 

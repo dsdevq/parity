@@ -17,8 +17,6 @@ public sealed class KitPhase
     public string Skill { get; set; } = "";
     /// <summary>The headless agent's prompt; {module} and {form} are filled in by the driver.</summary>
     public string? Prompt { get; set; }
-    /// <summary>Why the driver stops after this phase when more were asked for.</summary>
-    public string? Pause { get; set; }
     public bool Driven { get; set; } = true;
 }
 

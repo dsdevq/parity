@@ -3,7 +3,7 @@ using System.Text.Json.Nodes;
 
 namespace Parity.Tools;
 
-public sealed record InitOptions(string RepoDir, bool Merge, string? Project, string? Module, string? PhaseDriver);
+public sealed record InitOptions(string RepoDir, bool Merge, string? Project, string? Module, bool PhaseDriver);
 
 /// <param name="Action">create, update, merge, unchanged, skip, or would-update / would-merge when a repo-owned or changed file is left for --merge.</param>
 public sealed record InitLine(string Action, string Path, string? Note = null)
@@ -27,14 +27,19 @@ public static class Init
 {
     public static InitResult Run(Kit kit, InitOptions o)
     {
-        var driverKind = o.PhaseDriver == null ? null : o.PhaseDriver.Length > 0 ? o.PhaseDriver : OperatingSystem.IsWindows() ? "cmd" : "sh";
-        if (driverKind is not (null or "sh" or "cmd")) throw new ArgumentException("--phase-driver takes sh or cmd (or nothing, for this platform)");
-
         var lines = new List<InitLine>();
         var notes = new List<string>();
         var repo = Path.GetFullPath(o.RepoDir);
         string Abs(string rel) => Path.Combine(repo, rel.Replace('/', Path.DirectorySeparatorChar));
         var m = kit.Manifest;
+
+        // everything that can refuse is read before anything is written
+        var settingsPath = Abs(m.Settings.To);
+        var wantSettings = SettingsMerge.Parse(kit.Text(m.Settings.From), m.Settings.From);
+        var haveSettings = File.Exists(settingsPath) ? SettingsMerge.Parse(File.ReadAllText(settingsPath), m.Settings.To) : null;
+        var addedSettings = haveSettings == null ? null : SettingsMerge.Merge(haveSettings, wantSettings);
+        var cfgPath = Abs(m.Config.To);
+        var built = File.Exists(cfgPath) ? null : ConfigSkeleton.Build(kit.Text(m.Config.From), repo, Path.GetDirectoryName(cfgPath)!, o.Project);
 
         // 1. files the tool owns
         foreach (var rule in m.Install)
@@ -47,11 +52,9 @@ public static class Init
                 Once(lines, Abs(target), target, kit.Files[source]);
 
         // 3. the config skeleton
-        var cfgPath = Abs(m.Config.To);
-        if (File.Exists(cfgPath)) lines.Add(new InitLine("skip", m.Config.To, "yours"));
+        if (built == null) lines.Add(new InitLine("skip", m.Config.To, "yours"));
         else
         {
-            var built = ConfigSkeleton.Build(kit.Text(m.Config.From), repo, Path.GetDirectoryName(cfgPath)!, o.Project);
             WriteNew(cfgPath, Encoding.UTF8.GetBytes(built.Text));
             lines.Add(new InitLine("create", m.Config.To, built.Project != null ? "from the csproj" : "placeholders: edit project"));
             notes.AddRange(built.Notes);
@@ -67,7 +70,7 @@ public static class Init
         }
 
         // 5. settings
-        Settings(kit, lines, Abs(m.Settings.To), m.Settings.To, o.Merge);
+        Settings(lines, settingsPath, m.Settings.To, haveSettings ?? wantSettings, addedSettings, o.Merge);
 
         // 6. a module's folders
         if (!string.IsNullOrEmpty(o.Module))
@@ -81,15 +84,10 @@ public static class Init
         }
 
         // 7. the phase driver
-        if (driverKind != null)
+        if (o.PhaseDriver)
         {
-            var sh = PhaseDriver.ScriptPath(m, "sh");
+            var sh = PhaseDriver.ScriptPath(m);
             Own(lines, Abs(sh), sh, Encoding.UTF8.GetBytes(PhaseDriver.Sh(m)), o.Merge);
-            if (driverKind == "cmd")
-            {
-                var cmd = PhaseDriver.ScriptPath(m, "cmd");
-                Own(lines, Abs(cmd), cmd, Encoding.UTF8.GetBytes(PhaseDriver.Cmd(m)), o.Merge);
-            }
         }
 
         if (lines.Any(l => l.Pending))
@@ -121,17 +119,14 @@ public static class Init
         lines.Add(new InitLine("create", rel));
     }
 
-    static void Settings(Kit kit, List<InitLine> lines, string path, string rel, bool merge)
+    /// <param name="added">What merging added to <paramref name="settings"/>, or null when the repo had no settings file.</param>
+    static void Settings(List<InitLine> lines, string path, string rel, JsonObject settings, List<string>? added, bool merge)
     {
-        var want = SettingsMerge.Parse(kit.Text(kit.Manifest.Settings.From), kit.Manifest.Settings.From);
-        if (!File.Exists(path)) { WriteNew(path, Encoding.UTF8.GetBytes(SettingsMerge.Serialize(want))); lines.Add(new InitLine("create", rel)); return; }
-
-        var have = SettingsMerge.Parse(File.ReadAllText(path), rel);
-        var added = SettingsMerge.Merge(have, want);
+        if (added == null) { WriteNew(path, Encoding.UTF8.GetBytes(SettingsMerge.Serialize(settings))); lines.Add(new InitLine("create", rel)); return; }
         if (added.Count == 0) { lines.Add(new InitLine("unchanged", rel)); return; }
         var what = "adds " + string.Join(", ", added);
         if (!merge) { lines.Add(new InitLine("would-merge", rel, what + "; your entries stay")); return; }
-        File.WriteAllText(path, SettingsMerge.Serialize(have));
+        File.WriteAllText(path, SettingsMerge.Serialize(settings));
         lines.Add(new InitLine("merge", rel, what));
     }
 }
