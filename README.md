@@ -162,33 +162,14 @@ that will hold the new implementation.
 
 **2. Lay out the consuming repo**
 
-```
-legacy/
-  extract.config.json       copy of templates/extract.config.json, edited below
-  control-categories.json   copy of templates/control-categories.json
-  .phase                    text file containing: extract
-  hooks/                    copy of adopt/hooks/*.sh
-.claude/settings.json       merge the hooks block from adopt/.claude/settings.json
-.claude/skills/parity-*/    copy of adopt/.claude/skills/*
-```
-
-Check: `sh legacy/hooks/guard-legacy.sh </dev/null` exits 0 (phase is extract, so nothing is blocked).
-PowerShell equivalent: `$null | sh legacy/hooks/guard-legacy.sh; $LASTEXITCODE`.
-The settings run the guard as `sh "$CLAUDE_PROJECT_DIR"/legacy/hooks/guard-legacy.sh` and the script changes into
-`$CLAUDE_PROJECT_DIR` first (Claude Code sets it), so a session `cd` below the repo root cannot hide the phase.
-
-If `.claude/settings.json` already has hooks, add parity's entries to the existing arrays; several
-entries per event are fine and run in order:
-
-```json
-"PreToolUse": [
-  { "matcher": "Bash", "hooks": [ { "type": "command", "command": "your-existing-hook" } ] },
-  { "matcher": "^(Read|Grep|Glob|Bash|PowerShell|Monitor|Edit|Write|MultiEdit|NotebookEdit|mcp__.*)$", "hooks": [ { "type": "command", "command": "sh \"$CLAUDE_PROJECT_DIR\"/legacy/hooks/guard-legacy.sh" } ] }
-]
-```
-
-If `legacy/` is ignored by `.gitignore` or `.git/info/exclude` in this repo, un-ignore it: the
-manifests and specs are meant to be committed and reviewed.
+- From the consuming repo's root: `parity init` (add `--merge` when it reports `would-merge`, `--module <Name>`
+  for a module's folders, `--phase-driver` for the one-session-per-phase script), then `parity doctor`.
+  `init` installs the skills, hooks, templates and the settings hooks block and writes a config skeleton from
+  the legacy csproj, without touching what the repo already has; `docs/adopt.md` ("Setup") says exactly what.
+- Check: `parity doctor` prints no `fail`. An unbuilt legacy project, a missing Reference Assemblies folder
+  and a missing `jq` all show up here, not as a refusal in the middle of a phase.
+- If `legacy/` is ignored by `.gitignore` or `.git/info/exclude`, un-ignore it (`doctor` fails on it): the
+  manifests and specs are meant to be committed and reviewed.
 
 **3. Edit `legacy/extract.config.json`** (paths with forward slashes, relative to the file or absolute)
 

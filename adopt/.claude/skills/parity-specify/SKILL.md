@@ -10,13 +10,13 @@ exists, `legacy/<Module>/evidence/<Form>.json`. The legacy source is off limits 
 enforces it). Everything you may cite is printed in the manifest or recorded as an `ev:` id in the
 evidence file; every id you write must appear there verbatim.
 
-1. Ensure `legacy/.phase` contains `specify`. If the spec already exists and `parity lint` reports
-   `STALE`, run `parity rebind legacy/<Module>/spec/<Form>.md` before anything else: exit 0 means it is
+1. Ensure `legacy/.phase` contains `specify`. If the spec already exists and `"${PARITY_BIN:-parity}" lint` reports
+   `STALE`, run `"${PARITY_BIN:-parity}" rebind legacy/<Module>/spec/<Form>.md` before anything else: exit 0 means it is
    rebound and you continue at step 7; exit 1 prints the rules whose citations changed or vanished, so
    re-read exactly those in the manifest, fix them, set the hash it printed, and continue at step 7;
    a refusal says which previous manifest is missing, so report that to the user and stop.
    For a new spec, open the manifest .md and copy the `manifest:` hash line.
-2. Start `legacy/<Module>/spec/<Form>.md` from `templates/spec.md` (status `draft`).
+2. Start `legacy/<Module>/spec/<Form>.md` from the `spec.md` beside this skill, `.claude/skills/parity-specify/spec.md` (status `draft`).
 3. Fields: one row per control the manifest lists with category input, action, grid, column, display or
    unknown, per container that has events, and per `dyn:` entry. Labels come from the control caption or
    its layout item's caption. `dropped` needs a decision from the user, not from you; if you think a control
@@ -36,8 +36,8 @@ evidence file; every id you write must appear there verbatim.
    a rule with the reason. A base rule that does not hold for a variant (it cites a handler the variant
    replaces) gets `variants:` without that variant. The Factories table says which tenant key gets which
    variant; cite the factory method where a rule depends on it.
-7. Run `parity lint legacy/<Module>/spec/<Form>.md`. Fix every error. Repeat until `0 error(s)`.
-8. Run `parity lint ... --gate` once and report the coverage findings as the list of what is still
+7. Run `"${PARITY_BIN:-parity}" lint legacy/<Module>/spec/<Form>.md`. Fix every error. Repeat until `0 error(s)`.
+8. Run `"${PARITY_BIN:-parity}" lint ... --gate` once and report the coverage findings as the list of what is still
    missing (do not force-close Open questions to make it pass).
 9. Commit the spec. Tell the user what needs a human: open questions, candidate drops, quirks.
 

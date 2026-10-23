@@ -1,0 +1,47 @@
+{
+  "//": "What 'parity init' installs into a consuming repo, and the phases 'parity init --phase-driver' runs. The kit is this folder plus templates/, embedded in the binary; init and doctor read only this file, so adding a skill folder, a hook script or a template needs no code change. Paths are repo-relative with forward slashes; 'from' is a file or a folder of the kit (adopt/... or templates/...).",
+
+  "//install": "Owned by the tool: created when missing, reported as differing when they changed, overwritten only by 'parity init --merge'.",
+  "install": [
+    { "name": "skills",         "from": "adopt/.claude/skills", "to": ".claude/skills" },
+    { "name": "hooks",          "from": "adopt/hooks",          "to": "legacy/hooks" },
+    { "name": "templates",      "from": "templates",            "to": "legacy/templates" },
+    { "name": "spec template",  "from": "templates/spec.md",    "to": ".claude/skills/parity-specify/spec.md" }
+  ],
+
+  "//create": "Owned by the repo: created once, never touched again (the repo extends them).",
+  "create": [
+    { "name": "control categories", "from": "templates/control-categories.json", "to": "legacy/control-categories.json" }
+  ],
+
+  "//config": "The config skeleton: this template with the keys init can derive from the legacy csproj filled in. Created once.",
+  "config": { "from": "templates/extract.config.json", "to": "legacy/extract.config.json" },
+
+  "//settings": "The hooks block merged into the repo's settings.json: parity's entries are appended after the repo's own, nothing else is touched.",
+  "settings": { "from": "adopt/.claude/settings.json", "to": ".claude/settings.json" },
+
+  "//phases": "In order. 'prompt' is what the driver hands the headless agent ({module} and {form} are filled in). 'driven: false' keeps the phase valid for .phase but out of the driver (it needs input only a person has).",
+  "phaseFile": "legacy/.phase",
+  "phases": [
+    {
+      "name": "extract",
+      "skill": "parity-extract",
+      "prompt": "Run the parity-extract skill for form {form} of module {module}."
+    },
+    {
+      "name": "specify",
+      "skill": "parity-specify",
+      "prompt": "Run the parity-specify skill for form {form} of module {module}."
+    },
+    {
+      "name": "implement",
+      "skill": "parity-implement",
+      "prompt": "Run the parity-implement skill for form {form} of module {module}."
+    },
+    {
+      "name": "bug",
+      "skill": "parity-bug",
+      "driven": false
+    }
+  ]
+}

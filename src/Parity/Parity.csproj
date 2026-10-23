@@ -24,4 +24,10 @@
     <EmbeddedResource Include="@(_ParityRefRoot->'%(Identity)/System.Runtime.dll');@(_ParityRefRoot->'%(Identity)/netstandard.dll');@(_ParityRefRoot->'%(Identity)/mscorlib.dll');@(_ParityRefRoot->'%(Identity)/System.Collections.dll');@(_ParityRefRoot->'%(Identity)/System.Linq.dll');@(_ParityRefRoot->'%(Identity)/System.ComponentModel.dll');@(_ParityRefRoot->'%(Identity)/System.ComponentModel.Annotations.dll');@(_ParityRefRoot->'%(Identity)/System.ComponentModel.Primitives.dll');@(_ParityRefRoot->'%(Identity)/System.ComponentModel.TypeConverter.dll');@(_ParityRefRoot->'%(Identity)/System.Drawing.Primitives.dll');@(_ParityRefRoot->'%(Identity)/System.ObjectModel.dll');@(_ParityRefRoot->'%(Identity)/System.Runtime.Extensions.dll');@(_ParityRefRoot->'%(Identity)/System.Console.dll');@(_ParityRefRoot->'%(Identity)/System.Text.RegularExpressions.dll');@(_ParityRefRoot->'%(Identity)/System.Resources.ResourceManager.dll');@(_ParityRefRoot->'%(Identity)/System.Collections.Concurrent.dll')"
                       LogicalName="refs/%(Filename)%(Extension)" />
   </ItemGroup>
+  <!-- The adopt kit (hooks, skills, settings, kit.json) and the templates travel inside the binary, so
+       "parity init" works from a lone copy of it and the kit always matches the tool that reads its config keys. -->
+  <ItemGroup>
+    <EmbeddedResource Include="../../adopt/**" Exclude="../../adopt/README.md" LogicalName="kit/adopt/%(RecursiveDir)%(Filename)%(Extension)" />
+    <EmbeddedResource Include="../../templates/**" LogicalName="kit/templates/%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
 </Project>
