@@ -17,6 +17,7 @@ namespace SampleLegacy.Forms
         {
             lblReasons.Text = Captions.lsReasons;
             Text = Captions.ResourceManager.GetString("lsHistoryTitle");
+            lblStatus.Text = Captions.Policy_log;
         }
 
         private void btnArchive_Click(object sender, EventArgs e)

@@ -370,6 +370,10 @@ public sealed class IssueTests
         var title = C("lsHistoryTitle");                                        // Captions.ResourceManager.GetString("lsHistoryTitle")
         Assert.Equal(("resource", "Premium history"), (title.Kind, title.Value));
         Assert.Empty(title.Cultures);                                            // the fr resx does not translate it
+        var policyLog = C("Policy log");                                        // Captions.Policy_log: the resx key is the GetString literal, not the identifier
+        Assert.Equal(("resource", "Policy log"), (policyLog.Kind, policyLog.Value));
+        Assert.Equal("Resources/Captions.resx", policyLog.Declared!.File);
+        Assert.DoesNotContain(m.Constants, c => c.Member == "Policy_log");
         Assert.DoesNotContain(m.Methods, x => x.Id.Contains("Captions.lsReasons", StringComparison.Ordinal)); // a fact, not a call
         Assert.DoesNotContain(m.Constants, c => c.Member == "Enter" || c.Type.StartsWith("System.", StringComparison.Ordinal));
 

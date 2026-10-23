@@ -58,7 +58,7 @@ public static class ModelFacts
             {
                 if (t.DeclaringSyntaxReferences.Length == 0)
                     foreach (var w in index.FilesFor(t.Name)) if (!loadedFiles.Contains(w)) wanted.Add(w); // attribute arguments need the source
-                foreach (var p in Properties(t))
+                foreach (var p in Properties(t, index))
                 {
                     var col = columns.FirstOrDefault(x => x.Member == p.Name).Col;
                     var ownerId = $"ctrl:{formName}/{(col ?? owner).Field}";
@@ -75,10 +75,10 @@ public static class ModelFacts
         }
     }
 
-    private static IEnumerable<IPropertySymbol> Properties(ITypeSymbol t)
+    private static IEnumerable<IPropertySymbol> Properties(ITypeSymbol t, FileIndex index)
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        for (var cur = t; cur != null && cur.SpecialType != SpecialType.System_Object; cur = cur.BaseType)
+        for (var cur = t; cur != null && cur.SpecialType != SpecialType.System_Object && (cur.DeclaringSyntaxReferences.Length > 0 || index.FilesFor(cur.Name).Count > 0); cur = cur.BaseType)
             foreach (var p in cur.GetMembers().OfType<IPropertySymbol>().Where(p => !p.IsStatic && !p.IsIndexer && p.DeclaredAccessibility == Accessibility.Public))
                 if (seen.Add(p.Name)) yield return p;
     }

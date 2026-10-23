@@ -11,6 +11,9 @@
   <data name="lsHistoryTitle" xml:space="preserve">
     <value>Premium history</value>
   </data>
+  <data name="Policy log" xml:space="preserve">
+    <value>Policy log</value>
+  </data>
   <data name="lsReasons" xml:space="preserve">
     <value>Reasons are kept for audit</value>
   </data>

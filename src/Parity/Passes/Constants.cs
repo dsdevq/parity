@@ -60,7 +60,7 @@ public sealed class ConstantCollector
                         Field(f, owner, Syntax.LocOf(id, _baseDir), slice);
                         break;
                     case IPropertySymbol p when p.IsStatic && p.Type.SpecialType == SpecialType.System_String && IsResourceClass(p.ContainingType):
-                        Resource(Syntax.FullName(p.ContainingType), p.ContainingType.Name, p.Name, owner, Syntax.LocOf(id, _baseDir), slice);
+                        Resource(Syntax.FullName(p.ContainingType), p.ContainingType.Name, ResourceKeyOf(p), owner, Syntax.LocOf(id, _baseDir), slice);
                         break;
                 }
             }
@@ -73,6 +73,21 @@ public sealed class ConstantCollector
                 Resource(res.Name, res.Simple, key, owner, Syntax.LocOf(inv, _baseDir), slice);
             }
         }
+    }
+
+    /// <summary>The resx key a generated property reads: the constant passed to GetString in its getter (a key like "Policy log" becomes the identifier Policy_log), else the property name.</summary>
+    private string ResourceKeyOf(IPropertySymbol p)
+    {
+        var getter = p.GetMethod?.DeclaringSyntaxReferences.Select(r => r.GetSyntax()).FirstOrDefault();
+        if (getter != null)
+        {
+            var m = _compilation.GetSemanticModel(getter.SyntaxTree, true);
+            foreach (var inv in getter.DescendantNodes().OfType<InvocationExpressionSyntax>())
+                if (inv.Expression is MemberAccessExpressionSyntax { Name.Identifier.Text: "GetString" } && inv.ArgumentList.Arguments.Count > 0
+                    && m.GetConstantValue(inv.ArgumentList.Arguments[0].Expression) is { HasValue: true, Value: string key })
+                    return key;
+        }
+        return p.Name;
     }
 
     /// <summary>The resource a ResourceManager expression reads: Class.ResourceManager, or a local or field created with new (Component)ResourceManager(typeof(T) | "Name", ...).</summary>
