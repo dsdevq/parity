@@ -1,0 +1,8 @@
+{
+  "service": "svc:IPolicyService.AddBeneficiary",
+  "recorded": "2026-10-20",
+  "environment": "training host (invented)",
+  "scenario": "scn:beneficiary-chosen",
+  "request": { "policyId": 5001, "clientId": 42 },
+  "response": null
+}

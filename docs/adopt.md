@@ -9,7 +9,7 @@ below touches the legacy repo.
 legacy/
   extract.config.json           skeleton from the detected csproj; yours to edit (Steps, 2)
   control-categories.json       from templates/, extended with custom controls
-  .phase                        extract | specify | implement | bug   (read by the hooks)
+  .phase                        extract | map | specify | implement | bug   (read by the hooks)
   hooks/guard-legacy.sh         from adopt/hooks
   hooks/lint-on-stop.sh         from adopt/hooks
   templates/                    the kit's templates (spec.md, fixture.json, evidence.json, extractor-debt.md, ...)
@@ -19,6 +19,7 @@ legacy/
     module.json
     fixtures/<name>.json        recorded service calls
     evidence/<Form>.json        written by parity evidence add; quoted legacy lines specs cite as ev:
+    registry/                   scenarios.json, decisions.json, dependencies.json (map phase, see below)
     spec/<Form>.md
     extractor-debt.md           only when raw/diagnostics exist
 .claude/
@@ -97,7 +98,7 @@ already need): each phase of the kit is started as its own
 headless agent process (`claude -p`, or `PARITY_AGENT`), after `legacy/.phase` is set, with that phase's prompt.
 `sh legacy/run-phases.sh <Module> <Form> [phase ...]` runs the given phases, default every driven one in order.
 Pick the phases to fit the work a person does in between (recording fixtures after `extract`, the review after
-`specify`): for example `extract`, then record, then `specify`. A failing session stops the run. `bug` is not driven: it starts from a report.
+`specify`): for example `extract`, then record, then `map` and `specify`. A failing session stops the run. `bug` is not driven: it starts from a report.
 
 ## Steps
 
@@ -133,18 +134,78 @@ Pick the phases to fit the work a person does in between (recording fixtures aft
    (the file relative to the legacy root; `--config` defaults to `legacy/extract.config.json`). It reads
    `legacy/.phase` and refuses in `specify` and `implement`: the agent there may cite evidence, not
    collect it.
-6. Set `legacy/.phase` to `specify`, start a fresh agent session, run the `parity-specify` skill for
+6. Set `legacy/.phase` to `map`, fresh session, `parity-map` skill (`sh legacy/run-phases.sh <Module> <Form> map`
+   does both): the agent reads the legacy source and the manifests and records the module's context in
+   `legacy/<Module>/registry/` (next section). The stop hook runs `parity registry check legacy/<Module>` and
+   refuses the turn while it has an error. Unverified and unreferenced scenarios are warnings it lists for the
+   user: the specs that reference a scenario are written in `specify`, and `lastVerified` is set only after a
+   real run against the host, so map never has to invent a date.
+7. Set `legacy/.phase` to `specify`, start a fresh agent session, run the `parity-specify` skill for
    the form (`sh legacy/run-phases.sh <Module> <Form> specify` does both when `init --phase-driver` wrote it). The hook denies anything outside the consuming repo in this phase; the agent works from
    `manifests/<Form>.md` and `evidence/<Form>.json`. Iterate until `parity lint` is green. The linter
    itself reads the legacy source to re-hash every cited `ev:` record (`EV-STALE` when it moved): the
    guard constrains the agent, not the tool, so the legacy root must be reachable where lint runs
    (`PARITY_LEGACY_ROOT` overrides the path recorded in the evidence file). Review the spec against the
    running legacy app. Set `status: reviewed`.
-7. Set `.phase` to `implement`, fresh session, `parity-implement` skill. The agent gets the spec, the
+8. Set `.phase` to `implement`, fresh session, `parity-implement` skill. The agent gets the spec, the
    fixtures and your scaffold; tests are named with rule ids; the stop hook runs
    `parity lint --gate --implement <dir>`.
-8. A bug report goes through `parity-bug`: locate the control id, classify, land the fix as a test, a
+9. A bug report goes through `parity-bug`: locate the control id, classify, land the fix as a test, a
    spec line or an extractor issue.
+
+## The map phase and the registries
+
+A manifest describes one unit. What lies between units does not fit in one: the values a host hands a
+unit and reads back, the session or cache fields several units share, which unit embeds which, what a
+service answers when it fails, and which business scenarios are worth testing. The extract records the
+structural half in each manifest (Contract, Shared state, Units this unit opens; `docs/manifest.md`) and
+in `module.json` (`sharedState`, `composition`, `dependencies`). The map phase records the half that
+needs a reader, in three files under `legacy/<Module>/registry/`:
+
+| File | Entries | Required fields |
+|---|---|---|
+| `scenarios.json` | `scn:<words>` | `id`, `version`, `title`, `role`, `rights[]`, `negative`, `exercises[]` (manifest ids), `cite[]`; `lastVerified` (YYYY-MM-DD) once run against the host |
+| `decisions.json` | `dec:<words>` | `id`, `question`, `answer`, `owner`, `date` (YYYY-MM-DD), `cite[]` |
+| `dependencies.json` | one per `svc:` id of `module.json` | `id`, `errors[]` of `{ case, reply, fixture | cite[] }` |
+
+Each file also carries `"module": "sha256:<16 hex>"`, the extract revision it was reviewed against (one
+hash over every manifest's hash). The schema is closed: a field outside the lists above is
+`REGISTRY-INVALID`, so a scenario cannot carry a policy number or a client name. `role` and `rights` are
+lowercase tokens (`agent`, `policy.edit`). Rules name a scenario as `scn:<id>@<version>` under
+`- scenarios:` and a decision as `decided-by dec:<id>` or `closed by decision dec:<id>` (`docs/spec.md`);
+a fixture names its scenario in `scenario`.
+
+| Command | What it does |
+|---|---|
+| `parity registry init <module-dir>` | writes the three files, `dependencies.json` seeded with every `svc:` id; never overwrites |
+| `parity registry check <module-dir> [--gate]` | the findings in `docs/lint.md`, Registry; `--gate` turns unreferenced and unverified scenarios into errors |
+| `parity registry stamp <module-dir>` | records the current revision in each file; refused while check has an error other than `REGISTRY-STALE` |
+| `parity registry query <module-dir> [--touches <id>] [--role <r>] [--right <r>] [--negative\|--positive] [--unverified]` | the matching scenarios, with the fixtures that name them |
+| `parity registry catalog <module-dir> [--out <file.md>]` | per service: signature, request and reply templates, callers, error cases, fixtures with provenance (recorded date and environment, or synthetic) |
+
+In `map` the guard lets every tool read, the legacy source included, and lets `Edit`, `Write`,
+`MultiEdit` and `NotebookEdit` write only under `legacy/<Module>/registry/` and `legacy/<Module>/evidence/`
+("map phase writes only legacy/<module>/registry/ and legacy/<module>/evidence/" otherwise). A shell
+command can still write; the stop hook is the net: it refuses to end a map turn that changed files
+outside those two directories (the kit's `legacy/hooks/`, `legacy/templates/` and the files directly in
+`legacy/` excepted). `parity evidence add` works in `map` as in `extract`, so a registry entry
+can cite an `ev:` record. `specify` and `implement` keep the legacy tree unavailable exactly as before.
+
+**Accumulation protocol.** The registries grow with every pass and are never rebuilt from scratch:
+
+1. A pass is not done until the registries are updated. After an extract that changed a manifest the
+   revision moves and every registry file is `REGISTRY-STALE`; `parity lint --gate` on any spec of the
+   module fails on it too. The extract log prints `changed: <Form>` per changed manifest, `stale spec:`
+   per spec bound to it, and `registry: STALE` when the module has a registry. The stop hook decides from
+   the state of each module that has a `registry/`, not from the uncommitted diff, so committing first does
+   not hide a stale registry. In `extract` a stale registry never blocks the stop (the extract agent cannot
+   review it): the hook names the stale modules and says to run the map phase next. In `map`, `specify` and
+   `implement` a stale registry blocks the stop with `REGISTRY-STALE` until map has reviewed and stamped it.
+2. Review: `parity diff manifests/<Form>.prev.json manifests/<Form>.json` per changed form, then each
+   scenario, decision and dependency entry that cites an id in it. Specs move with `parity rebind`.
+3. `parity registry stamp` once check is green.
+4. A human answer is a decision entry with an owner, a date and a citation, recorded by the agent from
+   what the human said. Specs then point at it instead of restating it.
 
 ## Why the hooks are not optional
 
@@ -155,7 +216,7 @@ red spec. Both are a few lines of shell reading the hook's JSON from stdin.
 
 ## The guard hook
 
-`guard-legacy.sh` is a PreToolUse hook. In `extract` and `bug` it does nothing. In `specify` and
+`guard-legacy.sh` is a PreToolUse hook. In `extract` and `bug` it does nothing; `map` is described above. In `specify` and
 `implement` it works as an **allow-list**: a tool call may only touch the consuming repo (the directory
 the hook runs in) minus the legacy source root, plus the directories in `guard.allowRoots`. The manifests,
 specs, fixtures, evidence and scaffold are all inside the repo, so they need no entry. The legacy root

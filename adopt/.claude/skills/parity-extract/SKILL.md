@@ -17,6 +17,9 @@ Deterministic phase. You run scripts and read their output; you do not interpret
      - anything else: add a line per entry to `legacy/<Module>/extractor-debt.md` (location or code, what it is, `owner <name>`, `until <YYYY-MM-DD>`), and tell the user to file an extractor-hole issue with the Raw lines and the probe shapes. Do not attempt to work around the hole in a spec.
 5. Commit `legacy/<Module>/manifests/`, `module.json`, and `extractor-debt.md` if created. On a re-extract,
    every spec of a changed form is `STALE`; say so in the report (`"${PARITY_BIN:-parity}" rebind` is the specify session's first step).
+   If the module has `legacy/<Module>/registry/` (`scenarios.json`, `decisions.json`, `dependencies.json`), the log
+   ends with `registry: STALE` and the registry is `STALE` until reviewed. You do not review it: do not edit `registry/`.
+   The stop hook names the stale module and does not block this phase. Hand off: report "run the map phase next".
 6. Report: forms extracted, counts, files loaded, peak RSS, and which service-call ids now need fixtures (`module.json` -> `serviceCalls`).
 
 Stop. Do not start a spec in this session.

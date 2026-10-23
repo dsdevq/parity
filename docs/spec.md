@@ -46,7 +46,8 @@ without a rule** before Open questions.
 A table `| control | label | kind | binding | disposition | note |`. One row per manifest control of
 category input, action, grid, column, display or unknown, per container that has wired events, and per
 `dyn:` entry. Disposition is one of `field`, `display`, `layout`, `nonvisual`, `shared:<Component>`,
-`dropped`. A dropped row's note carries `decided-by <name> <YYYY-MM-DD>`.
+`dropped`. A dropped row's note carries `decided-by dec:<id>` (a decision in the module's registry) or
+`decided-by <name> <YYYY-MM-DD>`.
 
 ### Rules
 
@@ -62,8 +63,19 @@ category input, action, grid, column, display or unknown, per container that has
 - fixtures: name, name              optional; each must exist as fixtures/<name>.json
 - outcomes: valid, invalid, blank   optional; the outcome names are yours
 - outcome-gap: blank - <reason>     optional, one line per outcome that has no fixture
-- quirk: preserve|diverge - ..., decided-by <name> <YYYY-MM-DD>   optional
+- scenarios: scn:<id>@<version>, ...  optional; each a scenario of registry/scenarios.json at its current version
+- quirk: preserve|diverge - ..., decided-by dec:<id> | decided-by <name> <YYYY-MM-DD>   optional
 ```
+
+`scenarios:` ties a rule to the business scenarios of the module's registry (`docs/adopt.md`, The map
+phase and the registries). Each entry names the version it was written against: when the scenario's
+`version` goes up, the rule is `SCENARIO-VERSION` until someone re-reads it and updates the number, so a
+changed scenario cannot silently keep its old rules. An id the registry lacks is `SCENARIO-UNKNOWN`. A
+scenario no rule and no fixture names is reported by `parity registry check`, not here.
+
+`decided-by dec:<id>` points at a decision recorded with its question, answer, owner, date and citation;
+the id must exist (`DECISION-UNKNOWN`). The inline `<name> <date>` form stays valid for a module without a
+registry.
 
 A rule that distinguishes outcomes of a service reply declares them in `outcomes`; lint never infers
 them from the prose. Each declared outcome needs a fixture the rule uses whose `variant` is that
@@ -116,10 +128,17 @@ A question is closed one way: by evidence. It stays listed, rewritten as
 - closed by evidence ev:<Class>/<n>[, ev:...]: <question> - <answer>
 ```
 
-and stops counting against the gate. Any other wording, `closed` or `answered` included, is still an
-open question. A closed line must link at least one `ev:` id (`EV-UNLINKED`
-otherwise) and each id must resolve like a cited one. A question a human answers is not closed; the
-answer goes into the rule or Fields row it changes and the question line is deleted.
+and stops counting against the gate. A question a human answered is closed by the decision that
+records the answer:
+
+```
+- closed by decision dec:<id>[, dec:...]: <question> - <answer>
+```
+
+Any other wording, `closed` or `answered` included, is still an open question. A line closed by evidence
+must link at least one `ev:` id (`EV-UNLINKED` otherwise) and each id must resolve like a cited one; a line
+closed by decision must link `dec:` ids that are in `registry/decisions.json` (`DECISION-UNKNOWN`
+otherwise), and stays open until they are. The answer also goes into the rule or Fields row it changes.
 
 ## Evidence
 
@@ -154,8 +173,8 @@ rules; the old id stays in the file until no spec cites it.
 `fixtures/<name>.json`, one reply of one service (`templates/fixture.json` is the blank):
 
 ```json
-{ "service": "svc:IService.Method", "recorded": "YYYY-MM-DD | synthetic",
-  "variant": "invalid", "scenario": "...", "source": "...", "shapeVerified": true, "note": "...",
+{ "service": "svc:IService.Method", "recorded": "YYYY-MM-DD | synthetic", "environment": "...",
+  "variant": "invalid", "scenario": "scn:...", "source": "...", "shapeVerified": true, "note": "...",
   "request": {}, "response": {} }
 ```
 
@@ -163,7 +182,11 @@ rules; the old id stays in the file until no spec cites it.
   or `synthetic` for a reply written by hand because the host cannot be made to return it. Anything
   else is `FIXTURE-INVALID`. A recorded fixture needs nothing more.
 - `variant` names the outcome the reply stands for (the names in a rule's `outcomes`).
-- `scenario` is a free id for the business scenario the reply belongs to.
+- `scenario` names the business scenario the reply belongs to. When the module has a
+  `registry/scenarios.json` it must be one of its `scn:` ids (`SCENARIO-UNKNOWN` from `parity registry
+  check`), and naming it is what makes the scenario referenced.
+- `environment` says which host environment a recorded reply came from (a test system, a tenant). The
+  dependency catalog prints it beside the date.
 - `source` says where it came from: the host, environment or tool run, or `scaffolded from <file>`.
 - A synthetic fixture needs `shapeVerified: true` (its shape was checked against a real reply) and a
   `note` saying what it stands for; without both it is a gate error (`FIXTURE-SYNTHETIC`).

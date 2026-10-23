@@ -42,6 +42,7 @@ from the manifest, which the agent cannot shrink.
 | `spec/<Form>.md` | you + agent | field inventory, rules with citations, no-behavior list, service calls with fixtures, open questions |
 | lint findings | `parity lint` | `file:line CODE message`, exit 1 on errors |
 | manifest diff | `parity diff <old.json> <new.json>` | controls, events, bindings, validation rules, handlers, methods, service calls, dynamic UI, raw and diagnostics, variant deltas and factories added / removed / changed by id, exit 1 when they differ |
+| `registry/*.json` | the `map` phase, `parity registry` | the context around the units: scenarios, decisions, each service's error cases; checked against the extract and STALE after a re-extract until reviewed (`docs/adopt.md`, The map phase and the registries) |
 | rebind | `parity rebind <spec.md>` | a `STALE` spec moved to the new hash when nothing it cites changed, else the affected rules as a work list (exit 1) |
 
 Every id is stable and citeable: `ctrl:Form/field`, `dyn:Form/handler/local`, `evt:Form/field.Event`,

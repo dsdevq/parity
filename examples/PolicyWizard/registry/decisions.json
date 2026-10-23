@@ -1,0 +1,13 @@
+{
+  "module": "sha256:0000000000000000",
+  "decisions": [
+    {
+      "id": "dec:summary-needs-a-beneficiary",
+      "question": "Should the cover summary still refuse to confirm before a beneficiary is chosen, with a warning and no service call?",
+      "answer": "Yes. Keep the warning and send nothing.",
+      "owner": "example-reviewer",
+      "date": "2026-10-21",
+      "cite": ["handler:CoverSummaryForm/btnConfirm_Click"]
+    }
+  ]
+}

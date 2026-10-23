@@ -42,7 +42,7 @@ public static partial class Evidence
     }
 
     /// <summary>
-    /// <c>parity evidence add</c>: refuses in the specify and implement phases (<c>.phase</c> next to the config), finds the
+    /// <c>parity evidence add</c>: refuses in the specify and implement phases (allowed in extract and map) (<c>.phase</c> next to the config), finds the
     /// module holding the unit's manifest, and records the lines against the legacy root (the directory of <c>project</c>).
     /// </summary>
     public static EvidenceRecord AddFromConfig(ExtractConfig cfg, string? module, string unit, string loc, string? note)
@@ -50,7 +50,7 @@ public static partial class Evidence
         var phaseFile = Path.Combine(cfg.BaseDir, ".phase");
         var phase = File.Exists(phaseFile) ? File.ReadAllText(phaseFile).Trim() : "";
         if (phase is "specify" or "implement")
-            throw new InvalidOperationException($"phase '{phase}' may read evidence but not the source; record evidence in the extract phase");
+            throw new InvalidOperationException($"phase '{phase}' may read evidence but not the source; record evidence in the extract or map phase");
         var m = LocRx().Match(loc);
         if (!m.Success) throw new ArgumentException($"expected <file>:<start>-<end>, got '{loc}'");
         var outDir = cfg.Resolve(cfg.Output);

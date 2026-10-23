@@ -118,6 +118,8 @@ public static class MarkdownRenderer
         }
         sb.AppendLine();
 
+        RenderContext(sb, m);
+
         sb.AppendLine("## Handlers");
         sb.AppendLine();
         foreach (var h in m.Handlers)
@@ -273,6 +275,58 @@ public static class MarkdownRenderer
             foreach (var r in v.Raw) sb.AppendLine($"- raw {LocStr(r.Loc)}: `{Esc(r.Statement)}`");
             foreach (var d in v.Diagnostics) sb.AppendLine($"- {d.Code}: {Esc(d.Message)}{(d.Loc == null ? "" : " (" + LocStr(d.Loc) + ")")}");
             sb.AppendLine();
+        }
+    }
+
+    /// <summary>The context around the unit (#17): how it is entered, what crosses its edge, the shared state it touches, the units it opens.</summary>
+    private static void RenderContext(StringBuilder sb, FormManifest m)
+    {
+        if (m.Contract is { } c)
+        {
+            sb.AppendLine("## Contract");
+            sb.AppendLine();
+            sb.AppendLine("How the unit is entered from outside and what crosses its edge. Cite the handler ids in `via` when a rule depends on a value.");
+            sb.AppendLine();
+            foreach (var e in c.Entries)
+                sb.AppendLine($"- {e.Kind} `{e.Handler}`: `{Esc(e.Signature)}` {LocStr(e.Loc)}" + (e.InvokedFrom is { Count: > 0 } from ? $", invoked by name from {string.Join(", ", from.Select(x => $"`{x}`"))}" : ""));
+            if (c.Entries.Count == 0) sb.AppendLine("- entries: none besides the designer's wiring");
+            sb.AppendLine();
+            foreach (var (title, values) in new[] { ("Inputs", c.Inputs), ("Outputs", c.Outputs) })
+            {
+                if (values.Count == 0) continue;
+                sb.AppendLine($"| {title.ToLowerInvariant()} | name | type | values | via |");
+                sb.AppendLine("|---|---|---|---|---|");
+                foreach (var v in values)
+                    sb.AppendLine($"| {v.Kind} | `{Esc(v.Name)}` | {Esc(v.Type)} | {Esc(string.Join(", ", v.Values ?? new()))} | {Ids(v.Via)} |");
+                sb.AppendLine();
+            }
+        }
+        if (m.SharedState is { Count: > 0 })
+        {
+            sb.AppendLine("## Shared state");
+            sb.AppendLine();
+            sb.AppendLine("Members of the configured sharedState types this unit reads or writes, in its handlers and the methods they reach. module.json graphs every unit's ends of each field.");
+            sb.AppendLine();
+            sb.AppendLine("| id | type | reads | writes |");
+            sb.AppendLine("|---|---|---|---|");
+            foreach (var u in m.SharedState)
+                sb.AppendLine($"| `{u.Id}` | {Esc(u.ValueType)} | {Ids(u.Reads)} | {Ids(u.Writes)} |");
+            sb.AppendLine();
+        }
+        if (m.Embeds is { Count: > 0 })
+        {
+            sb.AppendLine("## Units this unit opens");
+            sb.AppendLine();
+            foreach (var e in m.Embeds)
+            {
+                sb.AppendLine($"### `{e.Id}`");
+                sb.AppendLine($"- unit: `{e.Unit}` ({e.Mode}), from {Short(e.Via)} {LocStr(e.Loc)}" + (e.Factory != null ? $", through factory `{e.Factory}`({Esc(string.Join(", ", e.FactoryArgs ?? new()))})" : ""));
+                sb.AppendLine($"- statement: `{Esc(e.Statement)}`");
+                foreach (var u in e.Calls) sb.AppendLine($"- calls: `{Esc($"{u.Member}({string.Join(", ", u.Args)})")}`{(u.Reflection == true ? " by reflection" : "")} {LocStr(u.Loc)}");
+                foreach (var u in e.Sets) sb.AppendLine($"- sets: `{Esc($"{u.Member} = {string.Join(", ", u.Args)}")}` {LocStr(u.Loc)}");
+                foreach (var u in e.Reads) sb.AppendLine($"- reads: `{Esc(u.Member)}` {LocStr(u.Loc)}");
+                sb.AppendLine();
+            }
         }
     }
 

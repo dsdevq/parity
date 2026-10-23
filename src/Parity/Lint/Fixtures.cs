@@ -8,7 +8,7 @@ namespace Parity.Lint;
 /// <c>synthetic</c> for a reply written by hand (or by <c>parity fixture scaffold</c>) because the host cannot be made to
 /// return it. <see cref="Problems"/> lists what makes the file FIXTURE-INVALID; the rest of the record is still read.
 /// </summary>
-public sealed record FixtureFile(string Name, string? Service, string? Recorded, string? Variant, string? Scenario, string? Source, bool? ShapeVerified, string? Note, List<string> Problems)
+public sealed record FixtureFile(string Name, string? Service, string? Recorded, string? Variant, string? Scenario, string? Source, bool? ShapeVerified, string? Note, List<string> Problems, string? Environment = null)
 {
     public bool Synthetic => Recorded == Fixtures.Synthetic;
 }
@@ -22,7 +22,7 @@ public sealed record FixtureTally(int Listed, int Synthetic)
 public static class Fixtures
 {
     public const string Synthetic = "synthetic";
-    private static readonly string[] Strings = { "variant", "scenario", "source", "note" };
+    private static readonly string[] Strings = { "variant", "scenario", "source", "note", "environment" };
 
     /// <summary>Every <c>*.json</c> in the directory by name; a file that is not JSON goes to <paramref name="unreadable"/> instead.</summary>
     public static Dictionary<string, FixtureFile> Load(string dir, List<(string File, string Message)> unreadable)
@@ -65,6 +65,6 @@ public static class Fixtures
             if (sv.ValueKind is JsonValueKind.True or JsonValueKind.False) shapeVerified = sv.GetBoolean();
             else problems.Add("'shapeVerified' must be true or false");
         }
-        return new FixtureFile(name, service, recorded, s["variant"], s["scenario"], s["source"], shapeVerified, s["note"], problems);
+        return new FixtureFile(name, service, recorded, s["variant"], s["scenario"], s["source"], shapeVerified, s["note"], problems, s["environment"]);
     }
 }

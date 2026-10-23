@@ -1,5 +1,7 @@
 #!/usr/bin/env sh
-# Claude Code PreToolUse hook. During the specify and implement phases a tool call may only touch the
+# Claude Code PreToolUse hook. In the map phase (#17) the legacy source and the module are readable and every
+# Edit/Write/MultiEdit/NotebookEdit must resolve under legacy/<module>/registry/ or legacy/<module>/evidence/; other
+# tools pass (lint-on-stop.sh refuses a map turn that changed files elsewhere). During the specify and implement phases a tool call may only touch the
 # allowed roots: the consuming repo minus the legacy source root, plus "guard.allowRoots" from
 # legacy/extract.config.json (relative entries are relative to that file). Exit 2 blocks the call and shows
 # the one-line reason to the agent; every denial is also appended to legacy/.guard-denials.log
@@ -28,7 +30,7 @@ set -u
 set -f
 cd "${CLAUDE_PROJECT_DIR:-.}" 2>/dev/null || { printf '%s\n' "parity: CLAUDE_PROJECT_DIR '${CLAUDE_PROJECT_DIR:-}' is not a directory, so the phase cannot be read. Refusing the call rather than failing open" >&2; exit 2; }
 phase=$(cat legacy/.phase 2>/dev/null | tr -d '[:space:]')
-case "$phase" in specify|implement) ;; *) exit 0 ;; esac
+case "$phase" in specify|implement|map) ;; *) exit 0 ;; esac
 input=$(cat)
 tool=$(printf '%s' "$input" | sed -n 's/.*"tool_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
 cfg=legacy/extract.config.json
@@ -129,6 +131,29 @@ need_allowed() {
 not_above() {
   case $legacy in "$N"/*) deny "$1 '$N' contains the legacy source root '$legacy'; narrow path to a directory outside it" "" ;; esac
 }
+
+# --- the map phase: read anything, write only the registries and evidence ---------------------------------
+if [ "$phase" = map ]; then
+  command -v jq >/dev/null 2>&1 || deny "jq is required to tell a read from a write in the map phase and was not found" "Install it, or set legacy/.phase to extract"
+  printf '%s' "$input" | jq -e 'type == "object"' >/dev/null 2>&1 || deny "the hook input is not a JSON object, so it cannot be checked" ""
+  tool=$(printf '%s' "$input" | jq -r '.tool_name // empty | strings' 2>/dev/null | tr -d '\r')
+  case $tool in Edit|Write|MultiEdit|NotebookEdit) ;; *) exit 0 ;; esac
+  mapmsg="map phase writes only legacy/<module>/registry/ and legacy/<module>/evidence/"
+  maphint="Record what the source shows in the registries with citations; specs, manifests and code wait for their own phase"
+  repo=$(lc "$(fwd "$(pwd)")")
+  p=$(printf '%s' "$input" | jq -r '(.tool_input.file_path // .tool_input.notebook_path) // empty | strings' 2>/dev/null | tr -d '\r')
+  [ -n "$p" ] || deny "$mapmsg, and the call names no path" "$maphint"
+  cwd=$(printf '%s' "$input" | jq -r '.cwd // empty | strings' 2>/dev/null | tr -d '\r')
+  [ -n "$cwd" ] || cwd=$repo
+  norm "$cwd" "$repo"
+  norm "$p" "$N"
+  case $N in
+    "$repo"/legacy/*/*)
+      sub=${N#"$repo"/legacy/}; sub=${sub#*/}
+      case $sub in registry/?*|evidence/?*) exit 0 ;; esac ;;
+  esac
+  deny "$mapmsg; '$N' is neither" "$maphint"
+fi
 
 # --- the legacy root --------------------------------------------------------------------------------------
 repo=$(pwd)

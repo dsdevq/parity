@@ -36,6 +36,7 @@ A fix that ends as only a code patch has escaped the system.
 | probe | script | csproj | counts, statement shapes | none, it is reconnaissance |
 | extract | script | config, form glob | manifests, module index | `raw == 0 && diag == 0` or each entry acknowledged in `extractor-debt.md` |
 | capture | script (yours) | module service-call ids | `fixtures/*.json` | every `svc:` id has at least one fixture; a synthetic one is labelled, shape-verified and explained |
+| map | agent, then human | legacy source, manifests, `module.json`, fixtures | `registry/*.json`, `evidence/` | `parity registry check` without an error (scenario warnings allowed) and the registry stamped against this extract |
 | specify | agent, then human | rendered manifest, fixtures, evidence | `spec/<Form>.md` | `parity lint` green; human sets `status: reviewed` |
 | scaffold | script (yours, optional) | manifest, categories | component skeleton | every control mapped or explicitly dropped |
 | implement | agent | spec, fixtures, skeleton | components, tests | `parity lint --gate --implement <dir>` green |
@@ -149,7 +150,74 @@ the consuming repo does not have, hooks ordered after a repo's own. `parity init
   The caller names the phases to run, so the steps only a person can do (recording fixtures, reviewing a spec) sit
   between runs. The script is POSIX `sh`, like the hooks, and runs on Windows through the Git for Windows `sh` the
   hooks already require.
-- Not in `init`: what the phases do, the guard's matching rules (issue 22), and a map phase (issue 17).
+- Not in `init`: what the phases do and the guard's matching rules (issue 22). The map phase (issue 17) is one more
+  kit phase with its skill, so it needed no change to `init` or `doctor`.
+
+## Context around a unit
+
+A spec per unit cannot say what the unit receives from its host, what it leaves in a session object for
+the next form, or which host opens it under which tenant. Each manifest records its own edge (contract,
+shared state, embeds), and `module.json` joins the edges into graphs: who produces and who consumes each
+shared field, which host composes which unit, and every caller of each service. The rest of the context is
+knowledge, not code: business scenarios, a service's error cases, a human's answers. That knowledge lives
+in `registry/`, written in a `map` phase that may read the source. It is checked against the extract like a
+spec is, and it goes STALE like a spec does (`docs/adopt.md`, The map phase and the registries). Four
+decisions shape it.
+
+**Shared state is syntactic, bounded by depth.** A member of a configured `sharedState` type is resolved
+with the semantic model the handler pass already built. Whether the use is a read or a write is decided by
+syntax: the left side of an assignment, an `out` argument, a compound assignment, `++`/`--`. The walk covers
+the unit's handlers and the in-source methods they reach, to `sharedStateDepth`, and stops at another unit's
+code. Roslyn's data-flow analysis is not used. It answers a different question (which locals flow where),
+it needs a region per body, and no fixture case shows syntax classifying a shared member wrongly. The rule
+for adding it is a failing test first, then data flow for that shape only. Aliasing costs nothing extra: a
+local holding `WizardSession.Current` still resolves to the session type's members.
+
+Cost on the fixture (35 files, every form, three runs each, both binaries on the same tree):
+
+| Run | Wall time | Peak RSS |
+|---|---|---|
+| main, before #17 | 4.1-4.7s | 121 MB |
+| #17 with `sharedState`, depth 2 | 4.3-5.0s | 119-127 MB |
+| #17 with `sharedState`, depth 0 | 4.3-4.7s | 123 MB |
+| #17 without `sharedState` | 4.2-4.8s | 123-127 MB |
+
+With `sharedState`, the log line is `shared-state: 66 bodies to depth 2, 8 access(es), 0.0s`. The
+difference is inside run-to-run noise. An empty `sharedState` skips the pass, and `sharedStateDepth: 0`
+limits it to handlers.
+
+**Shared-state fields and scenarios have stable, versioned ids.** `state:Type.Member` and `scn:<words>` are
+cited from specs, fixtures and registries that outlive any one extract. A version says the meaning moved
+while the id stayed:
+
+- a shared field's version goes up when its value type changes;
+- a scenario's version goes up when someone changes what it means;
+- a rule names `scn:<id>@<version>`, so a changed scenario flags each rule written against the old one
+  (`SCENARIO-VERSION`) instead of silently keeping it;
+- a field no manifest touches any more is kept as `retired`, so its id is never reused for something else.
+
+**The scenario schema carries only invented or structural fields.** A scenario has the following fields:
+
+- an invented title and id;
+- a role and rights, as lowercase tokens;
+- whether it is negative;
+- the manifest ids it exercises;
+- citations, a version and a verification date.
+
+There is no field for a client, a policy number or an amount, and an unknown field is
+`REGISTRY-INVALID`. The registries are committed to the consuming repo and read by every later agent
+session, so host data would leak by default, and data copied from one test run turns a scenario into a
+fixture. Recorded replies with their data belong in `fixtures/`, which already labels each one's
+provenance. A scenario points at them by being named in their `scenario` field.
+
+**The stop hook reads state, and extract hands a stale registry to map.** Whether a registry is stale is a
+fact of the working tree (`registry/` exists and the stamps differ from the module's revision), so the hook
+checks every module that has a `registry/` in every phase instead of the modules in the uncommitted diff. A
+diff-based check never fires in the flow the extract skill prescribes: the agent commits `manifests/` and
+`module.json` first, and the diff is then empty. The phase decides only whether the answer blocks. The extract
+agent runs deterministic scripts and cannot do the review, which needs the legacy source and belongs to `map`.
+So in `extract` the hook prints the stale modules and "run the map phase next" and lets the turn end. In
+`map`, `specify` and `implement` the same finding blocks until map has reviewed and stamped the registry.
 
 ## What it deliberately does not do
 

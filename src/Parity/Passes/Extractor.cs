@@ -6,6 +6,7 @@ using Parity.Model;
 using Diagnostic = Parity.Model.Diagnostic;
 using Parity.Project;
 using Parity.Render;
+using Parity.Tools;
 
 namespace Parity.Passes;
 
@@ -18,7 +19,7 @@ public sealed record ExtractSummary(string Form, int Controls, int Events, int H
 /// </summary>
 public static class Extractor
 {
-    public const string SchemaVersion = "1";
+    public const string SchemaVersion = "2";
     private const int MaxRounds = 8;
 
     public static List<ExtractSummary> Run(ExtractConfig cfg, string module, string formGlob, TextWriter log)
@@ -68,6 +69,7 @@ public static class Extractor
 
         List<FormManifest> manifests = new();
         var compilerVariantDiags = new List<Diagnostic>();
+        var stateLine = "shared-state: skipped (no sharedState types configured)";
         var round = 0;
         var baseChecked = false;
         while (true)
@@ -117,6 +119,9 @@ public static class Extractor
 
             manifests.Clear();
             var wanted = new HashSet<string>(StringComparer.Ordinal);
+            var stateTypes = StateTypes.Find(compilation, cfg, index);
+            int stateBodies = 0, stateAccesses = 0;
+            var stateTime = TimeSpan.Zero;
             foreach (var form in forms)
             {
                 var resx = resxIndex.Find(Syntax.FullName(form.Symbol), form.Symbol.Name)?.Default.ToDictionary(kv => kv.Key, kv => kv.Value.Value, StringComparer.Ordinal)
@@ -127,7 +132,10 @@ public static class Extractor
                 var h = new HandlerPass(form, compilation, controlNames, cfg, cats, index, loaded, project.Dir, constants).Run(d.Events);
                 ModelFacts.Apply(form.Symbol.Name, d, h, constants, compilation, index, loaded, wanted);
                 foreach (var w in h.WantedFiles.Concat(constants.WantedFiles)) wanted.Add(w);
-                var m = Assemble(form, project, d, h, constants, cats, diags.Concat(roundVariantDiags.Where(x => x.Message.StartsWith(form.Symbol.Name + ":", StringComparison.Ordinal) || x.Message.StartsWith("variant", StringComparison.Ordinal))).ToList());
+                var alias = Aliases(h);
+                var ctx = new ContextPass(form, h, cfg, index, stateTypes, project.Dir, i => alias.TryGetValue(i, out var a) ? a : i).Run();
+                (stateBodies, stateAccesses, stateTime) = (stateBodies + ctx.StateBodies, stateAccesses + ctx.StateAccesses, stateTime + ctx.StateTime);
+                var m = Assemble(form, project, d, h, alias, ctx, constants, cats, diags.Concat(roundVariantDiags.Where(x => x.Message.StartsWith(form.Symbol.Name + ":", StringComparison.Ordinal) || x.Message.StartsWith("variant", StringComparison.Ordinal))).ToList());
                 var mine = claimed.Values.Where(v => SymbolEqualityComparer.Default.Equals(v.Base.Symbol, form.Symbol)).OrderBy(v => v.Config.Id, StringComparer.Ordinal).ToList();
                 var vinfos = mine.Select(v =>
                 {
@@ -147,6 +155,8 @@ public static class Extractor
                     foreach (var f in index.FilesFor(mm.Groups[1].Value)) if (!loaded.Contains(f)) wanted.Add(f);
             }
 
+            if (cfg.SharedState.Count > 0)
+                stateLine = $"shared-state: {stateBodies} {(stateBodies == 1 ? "body" : "bodies")} to depth {ContextPass.StateDepth(cfg)}, {stateAccesses} access(es), {stateTime.TotalSeconds:0.0}s";
             round++;
             log.WriteLine($"round {round}: {loaded.Count} file(s), {forms.Count} form(s), {tRound.Elapsed.TotalSeconds:0.0}s" + (wanted.Count > 0 && round < MaxRounds ? $", +{wanted.Count} file(s) wanted (unresolved names and call graph)" : ""));
             if (wanted.Count == 0 || round >= MaxRounds) break;
@@ -155,6 +165,7 @@ public static class Extractor
 
         foreach (var d in compilerVariantDiags.Where(d => d.Message.StartsWith("variant", StringComparison.Ordinal)))
             log.WriteLine($"{d.Code}: {d.Message}");
+        log.WriteLine(stateLine);
         var tWrite = Stopwatch.StartNew();
         var summaries = new List<ExtractSummary>();
         foreach (var m in manifests)
@@ -162,8 +173,11 @@ public static class Extractor
             var json = JsonSerializer.Serialize(m, Json.Options) + "\n";
             var jsonPath = Path.Combine(outDir, "manifests", m.ClassName + ".json");
             // one generation is kept, so parity diff and parity rebind work without git (issue #25)
-            if (File.Exists(jsonPath) && File.ReadAllText(jsonPath) != json) File.Move(jsonPath, Path.Combine(outDir, "manifests", m.ClassName + ".prev.json"), overwrite: true);
+            var prevPath = Path.Combine(outDir, "manifests", m.ClassName + ".prev.json");
+            var replaced = File.Exists(jsonPath) && File.ReadAllText(jsonPath) != json;
+            if (replaced) File.Move(jsonPath, prevPath, overwrite: true);
             File.WriteAllText(jsonPath, json);
+            if (replaced) Changed(outDir, m.ClassName, prevPath, jsonPath, log);
             File.WriteAllText(Path.Combine(outDir, "manifests", m.ClassName + ".md"), MarkdownRenderer.Render(m, ManifestHash.Of(jsonPath)));
             summaries.Add(new ExtractSummary(m.ClassName, m.Controls.Count, m.Events.Count, m.Handlers.Count, m.Methods.Count, m.ServiceCalls.Count, m.DynamicUi.Count, m.Raw.Count, m.Diagnostics.Count));
         }
@@ -172,12 +186,17 @@ public static class Extractor
         var all = Directory.EnumerateFiles(Path.Combine(outDir, "manifests"), "*.json").Where(f => !f.EndsWith(".prev.json", StringComparison.Ordinal)).OrderBy(f => f, StringComparer.Ordinal)
             .Select(f => JsonSerializer.Deserialize<FormManifest>(File.ReadAllText(f), Json.Options)!).ToList();
         var dupes = Duplicates.Find(all.SelectMany(m => m.Handlers.Select(h => (h.Id, h.Source)).Concat(m.Methods.Where(x => x.Source != null).Select(x => (x.Id, x.Source!)))).DistinctBy(x => x.Item1));
+        var modulePath = Path.Combine(outDir, "module.json");
+        var prior = File.Exists(modulePath) ? TryRead<ModuleIndex>(modulePath) : null;
         var modIndex = new ModuleIndex(SchemaVersion, module, Path.GetRelativePath(cfg.BaseDir, project.Path).Replace('\\', '/'),
             all.Select(m => m.Id).OrderBy(x => x, StringComparer.Ordinal).ToList(),
             all.SelectMany(m => m.ServiceCalls.Select(s => s.Id)).Distinct().OrderBy(x => x, StringComparer.Ordinal).ToList(),
-            dupes);
-        File.WriteAllText(Path.Combine(outDir, "module.json"), JsonSerializer.Serialize(modIndex, Json.Options) + "\n");
+            dupes, ModuleContext.SharedState(all, cfg, prior?.SharedState), ModuleContext.Composition(all), ModuleContext.Dependencies(all));
+        File.WriteAllText(modulePath, JsonSerializer.Serialize(modIndex, Json.Options) + "\n");
         if (all.Count > manifests.Count) log.WriteLine($"module.json: {all.Count} form(s) on disk ({manifests.Count} from this run)");
+        // the registries are reviewed against an extract (#17): say when this one moved past the last review
+        if (Directory.Exists(Path.Combine(outDir, "registry")) && Lint.Registry.Check(outDir, gate: false).Any(f => f.Code == "REGISTRY-STALE"))
+            log.WriteLine("registry: STALE, review registry/ against this extract (parity registry check), then parity registry stamp");
 
         var peak = Process.GetCurrentProcess().PeakWorkingSet64 / (1024 * 1024);
         log.WriteLine($"render+write: {tWrite.Elapsed.TotalSeconds:0.0}s");
@@ -188,7 +207,41 @@ public static class Extractor
         return summaries;
     }
 
-    private static FormManifest Assemble(FormClass form, LegacyProject project, DesignerResult d, HandlerResult h, ConstantCollector k, ControlCategories cats, List<Diagnostic> buildDiags)
+    /// <summary>
+    /// A re-extract replaced a manifest: say how many entries changed, and name the spec bound to the old one, so the
+    /// accumulation protocol (#17) starts from the log. The counts are parity diff's; the spec is stale when its manifest: differs.
+    /// </summary>
+    private static void Changed(string outDir, string form, string prevPath, string jsonPath, TextWriter log)
+    {
+        var changes = ManifestDiff.Compare(ManifestDiff.Load(prevPath), ManifestDiff.Load(jsonPath));
+        log.WriteLine($"changed: {form}  {changes.Count(c => c.Kind == '+')} added, {changes.Count(c => c.Kind == '-')} removed, {changes.Count(c => c.Kind == '~')} changed"
+            + $"  (parity diff manifests/{form}.prev.json manifests/{form}.json)");
+        var spec = Path.Combine(outDir, "spec", form + ".md");
+        if (!File.Exists(spec)) return;
+        var front = Lint.SpecParser.Parse(File.ReadAllText(spec)).Front;
+        if (front.TryGetValue("manifest", out var bound) && bound.Value != ManifestHash.Of(jsonPath))
+            log.WriteLine($"stale spec: spec/{form}.md  (parity rebind spec/{form}.md)");
+    }
+
+    private static T? TryRead<T>(string path) where T : class
+    {
+        try { return JsonSerializer.Deserialize<T>(File.ReadAllText(path), Json.Options); }
+        catch (JsonException) { return null; }
+    }
+
+    /// <summary>Method ids whose body is also a handler's (same file and line): the manifest names them by the handler id.</summary>
+    private static Dictionary<string, string> Aliases(HandlerResult h)
+    {
+        var handlerByLoc = h.Handlers.Where(x => !x.Name.StartsWith("lambda@", StringComparison.Ordinal))
+            .GroupBy(x => x.Loc.File + ":" + x.Loc.Start).ToDictionary(g => g.Key, g => g.First().Id, StringComparer.Ordinal);
+        var alias = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var x in h.Methods.Values)
+            if (x.Loc != null && handlerByLoc.TryGetValue(x.Loc.File + ":" + x.Loc.Start, out var hid)) alias[x.Id] = hid;
+        return alias;
+    }
+
+    private static FormManifest Assemble(FormClass form, LegacyProject project, DesignerResult d, HandlerResult h, Dictionary<string, string> alias, ContextResult ctx,
+        ConstantCollector k, ControlCategories cats, List<Diagnostic> buildDiags)
     {
         var name = form.Symbol.Name;
         var declared = d.Controls.Keys.ToHashSet(StringComparer.Ordinal);
@@ -203,16 +256,14 @@ public static class Extractor
         var events = d.Events.Concat(h.Events).DistinctBy(e => e.Id + "|" + e.Handler).OrderBy(e => e.Id, StringComparer.Ordinal).ToList();
         var bindings = d.Bindings.Concat(h.Bindings).DistinctBy(b => b.Id + "|" + b.Loc.Start).OrderBy(b => b.Id, StringComparer.Ordinal).ToList();
         var rules = d.Rules.Concat(h.Rules).DistinctBy(r => r.Id).OrderBy(r => r.Id, StringComparer.Ordinal).ToList();
-        var handlerByLoc = h.Handlers.Where(x => !x.Name.StartsWith("lambda@", StringComparison.Ordinal))
-            .GroupBy(x => x.Loc.File + ":" + x.Loc.Start).ToDictionary(g => g.Key, g => g.First().Id, StringComparer.Ordinal);
-        var alias = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var x in h.Methods.Values)
-            if (x.Loc != null && handlerByLoc.TryGetValue(x.Loc.File + ":" + x.Loc.Start, out var hid)) alias[x.Id] = hid;
+        string One(string i) => alias.TryGetValue(i, out var a) ? a : i;
         List<string> Rewrite(List<string> ids) => ids.Select(i => alias.TryGetValue(i, out var a) ? a : i).Distinct().OrderBy(i => i, StringComparer.Ordinal).ToList();
         var handlers = h.Handlers.Select(x => x with { Calls = Rewrite(x.Calls) }).ToList();
         var methods = h.Methods.Values.Where(x => !alias.ContainsKey(x.Id)).Select(x => x with { Calls = Rewrite(x.Calls) })
             .OrderBy(m => m.Depth).ThenBy(m => m.Id, StringComparer.Ordinal).ToList();
-        var svcs = h.ServiceCalls.Values.Select(s => s with { CalledFrom = Rewrite(s.CalledFrom) }).OrderBy(s => s.Id, StringComparer.Ordinal).ToList();
+        var svcs = h.ServiceCalls.Values.Select(s => s with { CalledFrom = Rewrite(s.CalledFrom),
+            Sites = s.Sites?.Select(c => c with { Via = One(c.Via) }).DistinctBy(c => c.Via + "|" + string.Join("\u0001", c.Args)).OrderBy(c => c.Via, StringComparer.Ordinal).ToList() })
+            .OrderBy(s => s.Id, StringComparer.Ordinal).ToList();
         var dyn = h.DynamicUi.OrderBy(x => x.Id, StringComparer.Ordinal).ToList();
         // a grid view without designer columns is a visible gap: say so, and say where code touches its columns (#15)
         var gridDiags = new List<Diagnostic>();
@@ -226,12 +277,13 @@ public static class Extractor
                      : "no code in the loaded files touches its Columns either: a layout XML, a base class, a data-driven grid, or a file outside the loaded set";
             gridDiags.Add(new Diagnostic("GRID-NO-COLUMNS", $"{name}.{g.Field}: no column declared in the designer; {hint}", g.Loc));
         }
-        var constants = k.Freeze(name, i => alias.TryGetValue(i, out var a) ? a : i, gridDiags);
+        var constants = k.Freeze(name, One, gridDiags);
         var diags = buildDiags.Concat(d.Diagnostics).Concat(h.Diagnostics).Concat(gridDiags).DistinctBy(x => x.Code + x.Message).OrderBy(x => x.Code, StringComparer.Ordinal).ThenBy(x => x.Message, StringComparer.Ordinal).ToList();
         var files = form.Declarations.Select(x => Path.GetRelativePath(project.Dir, x.SyntaxTree.FilePath).Replace('\\', '/')).Distinct().OrderBy(x => x, StringComparer.Ordinal).ToList();
 
         return new FormManifest(Extractor.SchemaVersion, $"form:{name}", name, form.Symbol.ContainingNamespace.ToDisplayString(), form.Bases, files, d.FormCaption,
-            controls, events, bindings, rules, handlers, methods, svcs, dyn, constants, d.Raw.OrderBy(r => r.Loc.Start).ToList(), diags);
+            controls, events, bindings, rules, handlers, methods, svcs, dyn, constants, d.Raw.OrderBy(r => r.Loc.Start).ToList(), diags,
+            Contract: ctx.Contract, SharedState: ctx.SharedState, Embeds: ctx.Embeds);
     }
 
     private sealed record VariantCandidate(VariantConfig Config, string Class, string Base, List<string> Files);

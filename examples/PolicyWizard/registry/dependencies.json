@@ -1,0 +1,16 @@
+{
+  "module": "sha256:0000000000000000",
+  "dependencies": [
+    { "id": "svc:IClientService.SearchClients", "errors": [] },
+    {
+      "id": "svc:IPolicyService.AddBeneficiary",
+      "errors": [
+        { "case": "duplicate", "reply": "error BENEFICIARY_EXISTS: the client is already a beneficiary of the policy", "fixture": "add-beneficiary.duplicate" }
+      ]
+    },
+    { "id": "svc:IPolicyService.GetAvailableRiders", "errors": [] },
+    { "id": "svc:IPolicyService.GetPremiumLimits", "errors": [] },
+    { "id": "svc:IPolicyService.GetProducts", "errors": [] },
+    { "id": "svc:IPolicyService.SavePolicyStep", "errors": [] }
+  ]
+}

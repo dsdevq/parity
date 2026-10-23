@@ -53,6 +53,29 @@ public sealed class ExtractFixture : IDisposable
         return path;
     }
 
+    /// <summary>
+    /// A module of its own under <c>copies/&lt;name&gt;</c>: the generated manifests and module.json, the example fixtures, and the
+    /// example registry anchored to the copy, so a test can edit any of them without touching the shared module.
+    /// </summary>
+    public string ModuleCopy(string name)
+    {
+        var dir = Path.Combine(OutRoot, "copies", name, "legacy", "PolicyWizard");
+        Directory.CreateDirectory(Path.Combine(dir, "manifests"));
+        foreach (var f in Directory.EnumerateFiles(Path.Combine(ModuleDir, "manifests")).Where(x => !x.EndsWith(".prev.json", StringComparison.Ordinal)))
+            File.Copy(f, Path.Combine(dir, "manifests", Path.GetFileName(f)), overwrite: true);
+        File.Copy(Path.Combine(ModuleDir, "module.json"), Path.Combine(dir, "module.json"), overwrite: true);
+        foreach (var sub in new[] { "fixtures", "registry" })
+        {
+            Directory.CreateDirectory(Path.Combine(dir, sub));
+            foreach (var f in Directory.EnumerateFiles(Path.Combine(RepoRoot, "examples", "PolicyWizard", sub)))
+                File.Copy(f, Path.Combine(dir, sub, Path.GetFileName(f)), overwrite: true);
+        }
+        var revision = Parity.Lint.Registry.Revision(dir);
+        foreach (var f in Directory.EnumerateFiles(Path.Combine(dir, "registry")))
+            File.WriteAllText(f, File.ReadAllText(f).Replace("sha256:0000000000000000", revision));
+        return dir;
+    }
+
     public void Dispose() { try { Directory.Delete(OutRoot, true); } catch { } }
 }
 

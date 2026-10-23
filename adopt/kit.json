@@ -29,6 +29,11 @@
       "prompt": "Run the parity-extract skill for form {form} of module {module}."
     },
     {
+      "name": "map",
+      "skill": "parity-map",
+      "prompt": "Run the parity-map skill for module {module}."
+    },
+    {
       "name": "specify",
       "skill": "parity-specify",
       "prompt": "Run the parity-specify skill for form {form} of module {module}."
