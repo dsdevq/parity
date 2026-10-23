@@ -1,0 +1,12 @@
+{
+  "module": "sha256:0000000000000000",
+  "dependencies": [
+    { "id": "svc:IClientService.GetPayeeAccounts", "errors": [] },
+    {
+      "id": "svc:IPolicyService.VerifyPayoutAccount",
+      "errors": [
+        { "case": "closed-account", "reply": "Valid false, Reason \"Account is closed\"", "fixture": "verify-account.rejected" }
+      ]
+    }
+  ]
+}

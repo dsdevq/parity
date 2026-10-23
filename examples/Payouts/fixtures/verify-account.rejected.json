@@ -1,0 +1,11 @@
+{
+  "service": "svc:IPolicyService.VerifyPayoutAccount",
+  "recorded": "synthetic",
+  "variant": "rejected",
+  "scenario": "scn:refund-to-closed-account-refused",
+  "source": "written by hand from the host's documented reply for a closed account",
+  "shapeVerified": true,
+  "note": "the host refuses a payout to a closed account with Valid false and a reason; the training host has no closed account to record",
+  "request": { "policyId": 5001, "accountId": 73, "purpose": "refund" },
+  "response": { "valid": false, "reason": "Account is closed" }
+}

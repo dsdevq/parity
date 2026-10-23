@@ -1,0 +1,11 @@
+{
+  "service": "svc:IClientService.GetPayeeAccounts",
+  "recorded": "2026-10-22",
+  "environment": "training",
+  "scenario": "scn:claim-paid-to-verified-account",
+  "request": { "policyId": 5001, "includeThirdParty": true },
+  "response": [
+    { "accountId": 71, "holder": "A. Example", "iban": "XX00 0000 0000 0071", "domestic": true },
+    { "accountId": 72, "holder": "B. Sample", "iban": "YY00 0000 0000 0072", "domestic": false }
+  ]
+}

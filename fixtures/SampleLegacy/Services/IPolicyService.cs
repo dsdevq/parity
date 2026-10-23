@@ -9,5 +9,6 @@ namespace SampleLegacy.Services
         void SavePolicyStep(PolicyDto policy, int step);
         List<RiderDto> GetAvailableRiders(int productId);
         void AddBeneficiary(int policyId, int clientId);
+        PayoutCheckDto VerifyPayoutAccount(int policyId, int accountId, string purpose);
     }
 }

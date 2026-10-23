@@ -12,7 +12,7 @@
   "sharedState": ["SampleLegacy.Session.*"],
   "output": "../.out/legacy",
   "variants": [
-    { "id": "Larkspur", "subclasses": ["LarkspurClientSearchForm"] },
+    { "id": "Larkspur", "subclasses": ["LarkspurClientSearchForm", "LarkspurPayeeLookupPanel"] },
     { "id": "Thistle", "project": "SampleLegacy.Thistle/SampleLegacy.Thistle.csproj", "selfAssembly": "SampleLegacy.Build/bin/Debug/net10.0/SampleLegacy.dll" }
   ]
 }
