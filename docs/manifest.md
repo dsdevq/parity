@@ -3,6 +3,16 @@
 `manifests/<Form>.json`, one per form class. Lists are sorted; there are no timestamps; the file is
 byte-stable for the same input, so `git diff` is meaningful and the spec binds to its SHA-256.
 
+`manifests/<Form>.prev.json` is the manifest before the last re-extract that changed it: `extract`
+moves the old file aside only when the new content differs, so running it twice on the same input
+keeps the previous generation. One generation is kept; older ones are in git. `module.json` ignores it.
+`parity diff <old.json> <new.json>` compares two manifests entry by entry, keyed by id per section
+(`form` for the header fields, then `controls`, `events`, `bindings`, `validationRules`, `handlers`,
+`methods`, `serviceCalls`, `dynamicUi`; `raw` by `file:line`, `diagnostics` by the debt key
+`CODE: Form.member`). It prints one line per entry, `+` added, `-` removed, `~` changed with the fields
+that differ (`props.Text`, `source`, `loc`), sorted by id, and exits 0 when identical, 1 when not.
+`parity rebind` (see `docs/spec.md`) runs the same comparison between `.prev.json` and the new manifest.
+
 | Field | Type | Notes |
 |---|---|---|
 | `schemaVersion` | string | bump on breaking change |

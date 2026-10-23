@@ -9,11 +9,31 @@ the blank; `examples/PolicyWizard/spec/PolicyWizardStep3.md` is a complete one.
 ```
 ---
 form: form:<Class>
-manifest: sha256:<16 hex>     # printed at the top of manifests/<Class>.md; STALE when it no longer matches
+manifest: sha256:<16 hex>     # printed at the top of manifests/<Class>.md; STALE when it no longer matches (parity rebind)
 status: draft | reviewed       # the human sets reviewed
 reviewed-by: <name> <YYYY-MM-DD>
 ---
 ```
+
+### After a re-extract: `parity rebind`
+
+A re-extract that changes the manifest makes the spec `STALE`. Run `parity rebind spec/<Class>.md`
+before anything else. It diffs the manifest the spec was written against (`manifests/<Class>.prev.json`,
+or `--prev <old.json>` recovered from git) with the one on disk and checks every id the spec cites: each
+rule's `covers`, `cite` and the `ctrl:`/`dyn:`/`svc:` ids in its `then`, and the ids of the Fields,
+No behavior and Service calls rows. An id is affected when it vanished or changed in more than its
+location (`loc` alone moving is not a change to what the spec says). A cited `handler:` or `method:`
+is also affected when any method reachable from it through the manifest `calls` edges (transitive,
+cycle-safe, edges taken from both manifests) vanished or changed, even if the rule does not cite that
+method; the work list names the path as `<rule> via handler:X -> method:Y`.
+
+- Nothing affected: the `manifest:` line is rewritten in place to the new hash, exit 0.
+- Something affected: the hash is left alone and the work list is printed grouped by rule (and table),
+  each id with `removed` or the fields that changed, exit 1. Re-read those in the manifest, update the
+  spec, then set the printed hash.
+- Either way, new `evt:`/`dyn:` ids the spec does not mention are listed; the gate asks for them.
+- Refused, exit 3: no `.prev.json`, or its hash is not the one in the spec (extracted twice since the
+  spec was bound). The message says how to recover the right manifest and pass it with `--prev`.
 
 ## Sections, in this order
 

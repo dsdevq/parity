@@ -35,10 +35,13 @@ from the manifest, which the agent cannot shrink.
 |---|---|---|
 | `manifests/<Form>.json` | `parity extract` | control tree (incl. DevExpress layout items and grid columns), resx captions, event wiring from designer, code-behind, lambdas, overrides and constructors, per-handler source slice with controls read and written, calls, service-boundary calls with argument text, transitive methods to a bounded depth with their slices, bindings, provider validation rules, controls created at runtime, and everything it could not interpret under `raw` and `diagnostics` |
 | `manifests/<Form>.md` | same run | the same, rendered for an agent to read instead of the legacy file |
+| `manifests/<Form>.prev.json` | a re-extract that changed the manifest | the previous manifest, one generation, so `parity diff` and `parity rebind` need no git |
 | `module.json` | same run | forms, every service call id, exact and near duplicate handlers across forms |
 | `evidence/<Form>.json` | `parity evidence add` | quoted legacy lines the manifest lacks (a model class, a config value), each an `ev:` id with its file, range, quote hash and source revision |
 | `spec/<Form>.md` | you + agent | field inventory, rules with citations, no-behavior list, service calls with fixtures, open questions |
 | lint findings | `parity lint` | `file:line CODE message`, exit 1 on errors |
+| manifest diff | `parity diff <old.json> <new.json>` | controls, events, bindings, validation rules, handlers, methods, service calls, dynamic UI, raw and diagnostics added / removed / changed by id, exit 1 when they differ |
+| rebind | `parity rebind <spec.md>` | a `STALE` spec moved to the new hash when nothing it cites changed, else the affected rules as a work list (exit 1) |
 
 Every id is stable and citeable: `ctrl:Form/field`, `dyn:Form/handler/local`, `evt:Form/field.Event`,
 `handler:Form/method`, `method:Namespace.Type.Method(params)`, `svc:IService.Method`. Every item
@@ -114,6 +117,10 @@ Then delete a rule and run it again to see what the gate says.
    accounted for or the gate is red. `--implement <dir>` additionally wants every rule id in the
    title of an active test (`it`, `test`, `describe`, `[Fact]`); `it.todo`, `.skip`, comments and
    constants do not count (`COV-TODO` says where). See `docs/lint.md`.
+7. **Re-extract** after a tool upgrade, a config fix or a legacy change. Specs on a changed manifest
+   turn `STALE`; `parity rebind spec/<Form>.md` moves each one whose citations did not change and
+   lists the rules to re-read for the others. `parity diff manifests/<Form>.prev.json manifests/<Form>.json`
+   shows everything that changed.
 
 The work-side pieces that make the phases stick for an agent (skills, a hook that locks the legacy
 path during specify and implement, a hook that lints on stop) are in `adopt/`. See `docs/adopt.md`.
@@ -267,7 +274,7 @@ Use `referencesFromProject` or list the project's own output folder.
 | An agent cannot cite what does not exist | `CITE-UNKNOWN`, `CITE-KIND` |
 | Evidence outside the manifest is checkable | `EV-STALE` when the quoted lines moved or changed, `EV-INVALID`, `EV-UNLINKED` for a question closed without an `ev:` id |
 | Done is computed, not asserted | `COV-CONTROL`, `COV-EVENT`, `COV-HANDLER`, `COV-SERVICE`, `COV-DYNAMIC`, `COV-RAW`, all computed from the manifest |
-| A spec is bound to one manifest | `STALE` on hash mismatch |
+| A spec is bound to one manifest | `STALE` on hash mismatch; `parity rebind` moves it only when nothing it cites changed |
 | Facts, not guesses | `HEDGE` rejects probably / likely / assume / should / seems / typically / usually / maybe / might; uncertainty goes under Open questions, which keeps the gate closed |
 | Decisions are owned | `DROP-REASON` for dropped controls and quirks; `STATUS` requires a named reviewer and a date |
 | Implementation traces to rules | `COV-TEST` wants each `R-` id in the title of an active, non-skipped test |

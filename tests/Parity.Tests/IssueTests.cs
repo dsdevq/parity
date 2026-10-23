@@ -299,6 +299,98 @@ public sealed class IssueTests
     }
 
     [Fact]
+    public void issue_25_a_re_extract_keeps_the_previous_manifest_and_rebind_rewrites_the_hash_only_when_nothing_cited_changed()
+    {
+        // input: PolicyWizardStep3 extracted, the example spec (CRLF) bound to that hash, then re-extracted with changed configs
+        var cfg = ExtractConfig.Load(Path.Combine(_f.RepoRoot, "fixtures", "extract.config.json"));
+        cfg.Output = Path.Combine(_f.OutRoot, "rebind");
+        var manifests = Path.Combine(cfg.Output, "M", "manifests");
+        var current = Path.Combine(manifests, "PolicyWizardStep3.json");
+        var prev = Path.Combine(manifests, "PolicyWizardStep3.prev.json");
+        Extractor.Run(cfg, "M", "PolicyWizardStep3", new StringWriter());
+        var h1 = ManifestHash.Of(current);
+        var specDir = Path.Combine(cfg.Output, "M", "spec"); Directory.CreateDirectory(specDir);
+        var spec = Path.Combine(specDir, "PolicyWizardStep3.md");
+        File.WriteAllText(spec, File.ReadAllText(Path.Combine(_f.RepoRoot, "examples", "PolicyWizard", "spec", "PolicyWizardStep3.md")).Replace("\r\n", "\n").Replace("\n", "\r\n").Replace("sha256:0000000000000000", h1));
+        string Bound() => SpecParser.Parse(File.ReadAllText(spec)).Front["manifest"].Value;
+        Assert.DoesNotContain(SpecLinter.Lint(spec, gate: false, implementDir: null), f => f.Severity == "error");
+
+        // the same input again: nothing changes, so nothing is moved aside
+        Extractor.Run(cfg, "M", "PolicyWizardStep3", new StringWriter());
+        Assert.False(File.Exists(prev));
+        Assert.Contains("already bound", Rebind.Run(spec, null).Text);
+
+        // a change that touches nothing the spec cites (one diagnostic added): STALE, the old manifest is kept, rebind rewrites the hash
+        cfg.FormBaseTypes.Add("LegacyApp.Framework.NoSuchBaseForm");
+        Extractor.Run(cfg, "M", "PolicyWizardStep3", new StringWriter());
+        Assert.Contains(SpecLinter.Lint(spec, gate: false, implementDir: null), f => f.Code == "STALE");
+        Assert.Equal(h1, ManifestHash.Of(prev));
+        var diff = ManifestDiff.Compare(ManifestDiff.Load(prev), ManifestDiff.Load(current));
+        var only = Assert.Single(diff);
+        Assert.Equal(("diagnostics", '+'), (only.Section, only.Kind));
+        Assert.StartsWith("BASE-UNRESOLVED: formBaseTypes entry 'LegacyApp.Framework.NoSuchBaseForm'", only.Id);
+        Assert.Contains("1 difference(s): 1 added, 0 removed, 0 changed", ManifestDiff.Render(prev, current, diff));
+        Assert.Empty(ManifestDiff.Compare(ManifestDiff.Load(current), ManifestDiff.Load(current)));
+        var r = Rebind.Run(spec, null);
+        Assert.True(r.Rebound, r.Text);
+        var h2 = ManifestHash.Of(current);
+        Assert.Equal(h2, Bound());
+        Assert.Contains("\r\n", File.ReadAllText(spec));                                  // line endings survive the rewrite
+        Assert.DoesNotContain(SpecLinter.Lint(spec, gate: false, implementDir: null), f => f.Severity == "error");
+        Assert.Equal(new[] { "form:PolicyWizardStep3" }, System.Text.Json.JsonSerializer.Deserialize<ModuleIndex>(File.ReadAllText(Path.Combine(cfg.Output, "M", "module.json")), Json.Options)!.Forms);
+
+        // a cited handler that only moved (a line added above it) is not a change to what the spec says
+        File.Copy(current, prev, overwrite: true);
+        var moved = ManifestDiff.Load(current);
+        moved = moved with { Handlers = moved.Handlers.Select(h => h.Name == "btnNext_Click" ? h with { Loc = h.Loc with { Start = h.Loc.Start + 1, End = h.Loc.End + 1 } } : h).ToList() };
+        File.WriteAllText(current, System.Text.Json.JsonSerializer.Serialize(moved, Json.Options) + "\n");
+        Assert.Equal("loc", Assert.Single(ManifestDiff.Compare(ManifestDiff.Load(prev), moved)).Fields.Single());
+        Assert.True(Rebind.Run(spec, null).Rebound);
+        var h3 = Bound();
+        Assert.Equal(ManifestHash.Of(current), h3);
+
+        // a rule that cites only the handler still depends on the callee's body: a changed callee blocks the rebind and names the path
+        var text6 = File.ReadAllText(spec)
+            .Replace("handler:PolicyWizardStep3/btnNext_Click, method:SampleLegacy.Forms.PolicyWizardController.Next(), method:SampleLegacy.Forms.PolicyWizardController.Show(int)", "handler:PolicyWizardStep3/btnNext_Click")
+            .Replace("then: svc:IPolicyService.SavePolicyStep is called", "then: `svc:IPolicyService.SavePolicyStep` is called");
+        File.WriteAllText(spec, text6);
+        File.Copy(current, prev, overwrite: true);
+        var callee = ManifestDiff.Load(current);
+        callee = callee with { Methods = callee.Methods.Select(x => x.Id == "method:SampleLegacy.Forms.PolicyWizardController.Next()" ? x with { Source = x.Source + " /* changed */" } : x).ToList() };
+        File.WriteAllText(current, System.Text.Json.JsonSerializer.Serialize(callee, Json.Options) + "\n");
+        Assert.Equal("source", Assert.Single(ManifestDiff.Compare(ManifestDiff.Load(prev), callee)).Fields.Single());
+        r = Rebind.Run(spec, null);
+        Assert.False(r.Rebound, r.Text);
+        Assert.Equal(h3, Bound());
+        Assert.Contains("R-PolicyWizardStep3-006 via handler:PolicyWizardStep3/btnNext_Click -> method:SampleLegacy.Forms.PolicyWizardController.Next()\n  method:SampleLegacy.Forms.PolicyWizardController.Next()  changed: source", r.Text.Replace("\r\n", "\n"));
+        File.Copy(prev, current, overwrite: true);
+        Assert.Equal(h3, ManifestHash.Of(current));
+
+        // a change to what rules cite (IPolicyService no longer a service boundary): handlers changed, svc: ids removed; the hash stays
+        cfg.ServiceBoundary.Remove("SampleLegacy.Services.IPolicyService");
+        Extractor.Run(cfg, "M", "PolicyWizardStep3", new StringWriter());
+        Assert.Equal(h3, ManifestHash.Of(prev));
+        r = Rebind.Run(spec, null);
+        r = r with { Text = r.Text.Replace("\r\n", "\n") };
+        Assert.False(r.Rebound, r.Text);
+        Assert.Equal(h3, Bound());
+        Assert.Contains("R-PolicyWizardStep3-003\n  cite handler:PolicyWizardStep3/cboProduct_EditValueChanged  changed: calls, serviceCalls\n  then svc:IPolicyService.GetAvailableRiders  removed\n  then svc:IPolicyService.GetPremiumLimits  removed\n", r.Text);
+        Assert.Contains("Service calls\n  row svc:IPolicyService.GetAvailableRiders  removed\n", r.Text);
+        Assert.Contains("R-PolicyWizardStep3-006\n", r.Text);
+        Assert.Contains("  then svc:IPolicyService.SavePolicyStep  removed\n", r.Text);               // a backtick-quoted id resolves
+        Assert.DoesNotContain("R-PolicyWizardStep3-004", r.Text);                           // cites nothing that changed
+        Assert.Contains($"then set 'manifest: {ManifestHash.Of(current)}'", r.Text);
+
+        // extracted again before rebinding: the kept manifest is no longer the one the spec was written against
+        cfg.MaxCallDepth = 1;
+        Extractor.Run(cfg, "M", "PolicyWizardStep3", new StringWriter());
+        var refused = Assert.Throws<InvalidOperationException>(() => Rebind.Run(spec, null));
+        Assert.Contains($"refusing to rebind: the spec was written against {h3}", refused.Message);
+        Assert.Contains("--prev", refused.Message);
+        Assert.Equal(h3, Bound());
+    }
+
+    [Fact]
     public void issue_7_references_load_once_and_each_phase_is_timed()
     {
         Assert.Matches(@"references: \d+ loaded in \d+\.\ds", _f.Log);

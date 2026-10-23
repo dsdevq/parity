@@ -57,7 +57,7 @@ public static partial class SpecLinter
         if (!File.Exists(manifestPath)) { E(fv.Line, "STALE", $"manifest not found at {Path.GetRelativePath(Environment.CurrentDirectory, manifestPath)}; run parity extract"); return f; }
         var hash = ManifestHash.Of(manifestPath);
         if (!spec.Front.TryGetValue("manifest", out var mv)) E(1, "STALE", "front matter needs 'manifest: sha256:...' (printed at the top of the rendered manifest)");
-        else if (mv.Value != hash) { E(mv.Line, "STALE", $"spec was written against {mv.Value}, manifest is now {hash}; re-read the manifest and update the spec"); return f; }
+        else if (mv.Value != hash) { E(mv.Line, "STALE", $"spec was written against {mv.Value}, manifest is now {hash}; run parity rebind {file}: it moves the spec when nothing it cites changed, else lists the rules to re-read"); return f; }
 
         var m = JsonSerializer.Deserialize<FormManifest>(File.ReadAllText(manifestPath), Json.Options)!;
         var controlIds = m.Controls.Select(c => c.Id).ToHashSet(StringComparer.Ordinal);
