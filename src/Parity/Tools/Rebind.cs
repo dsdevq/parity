@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
 using Parity.Lint;
+using Parity.Model;
 using Parity.Passes;
 
 namespace Parity.Tools;
