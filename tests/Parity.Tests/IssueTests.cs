@@ -273,6 +273,13 @@ public sealed class IssueTests
                 ("mcp__filesystem__read_multiple_files", new { paths = new[] { "legacy/M/spec/X.md", "..\\Legacy\\AcmeAdmin\\Forms\\X.cs" } }, work, "outside"),
                 ("mcp__codegraph__get_symbol", new { symbol = "PolicyForm" }, work, "code-index"),                               // no path at all
                 ("mcp__serena__find_symbol", new { name_path = "Save" }, work, "code-index"),
+                ("mcp__graft__graft_find_code", new { query = "PolicyForm" }, work, "code-index"),                              // Graft by server name
+                ("mcp__graft__graft_file_api", new { file = "Forms/X.cs" }, work, "code-index"),
+                ("mcp__graft__graft_trace_calls", new { symbol = "Save" }, work, "code-index"),
+                ("mcp__graft__graft_find_all", new { symbol = "Save" }, work, "code-index"),
+                ("mcp__graft__graft_repo_map", new { }, work, "code-index"),
+                ("mcp__graft__graft_check_freshness", new { }, work, "code-index"),
+                ("mcp__acme-graph__graft_find_code", new { query = "PolicyForm" }, work, "code-index"),                          // Graft tools under another server name, by the graft_ prefix
                 ("Read", new { file_path = "../Legacy/AcmeAdmin/Forms/X.cs" }, work, "outside"),                                 // relative path
                 ("Read", new { file_path = "Forms/X.cs" }, legacy, "outside"),                                                    // short path from inside the tree
                 ("Read", new { file_path = "legacy/../../Legacy/AcmeAdmin/Forms/X.cs" }, work, "outside"),                        // dot-dot detour

@@ -122,7 +122,8 @@ case-insensitively against the full `mcp__<server>__<tool>` name (`?` is any one
 `*codeindex*`, `*code?graph*`, `*codegraph*`, `*code?search*`, `*codesearch*`, `*codebase*`, `*repo?map*`,
 `*repomap*`, `*symbol*`, `*semantic?search*`, `*serena*`, `*sourcegraph*`, `*tree?sitter*`, `*treesitter*`,
 `*ast?grep*`, `*lsp*`, `*language?server*`, `*roslyn*`, `*ctags*`, `*cocoindex*`, `*gitnexus*`,
-`*graphify*`, `*claude?context*`. Add your own in `legacy/extract.config.json`:
+`*graphify*`, `*claude?context*`, and Graft, the tree-sitter code-graph server (`mcp__graft__*` for its
+server name, `*__graft_*` for the `graft_` tool prefix). Add your own in `legacy/extract.config.json`:
 
 ```json
 "guard": {

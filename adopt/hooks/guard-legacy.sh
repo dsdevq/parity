@@ -34,7 +34,7 @@ tool=$(printf '%s' "$input" | sed -n 's/.*"tool_name"[[:space:]]*:[[:space:]]*"\
 cfg=legacy/extract.config.json
 log=legacy/.guard-denials.log
 # glob patterns (case-insensitive, ? is any one character) for MCP tools that read or index source code
-default_deny='*code?index* *codeindex* *code?graph* *codegraph* *code?search* *codesearch* *codebase* *repo?map* *repomap* *symbol* *semantic?search* *serena* *sourcegraph* *tree?sitter* *treesitter* *ast?grep* *lsp* *language?server* *roslyn* *ctags* *cocoindex* *gitnexus* *graphify* *claude?context*'
+default_deny='*code?index* *codeindex* *code?graph* *codegraph* *code?search* *codesearch* *codebase* *repo?map* *repomap* *symbol* *semantic?search* *serena* *sourcegraph* *tree?sitter* *treesitter* *ast?grep* *lsp* *language?server* *roslyn* *ctags* *cocoindex* *gitnexus* *graphify* *claude?context* mcp__graft__* *__graft_*'
 
 lc() { printf '%s' "$1" | tr 'A-Z' 'a-z'; }
 fwd() { printf '%s' "$1" | sed 's#\\\\#/#g; s#\\#/#g'; }
