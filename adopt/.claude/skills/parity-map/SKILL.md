@@ -35,9 +35,10 @@ the registries with citations, never into a spec, a manifest or code.
 7. Decisions: a human answer becomes an entry in `decisions.json` (`id` dec:<words>, `question`, `answer`,
    `owner`, `date` YYYY-MM-DD, `cite`). You record an answer the user gave; you never answer for them. Specs
    then write `decided-by dec:<id>` on a quirk or dropped field and `closed by decision dec:<id>` on a question.
-8. Run `"${PARITY_BIN:-parity}" registry check legacy/<Module> --gate` until it is green (the stop hook runs it too, and
-   refuses a turn that changed files outside the registry and evidence). Unreferenced or unverified scenarios
-   are listed for the user, not deleted.
+8. Run `"${PARITY_BIN:-parity}" registry check legacy/<Module>` (without `--gate`) until no error remains (the stop hook runs
+   it too, and refuses a turn that changed files outside the registry and evidence). SCENARIO-UNVERIFIED and
+   SCENARIO-UNREFERENCED are warnings: list them for the user, do not delete the scenarios and do not invent a
+   `lastVerified` date.
 9. Run `"${PARITY_BIN:-parity}" registry stamp legacy/<Module>`: it records that the registry was reviewed against this
    extract, and refuses while check has errors. Commit `registry/` and `evidence/`.
 
