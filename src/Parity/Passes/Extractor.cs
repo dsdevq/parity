@@ -46,7 +46,7 @@ public static class Extractor
         var undescribed = new Dictionary<string, Diagnostic>(StringComparer.Ordinal);
         var variants = DiscoverVariants(cfg, baseIndex, variantIndexes, index, matcher, variantDiags, undescribed);
         foreach (var v in variants) foreach (var f in v.Files) loaded.Add(f);
-        var factoryEntries = ResolveFactories(cfg, index, variantDiags);
+        var factoryEntries = ResolveFactories(cfg, index, variantDiags).Where(e => variants.Any(v => v.Config.Id == e.Variant)).ToList();
         var factoryFiles = FactoryFiles(index, variants, factoryEntries);
         foreach (var f in factoryFiles) loaded.Add(f);
         foreach (var v in variants.GroupBy(v => v.Config.Id))

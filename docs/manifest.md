@@ -170,7 +170,8 @@ these shapes is the `default` case only when nothing conditional guards it (an u
 `else` branch, or the miss of a dictionary lookup); behind any other condition it is a case keyed by that
 condition's source text. Methods are read from files that instantiate two or more classes of the same form
 family, plus any `factories` configured on a variant: a type, or `Type.Method`, simple or namespace-qualified.
-An entry that matches no type, or from which no factory is read, is a `VARIANT-CONFIG` diagnostic.
+An entry that matches no type, or from which no factory is read, is a `VARIANT-CONFIG` diagnostic; the second
+is checked only in a run that describes the entry's variant.
 
 ## module.json
 

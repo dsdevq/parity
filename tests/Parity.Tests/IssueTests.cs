@@ -840,11 +840,20 @@ public sealed class IssueTests
     [Fact]
     public void issue_20_variants_of_a_form_the_glob_does_not_select_are_not_a_config_error()
     {
-        // input: fixtures/extract.config.json (Larkspur and Thistle customise ClientSearchForm) extracting only DynamicRidersForm;
-        // output: neither variant applies to this run, and DynamicRidersForm carries no variants and no VARIANT-CONFIG
+        // input: fixtures/extract.config.json (Larkspur and Thistle customise ClientSearchForm, Larkspur with a configured factory)
+        // extracting only DynamicRidersForm; output: neither variant applies to this run, and DynamicRidersForm carries no variants
+        // and no VARIANT-CONFIG, not even for the factory of a unit this run does not describe, whose file the run does not load
+        string Loaded(string log) => log[log.IndexOf("files loaded:", StringComparison.Ordinal)..log.IndexOf("   rounds:", StringComparison.Ordinal)];
+        var plain = ExtractConfig.Load(Path.Combine(_f.RepoRoot, "fixtures", "extract.config.json"));
+        plain.Output = Path.Combine(_f.OutRoot, "issue20-unselected-plain");
+        var plainLog = new StringWriter();
+        Extractor.Run(plain, "M", "DynamicRidersForm", plainLog);
         var cfg = ExtractConfig.Load(Path.Combine(_f.RepoRoot, "fixtures", "extract.config.json"));
         cfg.Output = Path.Combine(_f.OutRoot, "issue20-unselected");
-        Extractor.Run(cfg, "M", "DynamicRidersForm", new StringWriter());
+        cfg.Variants[0].Factories.Add("SampleLegacy.Forms.ClientSearchFormFactory");
+        var log = new StringWriter();
+        Extractor.Run(cfg, "M", "DynamicRidersForm", log);
+        Assert.Equal(Loaded(plainLog.ToString()), Loaded(log.ToString()));
         var m = System.Text.Json.JsonSerializer.Deserialize<FormManifest>(File.ReadAllText(Path.Combine(cfg.Output, "M", "manifests", "DynamicRidersForm.json")), Json.Options)!;
         Assert.Null(m.Variants);
         Assert.DoesNotContain(m.Diagnostics, d => d.Code is "VARIANT-CONFIG" or "VARIANT-INTERMEDIATE");
