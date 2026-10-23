@@ -30,6 +30,7 @@ form with invented names, then the extractor is changed until the test passes.
 | #15 grid without designer columns is silent | `gvHistory`, columns built in `InitHistoryColumns` | `IssueTests.issue_15_a_grid_view_without_designer_columns_is_a_named_diagnostic_pointing_at_the_code_that_builds_them` |
 | #16 `COV-TEST` satisfied by `it.todo` / comments | - (test writes an implement dir) | `IssueTests.issue_16_a_rule_id_in_a_todo_skip_comment_or_constant_is_not_a_test` |
 | #21 spec cannot cite a fact outside the manifest | `ClientDto` (`Services/Dto.cs:21`) behind `BeneficiarySearchForm.Setup` | `IssueTests.issue_21_a_spec_cites_evidence_outside_the_manifest_and_lint_reports_it_stale_when_the_source_moves` |
+| #25 `STALE` is a dead end after a re-extract | `PolicyWizardStep3` re-extracted with an extra `formBaseTypes` entry, a moved handler, IPolicyService out of the boundary, then a lower `maxCallDepth` | `IssueTests.issue_25_a_re_extract_keeps_the_previous_manifest_and_rebind_rewrites_the_hash_only_when_nothing_cited_changed` |
 
 ## Adding a pattern
 

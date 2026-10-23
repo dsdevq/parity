@@ -10,7 +10,12 @@ exists, `legacy/<Module>/evidence/<Form>.json`. The legacy source is off limits 
 enforces it). Everything you may cite is printed in the manifest or recorded as an `ev:` id in the
 evidence file; every id you write must appear there verbatim.
 
-1. Ensure `legacy/.phase` contains `specify`. Open the manifest .md. Copy the `manifest:` hash line.
+1. Ensure `legacy/.phase` contains `specify`. If the spec already exists and `parity lint` reports
+   `STALE`, run `parity rebind legacy/<Module>/spec/<Form>.md` before anything else: exit 0 means it is
+   rebound and you continue at step 7; exit 1 prints the rules whose citations changed or vanished, so
+   re-read exactly those in the manifest, fix them, set the hash it printed, and continue at step 7;
+   a refusal says which previous manifest is missing, so report that to the user and stop.
+   For a new spec, open the manifest .md and copy the `manifest:` hash line.
 2. Start `legacy/<Module>/spec/<Form>.md` from `templates/spec.md` (status `draft`).
 3. Fields: one row per control the manifest lists with category input, action, grid, column, display or
    unknown, per container that has events, and per `dyn:` entry. Labels come from the control caption or

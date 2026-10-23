@@ -18,8 +18,10 @@ parity - reverse-engineer a legacy WinForms module into a citable manifest and g
   parity probe    <project.csproj> [--forms <glob>]    anonymized statement shapes; paste into an issue
   parity report   <manifest.json>                      anonymized raw/diagnostics/unresolved; review, then paste into an issue
   parity hash     <manifest.json>
+  parity diff     <old.json> <new.json>                entries added, removed and changed, by id per section
+  parity rebind   <spec.md> [--prev <old.json>]        move a STALE spec to the new manifest when nothing it cites changed
 
-Exit codes: 0 ok, 1 lint errors, 2 usage, 3 failure.
+Exit codes: 0 ok, 1 lint errors / manifests differ / rebind left a work list, 2 usage, 3 failure (a refused rebind too).
 """;
 
 try
@@ -49,6 +51,20 @@ try
         case "hash":
             Console.WriteLine(ManifestHash.Of(Positional(opts, 0) ?? throw new ArgumentException("manifest.json path required")));
             return 0;
+        case "diff":
+        {
+            var a = Positional(opts, 0) ?? throw new ArgumentException("old manifest.json path required");
+            var b = Positional(opts, 1) ?? throw new ArgumentException("new manifest.json path required");
+            var changes = ManifestDiff.Compare(ManifestDiff.Load(a), ManifestDiff.Load(b));
+            Console.Write(ManifestDiff.Render(a, b, changes));
+            return changes.Count == 0 ? 0 : 1;
+        }
+        case "rebind":
+        {
+            var r = Rebind.Run(Positional(opts, 0) ?? throw new ArgumentException("spec.md path required"), Opt(opts, "prev"));
+            Console.Write(r.Text);
+            return r.Rebound ? 0 : 1;
+        }
         case "lint":
         {
             var path = Positional(opts, 0) ?? throw new ArgumentException("spec.md path required");

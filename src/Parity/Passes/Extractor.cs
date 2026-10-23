@@ -96,15 +96,17 @@ public static class Extractor
         var summaries = new List<ExtractSummary>();
         foreach (var m in manifests)
         {
-            var json = JsonSerializer.Serialize(m, Json.Options);
+            var json = JsonSerializer.Serialize(m, Json.Options) + "\n";
             var jsonPath = Path.Combine(outDir, "manifests", m.ClassName + ".json");
-            File.WriteAllText(jsonPath, json + "\n");
+            // one generation is kept, so parity diff and parity rebind work without git (issue #25)
+            if (File.Exists(jsonPath) && File.ReadAllText(jsonPath) != json) File.Move(jsonPath, Path.Combine(outDir, "manifests", m.ClassName + ".prev.json"), overwrite: true);
+            File.WriteAllText(jsonPath, json);
             File.WriteAllText(Path.Combine(outDir, "manifests", m.ClassName + ".md"), MarkdownRenderer.Render(m, ManifestHash.Of(jsonPath)));
             summaries.Add(new ExtractSummary(m.ClassName, m.Controls.Count, m.Events.Count, m.Handlers.Count, m.Methods.Count, m.ServiceCalls.Count, m.DynamicUi.Count, m.Raw.Count, m.Diagnostics.Count));
         }
 
         // module.json is computed from every manifest on disk, so extracting forms one run at a time accumulates (issue #12)
-        var all = Directory.EnumerateFiles(Path.Combine(outDir, "manifests"), "*.json").OrderBy(f => f, StringComparer.Ordinal)
+        var all = Directory.EnumerateFiles(Path.Combine(outDir, "manifests"), "*.json").Where(f => !f.EndsWith(".prev.json", StringComparison.Ordinal)).OrderBy(f => f, StringComparer.Ordinal)
             .Select(f => JsonSerializer.Deserialize<FormManifest>(File.ReadAllText(f), Json.Options)!).ToList();
         var dupes = Duplicates.Find(all.SelectMany(m => m.Handlers.Select(h => (h.Id, h.Source)).Concat(m.Methods.Where(x => x.Source != null).Select(x => (x.Id, x.Source!)))).DistinctBy(x => x.Item1));
         var modIndex = new ModuleIndex(SchemaVersion, module, Path.GetRelativePath(cfg.BaseDir, project.Path).Replace('\\', '/'),
