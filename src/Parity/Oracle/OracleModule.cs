@@ -157,13 +157,13 @@ public static class OracleModule
         Recording.Export(new ExportRequest(moduleDir, scenario, "replay", new() { capture }, new(), null, null, null, null, null, true, cfg, redactKey, today));
 
     /// <summary><c>parity oracle diff</c>: the replay (a fresh capture when given, else the last replay) against the recording. Never marks anything verified.</summary>
-    public static DiffResult Diff(string moduleDir, string scenario, string? capture, OracleConfig cfg, string? redactKey, DateOnly today)
+    public static DiffResult Diff(string moduleDir, string scenario, string? capture, OracleConfig cfg, string? redactKey, DateOnly today, int maxCallMb = OracleDiff.DefaultMaxCallMb)
     {
         var (recDir, rec) = SealedRecording(moduleDir, scenario);
         var rules = Rules(moduleDir);
         Settings(moduleDir, cfg);
         var (repDir, rep) = capture != null ? Import(moduleDir, scenario, capture, cfg, redactKey, today) : LoadReplay(moduleDir, scenario);
-        return OracleDiff.Compare(recDir, rec, repDir, rep, rules);
+        return OracleDiff.Compare(recDir, rec, repDir, rep, rules, maxCallMb);
     }
 
     /// <summary>The line the standalone report carries, so nobody reads it as a registry diff.</summary>
@@ -176,7 +176,7 @@ public static class OracleModule
     /// the redaction and the masking are the registry diff's; the rules are checked for their schema, not for a decision. Rows are imported
     /// into a temporary folder that is deleted after the comparison: nothing is written, <c>replays/</c> and <c>verified/</c> included.
     /// </summary>
-    public static DiffResult DiffStandalone(string recordingDir, string capture, string? redactKey, DateOnly today)
+    public static DiffResult DiffStandalone(string recordingDir, string capture, string? redactKey, DateOnly today, int maxCallMb = OracleDiff.DefaultMaxCallMb)
     {
         var (recDir, rec) = SealedFolder(recordingDir, "--recording");
         if (rec.Kind != "recording") throw new InvalidOperationException($"{Recording.Rel(recDir)} holds a {rec.Kind}, not a recording; --recording takes the legacy client's sealed recording folder (recordings/<scenario>/)");
@@ -190,14 +190,14 @@ public static class OracleModule
             var (repDir, rep) = SealedFolder(capture, "--capture");
             if (rep.Kind != "replay" || rep.Scenario != rec.Scenario)
                 throw new InvalidOperationException($"{Recording.Rel(repDir)} holds a {rep.Kind} of {rep.Scenario}; --capture takes a replay of {rec.Scenario} (replays/<scenario>/) or the host log rows of one new-client run");
-            return OracleDiff.Compare(recDir, rec, repDir, rep, rules);
+            return OracleDiff.Compare(recDir, rec, repDir, rep, rules, maxCallMb);
         }
         if (!File.Exists(capture)) throw new InvalidOperationException($"--capture {capture} is neither a replay folder nor a file of host log rows");
         var tmp = Path.Combine(Path.GetTempPath(), $"parity-standalone-{Guid.NewGuid():N}");
         try
         {
             var (repDir, rep) = Recording.Export(new ExportRequest(tmp, rec.Scenario, "replay", new() { capture }, new(), null, null, null, null, null, true, cfg, redactKey, today, rec.ScenarioVersion));
-            return OracleDiff.Compare(recDir, rec, repDir, rep, rules);
+            return OracleDiff.Compare(recDir, rec, repDir, rep, rules, maxCallMb);
         }
         finally { if (Directory.Exists(tmp)) Directory.Delete(tmp, true); }
     }
@@ -226,7 +226,7 @@ public static class OracleModule
     /// a failed run or a run that left no capture, imports the capture, diffs it, and only on an empty diff writes the verification
     /// and the scenario's <c>lastVerified</c>. The capture lives in a temporary file and is deleted: only its redacted import stays.
     /// </summary>
-    public static VerifyResult Verify(string moduleDir, string scenario, OracleConfig cfg, IReplayRunner runner, string? redactKey, DateOnly today)
+    public static VerifyResult Verify(string moduleDir, string scenario, OracleConfig cfg, IReplayRunner runner, string? redactKey, DateOnly today, int maxCallMb = OracleDiff.DefaultMaxCallMb)
     {
         var version = ScenarioVersion(moduleDir, scenario);
         var (recDir, rec) = SealedRecording(moduleDir, scenario);
@@ -240,7 +240,7 @@ public static class OracleModule
             if (!File.Exists(capture) || new FileInfo(capture).Length == 0)
                 throw new InvalidOperationException($"the replay command passed but left no capture at $PARITY_CAPTURE; it must write the host log rows of the run there (docs/oracle.md, The replay command)");
             var (repDir, rep) = Import(moduleDir, scenario, capture, cfg, redactKey, today);
-            var diff = OracleDiff.Compare(recDir, rec, repDir, rep, rules);
+            var diff = OracleDiff.Compare(recDir, rec, repDir, rep, rules, maxCallMb);
             var report = OracleDiff.Render(diff, Where(moduleDir));
             if (diff.Differences.Count > 0) return new VerifyResult(false, 1, report + $"\n{scenario}: not verified: {diff.Differences.Count} difference(s)\n");
             var date = today.ToString("yyyy-MM-dd");

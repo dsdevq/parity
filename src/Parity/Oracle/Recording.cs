@@ -133,7 +133,7 @@ public static partial class Recording
                 var request = redactor.Text("request", row.Request);
                 var reply = row.Reply == null ? null : redactor.Text("reply", row.Reply);
                 string? dataset;
-                try { dataset = row.Dataset == null ? null : redactor.DatasetText(row.Dataset); _ = Payload.Tables(dataset); }
+                try { dataset = row.Dataset == null ? null : redactor.DatasetText(row.Dataset); _ = Payload.ParseDataset(dataset); }
                 catch (InvalidOperationException ex) { throw new InvalidOperationException($"row {i} of the selection ({key}): {ex.Message}"); }
                 var error = row.Error == null ? null : redactor.Text("error", row.Error);
                 calls.Add(new RecordedCall(i, row.Category, row.Type, q.Config.Writes.Any(w => Payload.CallMatch(w, key)),

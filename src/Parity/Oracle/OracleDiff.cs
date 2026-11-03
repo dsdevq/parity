@@ -4,8 +4,9 @@ namespace Parity.Oracle;
 
 /// <summary>
 /// One difference between the legacy client's recorded calls and the new client's replayed ones. Part is <c>call</c> (a call made
-/// by one side only), <c>order</c>, <c>request</c>, <c>reply</c>, <c>dataset</c> or <c>error</c>; Kind is <c>missing</c> (the
-/// legacy side has it, the new side does not), <c>extra</c>, <c>changed</c> or <c>reordered</c>. Fields counts the leaves under a
+/// by one side only, or a pair too large to compare), <c>order</c>, <c>request</c>, <c>reply</c>, <c>dataset</c> or <c>error</c>; Kind
+/// is <c>missing</c> (the legacy side has it, the new side does not), <c>extra</c>, <c>changed</c>, <c>reordered</c> or
+/// <c>not-compared</c> (the pair is over the per-call size limit). Fields counts the leaves under a
 /// missing or extra block; Detail carries what the line needs besides the values.
 /// </summary>
 public sealed record Difference(string Part, string Kind, int? LegacySeq, int? NewSeq, string Call, string? Path, string? Legacy, string? New, int Fields, string? Detail);
@@ -16,11 +17,14 @@ public sealed record DiffResult(string Scenario, RecordingFile Legacy, Recording
 /// The comparison: calls are paired by Category/Type and order within it (an alignment per call key, so a skipped call does not
 /// shift every pair after it); reads may come in any order between two writes, and nothing may cross a write. A pair is compared
 /// on its request and reply fields, its error, and its dataset restricted to the tables the new client's reply holds, all after
-/// normalization.
+/// normalization. A pair whose payload on either side is over the per-call size limit is not compared and is one difference.
 /// </summary>
 public static class OracleDiff
 {
     private const int Skip = 1_000_000;
+
+    /// <summary>The default per-call limit in MB (<c>--max-call-mb</c>): the request, reply and dataset files of one side of one call.</summary>
+    public const int DefaultMaxCallMb = 64;
 
     private sealed class Side
     {
@@ -30,10 +34,24 @@ public static class OracleDiff
         public string Request(RecordedCall c) => _requests.TryGetValue(c.Seq, out var t) ? t : _requests[c.Seq] = Recording.Read(Dir, c.Request);
         public string? Reply(RecordedCall c) => c.Reply == null ? null : Recording.Read(Dir, c.Reply);
         public string? Dataset(RecordedCall c) => c.Dataset == null ? null : Recording.Read(Dir, c.Dataset);
+
+        /// <summary>The size of the call's files on disk, in bytes, and the largest part with its size.</summary>
+        public (long Total, string Part, long Size) Size(RecordedCall c)
+        {
+            var parts = new[] { ("request", c.Request), ("reply", c.Reply), ("dataset", c.Dataset) }
+                .Select(p => (p.Item1, p.Item2 == null ? 0L : new FileInfo(Path.Combine(Dir, p.Item2)).Length)).ToList();
+            var max = parts.MaxBy(p => p.Item2);
+            return (parts.Sum(p => p.Item2), max.Item1, max.Item2);
+        }
     }
 
-    public static DiffResult Compare(string recordingDir, RecordingFile legacy, string replayDir, RecordingFile replay, NormSet rules)
+    /// <summary>
+    /// The diff of a replay against a recording. <paramref name="maxCallMb"/> bounds one side of one call (request, reply and dataset
+    /// files together); a pair over it is reported as not compared, never skipped silently. 0 is no limit.
+    /// </summary>
+    public static DiffResult Compare(string recordingDir, RecordingFile legacy, string replayDir, RecordingFile replay, NormSet rules, int maxCallMb = DefaultMaxCallMb)
     {
+        if (maxCallMb < 0) throw new ArgumentException($"--max-call-mb must be 0 (no limit) or more, got {maxCallMb}");
         var L = new Side { Dir = recordingDir, File = legacy };
         var N = new Side { Dir = replayDir, File = replay };
         var scn = legacy.Scenario;
@@ -78,38 +96,75 @@ public static class OracleDiff
         var notCompared = new List<string>();
         foreach (var (l, n) in pairs)
         {
+            if (TooLarge(L, l, N, n, maxCallMb) is { } over) { diffs.Add(over); continue; }
             diffs.AddRange(FieldDiff(Req(L, l), Req(N, n), "request", l, n));
             diffs.AddRange(FieldDiff(Rep(L, l), Rep(N, n), "reply", l, n));
             var le = l.Error == null ? null : M("error", l, "error", l.Error);
             var ne = n.Error == null ? null : M("error", n, "error", n.Error);
             if (!string.Equals(le?.Trim(), ne?.Trim(), StringComparison.Ordinal))
                 diffs.Add(new Difference("error", "changed", l.Seq, n.Seq, l.Key, "error", le ?? "(no error)", ne ?? "(no error)", 0, null));
-            var lt = Payload.Tables(L.Dataset(l), (p, v) => M("dataset", l, p, v));
-            var nt = Payload.Tables(N.Dataset(n), (p, v) => M("dataset", n, p, v));
-            if (lt is { Count: > 0 } && nt is not { Count: > 0 })
-                diffs.Add(new Difference("dataset", "missing", l.Seq, n.Seq, l.Key, null, $"tables {string.Join(", ", lt.Select(t => t.Name))}", null, 0,
-                    "the legacy client's reply holds a dataset; the new client's capture holds none, so nothing was compared"));
-            else if (lt != null)
-            {
-                var asked = nt?.Select(t => t.Name).ToHashSet(StringComparer.Ordinal) ?? new HashSet<string>();
-                var skipped = lt.Where(t => !asked.Contains(t.Name)).Select(t => t.Name).ToList();
-                if (skipped.Count > 0) notCompared.Add($"#{l.Seq} {l.Key}: {string.Join(", ", skipped)}");
-            }
-            foreach (var t in nt ?? new())
-            {
-                var lTable = lt?.FirstOrDefault(x => x.Name == t.Name);
-                if (lTable == null)
-                {
-                    diffs.Add(new Difference("dataset", "extra", l.Seq, n.Seq, l.Key, t.Name, null, $"{t.Rows.Count} row(s)", 0, "the new client's reply holds this table; the legacy client's reply does not"));
-                    continue;
-                }
-                diffs.AddRange(TableDiff(lTable, t, l, n));
-            }
+            diffs.AddRange(DatasetDiff(L.Dataset(l), N.Dataset(n), l, n, (side, p, v) => M("dataset", side, p, v), notCompared));
         }
 
         var order = new Dictionary<string, int>(StringComparer.Ordinal) { ["call"] = 0, ["order"] = 1, ["request"] = 2, ["reply"] = 3, ["error"] = 4, ["dataset"] = 5 };
         diffs = diffs.OrderBy(d => d.LegacySeq ?? int.MaxValue).ThenBy(d => d.NewSeq ?? 0).ThenBy(d => order[d.Part]).ThenBy(d => d.Path, StringComparer.Ordinal).ToList();
         return new DiffResult(scn, legacy, replay, rules, diffs, notCompared);
+    }
+
+    /// <summary>The not-compared difference for a pair whose payload on either side is over the limit; null when both fit.</summary>
+    private static Difference? TooLarge(Side L, RecordedCall l, Side N, RecordedCall n, int maxCallMb)
+    {
+        if (maxCallMb == 0) return null;
+        var limit = maxCallMb * 1024L * 1024L;
+        var (ls, ns) = (L.Size(l), N.Size(n));
+        if (ls.Total <= limit && ns.Total <= limit) return null;
+        static string Mb(long bytes) => $"{bytes / 1024.0 / 1024.0:0.0} MB";
+        static string Of((long Total, string Part, long Size) s) => $"{Mb(s.Total)} (largest part: {s.Part}, {Mb(s.Size)})";
+        return new Difference("call", "not-compared", l.Seq, n.Seq, l.Key, null, Of(ls), Of(ns), 0,
+            $"this call is over the per-call limit of {maxCallMb} MB on the {(ls.Total > limit && ns.Total > limit ? "legacy and the new" : ls.Total > limit ? "legacy" : "new")} side, " +
+            "so none of its request, reply, error or dataset was compared; raise the limit with --max-call-mb <n> (0 for none) to compare it");
+    }
+
+    /// <summary>
+    /// The dataset of a pair: tables by name, nested tables (<see cref="Payload.Groups"/>, both sides' groups together) with their
+    /// top-level table. Only the top-level tables the new client's reply holds are compared, with every table nested in them; the
+    /// legacy reply's other top-level tables are listed as not compared.
+    /// </summary>
+    private static IEnumerable<Difference> DatasetDiff(string? legacyText, string? newText, RecordedCall l, RecordedCall n, Func<RecordedCall, string, string, string> mask, List<string> notCompared)
+    {
+        var lds = Payload.ParseDataset(legacyText);
+        var nds = Payload.ParseDataset(newText);
+        var groups = Payload.Groups(lds);
+        groups.UnionWith(Payload.Groups(nds));
+        var lt = lds == null ? null : Payload.Tables(lds, groups, (p, v) => mask(l, p, v));
+        var nt = nds == null ? null : Payload.Tables(nds, groups, (p, v) => mask(n, p, v));
+        if (lt is { Count: > 0 } && nt is not { Count: > 0 })
+        {
+            yield return new Difference("dataset", "missing", l.Seq, n.Seq, l.Key, null, $"tables {string.Join(", ", lt.Select(t => t.Top).Distinct())}", null, 0,
+                "the legacy client's reply holds a dataset; the new client's capture holds none, so nothing was compared");
+            yield break;
+        }
+        if (nt == null) yield break;
+        var lByName = (lt ?? new()).ToDictionary(t => t.Name, StringComparer.Ordinal);
+        var nByName = nt.ToDictionary(t => t.Name, StringComparer.Ordinal);
+        var asked = nt.Select(t => t.Top).ToHashSet(StringComparer.Ordinal);
+        if (lt != null)
+        {
+            var skipped = lt.Select(t => t.Top).Distinct().Where(t => !asked.Contains(t)).ToList();
+            if (skipped.Count > 0) notCompared.Add($"#{l.Seq} {l.Key}: {string.Join(", ", skipped)}");
+        }
+        foreach (var t in nt)
+        {
+            if (lByName.TryGetValue(t.Name, out var lTable)) { foreach (var d in TableDiff(lTable, t, l, n)) yield return d; }
+            else if (t.Name == t.Top)
+                yield return new Difference("dataset", "extra", l.Seq, n.Seq, l.Key, t.Name, null, $"{t.Rows.Count} row(s)", 0, "the new client's reply holds this table; the legacy client's reply does not");
+            else if (lByName.ContainsKey(t.Top))
+                foreach (var d in TableDiff(new DataTable(t.Name, new(), new()), t, l, n)) yield return d;
+            // else the top-level table is extra as a whole, which says it
+        }
+        foreach (var t in lt ?? new())
+            if (t.Name != t.Top && asked.Contains(t.Top) && !nByName.ContainsKey(t.Name) && nByName.ContainsKey(t.Top))
+                foreach (var d in TableDiff(t, new DataTable(t.Name, new(), new()), l, n)) yield return d;
     }
 
     /// <summary>
@@ -158,17 +213,15 @@ public static class OracleDiff
     private static IEnumerable<Difference> Blocks(FlatPayload has, FlatPayload lacks, string kind, string part, RecordedCall lc, RecordedCall nc)
     {
         var groups = new List<(string Root, List<string> Leaves)>();
+        var byRoot = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var p in has.Order.Where(p => !lacks.Leaves.ContainsKey(p)))
         {
+            // the shortest prefix the other side lacks
             var root = p;
-            var segs = p.Split('/');
-            for (var k = 1; k <= segs.Length; k++)
-            {
-                var prefix = string.Join('/', segs[..k]);
-                if (!lacks.Nodes.Contains(prefix)) { root = prefix; break; }
-            }
-            var g = groups.FirstOrDefault(x => x.Root == root);
-            if (g.Root == null) groups.Add((root, new List<string> { p })); else g.Leaves.Add(p);
+            for (var k = p.IndexOf('/'); k >= 0; k = p.IndexOf('/', k + 1))
+                if (!lacks.Nodes.Contains(p[..k])) { root = p[..k]; break; }
+            if (byRoot.TryGetValue(root, out var leaves)) leaves.Add(p);
+            else groups.Add((root, byRoot[root] = new List<string> { p }));
         }
         foreach (var (root, leaves) in groups)
         {
@@ -178,25 +231,37 @@ public static class OracleDiff
         }
     }
 
-    /// <summary>A table: row count, then per column one difference saying in how many rows it differs and the first such row.</summary>
+    /// <summary>
+    /// A table: row count, then per column one difference saying in how many rows it differs and the first such row (by where it
+    /// sits in the legacy reply). Linear in the cells: columns are sets, and each row is read once.
+    /// </summary>
     private static IEnumerable<Difference> TableDiff(DataTable l, DataTable n, RecordedCall lc, RecordedCall nc)
     {
         if (l.Rows.Count != n.Rows.Count)
             yield return new Difference("dataset", "changed", lc.Seq, nc.Seq, lc.Key, $"{l.Name} rows", l.Rows.Count.ToString(), n.Rows.Count.ToString(), 0, null);
         var lCols = l.Rows.SelectMany(r => r.Keys).Distinct(StringComparer.Ordinal).ToList();
         var nCols = n.Rows.SelectMany(r => r.Keys).Distinct(StringComparer.Ordinal).ToList();
-        foreach (var c in lCols.Where(c => !nCols.Contains(c)))
+        var lSet = lCols.ToHashSet(StringComparer.Ordinal);
+        var nSet = nCols.ToHashSet(StringComparer.Ordinal);
+        foreach (var c in lCols.Where(c => !nSet.Contains(c)))
             if (n.Rows.Count > 0) yield return new Difference("dataset", "missing", lc.Seq, nc.Seq, lc.Key, $"{l.Name}/{c}", "a column of the legacy reply", null, 0, "the new client's reply has this table without the column");
-        foreach (var c in nCols.Where(c => !lCols.Contains(c)))
+        foreach (var c in nCols.Where(c => !lSet.Contains(c)))
             if (l.Rows.Count > 0) yield return new Difference("dataset", "extra", lc.Seq, nc.Seq, lc.Key, $"{l.Name}/{c}", null, "a column of the new reply", 0, "the legacy client's reply has this table without the column");
         var rows = Math.Min(l.Rows.Count, n.Rows.Count);
-        foreach (var c in lCols.Where(nCols.Contains))
+        var differing = new Dictionary<string, (int Count, int First)>(StringComparer.Ordinal);
+        void Differs(string c, int i) => differing[c] = differing.TryGetValue(c, out var d) ? (d.Count + 1, d.First) : (1, i);
+        for (var i = 0; i < rows; i++)
         {
-            var differing = Enumerable.Range(0, rows).Where(i => l.Rows[i].GetValueOrDefault(c) != n.Rows[i].GetValueOrDefault(c)).ToList();
-            if (differing.Count == 0) continue;
-            var first = differing[0];
-            yield return new Difference("dataset", "changed", lc.Seq, nc.Seq, lc.Key, $"{l.Name}[{first + 1}]/{c}", l.Rows[first].GetValueOrDefault(c) ?? "(absent)", n.Rows[first].GetValueOrDefault(c) ?? "(absent)", 0,
-                differing.Count > 1 ? $"differs in {differing.Count} of {rows} rows; the first is shown" : null);
+            foreach (var (c, v) in l.Rows[i])
+                if (nSet.Contains(c) && (!n.Rows[i].TryGetValue(c, out var nv) || nv != v)) Differs(c, i);
+            foreach (var c in n.Rows[i].Keys)
+                if (lSet.Contains(c) && !l.Rows[i].ContainsKey(c)) Differs(c, i);
+        }
+        foreach (var c in lCols)
+        {
+            if (!differing.TryGetValue(c, out var d)) continue;
+            yield return new Difference("dataset", "changed", lc.Seq, nc.Seq, lc.Key, $"{l.At[d.First]}/{c}", l.Rows[d.First].GetValueOrDefault(c) ?? "(absent)", n.Rows[d.First].GetValueOrDefault(c) ?? "(absent)", 0,
+                d.Count > 1 ? $"differs in {d.Count} of {rows} rows; the first is shown" : null);
         }
     }
 
@@ -229,6 +294,7 @@ public static class OracleDiff
             {
                 ("call", "missing") => "missing call",
                 ("call", "extra") => "extra call",
+                ("call", "not-compared") => "call not compared",
                 ("order", _) => "call order",
                 ("dataset", "missing") when d.Path == null => "dataset missing",
                 (_, "missing") when d.Fields > 0 => $"{d.Part} block missing",
@@ -242,6 +308,7 @@ public static class OracleDiff
             if (d.Kind == "missing" && d.Part != "call" && d.Legacy != null) sb.Append($"   legacy: {d.Legacy}\n   new: (absent)\n");
             else if (d.Kind == "extra" && d.Part != "call" && d.New != null) sb.Append($"   legacy: (absent)\n   new: {d.New}\n");
             else if (d.Kind == "changed") sb.Append($"   legacy: \"{d.Legacy}\"\n   new: \"{d.New}\"\n");
+            else if (d.Kind == "not-compared") sb.Append($"   legacy: {d.Legacy}\n   new: {d.New}\n");
             if (where == null) continue;
             var callers = where(d.Call);
             sb.Append(callers.Count > 0

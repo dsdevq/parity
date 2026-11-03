@@ -142,7 +142,12 @@ A request or reply is flattened to leaves:
   single element on one side pairs with the first of several on the other; an attribute is `@name`; namespaces are dropped.
 - JSON: `a/b/c`; every array element is indexed (`items[1]/id`).
 - Anything else: one leaf, `(body)`.
-- A dataset: `Table/Column` per row.
+- A dataset: `Table/Column` per row. In an XML dataset, a same-name sibling group that repeats below a row (`Items`
+  holding thousands of `Item`) is a nested table of its own, named by its element path with the indexes removed
+  (`Policy/Items/Item`); its rows are taken out of the row they sit in, wherever they sit, and a row element with no
+  child element has its text as the column `(text)`. A flat `DataSet.WriteXml` has no such group, so its tables are
+  the root's children, as before. A JSON dataset is tables of row objects by format and has no nested tables.
+  Redaction and normalization globs see the same paths either way (`Policy/Items/Item/Code`).
 
 A glob (in `redact`, `normalization.json`) matches the path with its indexes removed: `*` is any run of characters
 inside one segment, `**` any number of segments (`**/SessionId` matches `GetPolicy/SessionId` and
@@ -151,12 +156,15 @@ inside one segment, `**` any number of segments (`**/SessionId` matches `GetPoli
 ## Replay and diff
 
 ```sh
-parity oracle diff legacy/<Module> scn:<id> [--capture <rows.jsonl>]
+parity oracle diff legacy/<Module> scn:<id> [--capture <rows.jsonl>] [--max-call-mb <n>]
 ```
 
 `--capture` takes the host log rows of one new-client run (all of them: the replay command's output is one run),
 imports them into `replays/<slug>/` through the same redaction as a recording, and diffs. Without it, the last
-replay is diffed. Exit 0 when there is no difference, 1 when there is, 3 when the diff is refused (a broken seal,
+replay is diffed. `--max-call-mb` (default 64, `0` for no limit) bounds one side of one call: its request,
+reply and dataset files together. A pair over it on either side is not compared and is one `call not compared`
+difference that names the call, both sizes, the limit and the flag, so the diff never hangs on a payload nobody sized
+and never passes over one in silence. Exit 0 when there is no difference, 1 when there is, 3 when the diff is refused (a broken seal,
 a rule without a decision, a scenario the registry lacks, a recording made at another version of the scenario). It never marks anything verified.
 
 **Standalone.** `parity oracle diff --recording <recordings/<slug>/> --capture <replays/<slug>/ | rows.jsonl>` runs the same
@@ -170,6 +178,7 @@ diff with no registry read and nothing written:
   or a settings file that is not valid is refused; the decision behind each is not checked, since that needs `decisions.json`.
 - The scenario's version is not checked (it needs `scenarios.json`), and the report has no "legacy client" line (it needs
   `dependencies.json`). Its third line says so: `standalone diff: no registry read, ...`.
+- `--max-call-mb` bounds a call as above.
 - Exit codes are the registry diff's: 0 no difference, 1 a difference, 3 refused. It never marks anything verified: only `verify`,
   which needs the registry and every decision, does.
 
@@ -182,11 +191,11 @@ call that changes sides of a paired write is a `call order` difference.
 
 | Level | Difference |
 |---|---|
-| call | a call only the legacy client makes (`missing call`) or only the new one makes (`extra call`) |
+| call | a call only the legacy client makes (`missing call`) or only the new one makes (`extra call`); a pair over the per-call limit (`call not compared`) |
 | order | a call made before a write by one client and after it by the other |
 | request, reply | a changed value (`request differs`), or a missing or extra field. Leaves missing under a node the other side lacks are one `block missing` with the field count, not one line per field |
 | error | the logged error text differs |
-| dataset | only the tables the new client's reply holds, because the table filter travels in a header the log does not keep: a table only the new reply has, a row count, a missing or extra column, and per column the number of rows that differ with the first one shown. Legacy tables the new client does not ask for are listed under "not compared" and kept in the verification. A capture whose reply holds no dataset (or no table) where the recording has one is a `dataset missing` difference: nothing was compared |
+| dataset | only the tables the new client's reply holds, because the table filter travels in a header the log does not keep: a table only the new reply has, a row count, a missing or extra column, and per column the number of rows that differ with the first one shown (by where it sits, `Policy[1]/Items[2]/Item[17]/Code`). A nested table is compared with its top-level table, and a group that repeats on either side is a table on both; one the new reply lacks under a top-level table it holds is a row count to 0. Legacy top-level tables the new client does not ask for are listed under "not compared" and kept in the verification. A capture whose reply holds no dataset (or no table) where the recording has one is a `dataset missing` difference: nothing was compared |
 
 **The report** reads without domain knowledge: a summary line (`scn:x: 6 recorded call(s), 5 replayed, 3
 difference(s)`), the recording's provenance and the rules applied (with how many values each masked), then one
@@ -238,7 +247,7 @@ empty file needs no decision. `extract.config.json` no longer holds an `oracle` 
 ## Verify
 
 ```sh
-parity oracle verify legacy/<Module> scn:<id>
+parity oracle verify legacy/<Module> scn:<id> [--max-call-mb <n>]
 ```
 
 1. Runs `replay` from `recordings/oracle.json` with `sh -c` (Git Bash's `sh` on Windows, as the hooks),
@@ -253,7 +262,8 @@ parity oracle verify legacy/<Module> scn:<id>
    value in place so the file keeps its layout.
 
 Exit 0 verified, 1 not verified (red tests or a difference), 3 refused. Verify reads its command from the settings
-file only: there is no flag to run something else.
+file only: there is no flag to run something else. `--max-call-mb` is the diff's limit (above); a call over it is a
+difference, so it can only keep a scenario from being verified, never verify one.
 
 ## Guard rails
 
@@ -321,10 +331,35 @@ whether it shows the reply the way the legacy client does is still the spec's to
    registry is documented above, and the standalone diff covers the case that needs no registry at all. Revisit when an adopter
    writes the same minimal registry by hand twice.
 
+## Design decisions (issue 38: a large nested dataset)
+
+The diff ran for minutes on a 5.5 MB dataset of 128,849 elements (a wrapper root, `Items` nodes holding thousands of
+same-name siblings): every root child was one row whose columns were all the leaf paths below it, about 100,000,
+each looked up in a list of the other side's columns, and each element's index was found by rescanning its
+siblings. Both are linear now: a sibling group is indexed in one pass, a table's columns are sets and each row is
+read once. A generated dataset of that shape (`Issue38Tests`) diffs in about 2 s, and 7 MB in about 5 s.
+
+- **`dec:oracle-nested-dataset-tables`.** Q: should a nested dataset be compared per `Table/Column`, as designed, or
+  as a path tree? A: per `Table/Column`, extended: each same-name sibling group that repeats is a table keyed by its
+  element path with the indexes removed. The tables model is what the report and "not compared" are built on, and a
+  path tree of a reply with thousands of rows reports every shifted row as its own changed field; tables keep it to
+  a row count and one line per column. The key has no indexes, so groups under different parents (`Items[1]/Item`,
+  `Items[2]/Item`) are one table in document order, as a `DataSet` nested relation is; the report still names the
+  first differing row by its exact element. Repetition is decided on both sides together: a group with one row on
+  one side and several on the other would otherwise be columns on one side and a table on the other. A flat
+  `WriteXml` has no repeating group below a row, so its comparison is unchanged.
+- **`dec:oracle-per-call-size-limit`.** Q: a per-call time limit or a size limit? A: size, `--max-call-mb`, default
+  64 (more than ten times the reported reply, which now diffs in seconds). A time limit makes the result depend on
+  the machine: the same recording and capture could verify on one runner and not on a slower one. A size limit is
+  the same everywhere, is read from the file sizes before the call's content is parsed, and with the diff linear it
+  bounds the time. A call over it is a difference (exit 1) with the flag in its message, never a skip.
+
 ## Known limits
 
 - One request or reply format per call: XML, JSON or text. Text is compared whole.
 - XML namespaces are dropped from paths; two elements that differ only by namespace collide.
+- A nested table's rows are paired by position, as a top-level table's are: one row removed early in a group of
+  thousands shifts the rest, and each column reports how many rows differ with the first one shown.
 - The phase model: the fix step of the loop runs in `implement`, where the guard refuses code-graph MCP tools. The
   report's "legacy client" line (svc id, handler and arguments from the manifest) is what the agent has there; a
   field the manifest does not explain is a question for the map phase, not a code-graph lookup.
