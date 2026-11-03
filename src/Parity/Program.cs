@@ -30,9 +30,10 @@ parity - reverse-engineer a legacy WinForms module into a citable manifest and g
   parity oracle export <module-dir> <scn:id> --log <rows.jsonl>[,...] (--session <id>[,...] | --from <time> [--to <time>])
                   --recorded-by <name> [--environment <env>] [--legacy-build <build>] [--replace]
                                                        record phase: one scenario's host log rows into recordings/<scenario>/, redacted and sealed
-  parity oracle diff   <module-dir> <scn:id> [--capture <rows.jsonl>] [--max-call-mb <n>]
-                                                       the new client's calls (a capture, else the last replay) against the recording; exit 1 on a difference
-  parity oracle diff   --recording <recording-dir> --capture <replay-dir|rows.jsonl> [--max-call-mb <n>]
+  parity oracle diff   <module-dir> <scn:id> [--capture <rows.jsonl>] [--max-call-mb <n>] [--json]
+                                                       the new client's calls (a capture, else the last replay) against the recording; exit 1 on a difference;
+                                                       --json prints the result per call instead of the report
+  parity oracle diff   --recording <recording-dir> --capture <replay-dir|rows.jsonl> [--max-call-mb <n>] [--json]
                                                        the same diff with no registry read and nothing written; never marks anything verified
   parity oracle verify <module-dir> <scn:id> [--max-call-mb <n>]
                                                        run replay from recordings/oracle.json (the scenario's tests), diff its capture; only a green run with no difference sets lastVerified;
@@ -182,7 +183,7 @@ try
                 var recording = Opt(opts, "recording") is { Length: > 0 } rd ? rd : throw new ArgumentException("oracle diff --recording needs the recording folder (recordings/<scenario>/)");
                 var capture = Opt(opts, "capture") is { Length: > 0 } cd ? cd : throw new ArgumentException("oracle diff --recording needs --capture <replay-dir|rows.jsonl>");
                 var r = OracleModule.DiffStandalone(recording, capture, key, today, maxCallMb);
-                Console.Write(OracleDiff.Render(r, null, OracleModule.StandaloneNote));
+                Console.Write(opts.ContainsKey("json") ? OracleDiff.RenderJson(r) : OracleDiff.Render(r, null, OracleModule.StandaloneNote));
                 return r.Differences.Count == 0 ? 0 : 1;
             }
             var dir = Positional(opts, 1) ?? throw new ArgumentException($"oracle {sub} needs <module-dir> (legacy/<Module>)");
@@ -205,7 +206,7 @@ try
                 case "diff":
                 {
                     var r = OracleModule.Diff(dir, scn, Opt(opts, "capture"), oracle, key, today, maxCallMb);
-                    Console.Write(OracleDiff.Render(r, OracleModule.Where(dir)));
+                    Console.Write(opts.ContainsKey("json") ? OracleDiff.RenderJson(r) : OracleDiff.Render(r, OracleModule.Where(dir)));
                     return r.Differences.Count == 0 ? 0 : 1;
                 }
                 case "verify":
@@ -245,7 +246,7 @@ static Dictionary<string, string> ParseOpts(string[] a)
         if (a[i].StartsWith("--", StringComparison.Ordinal))
         {
             var k = a[i][2..];
-            if (i + 1 < a.Length && !a[i + 1].StartsWith("--", StringComparison.Ordinal)) d[k] = a[++i]; else d[k] = "";
+            if (k != "json" && i + 1 < a.Length && !a[i + 1].StartsWith("--", StringComparison.Ordinal)) d[k] = a[++i]; else d[k] = "";   // --json takes no value: a positional may follow it
         }
         else d[$"#{pos++}"] = a[i];
     }

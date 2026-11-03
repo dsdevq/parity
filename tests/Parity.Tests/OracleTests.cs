@@ -414,6 +414,96 @@ public sealed class OracleTests
     }
 
     [Fact]
+    public void issue_40_diff_json_prints_every_call_with_its_capture_pairing_and_differences_after_redaction_and_normalization()
+    {
+        var dir = Module("40");
+        var legacyDir = Path.GetDirectoryName(dir)!;
+        var scratch = Path.Combine(_f.OutRoot, "copies", "40", "scratch");
+        Directory.CreateDirectory(scratch);
+        var (log, session) = RecordLegacy(scratch);
+        WriteSettings(dir, Config());                                                                          // redacts **/User and Policy/Holder
+        var env = new Dictionary<string, string?> { ["PARITY_REDACT_KEY"] = Key };
+        Phase(dir, "record");
+        var export = Run(legacyDir, env, "oracle", "export", "PolicyWizard", Scn, "--log", log, "--session", session, "--recorded-by", "alex");
+        Assert.True(export.Code == 0, export.Err);
+        Phase(dir, "implement");
+
+        // the seeded new client, run by another user at another workstation, with one call the legacy client never makes and an
+        // error the legacy client never got
+        var seeded = Capture(Path.Combine(scratch, "seeded.jsonl"), _ => { });
+        var rows = File.ReadAllLines(seeded).Where(l => l.Length > 0).Select(l => System.Text.Json.Nodes.JsonNode.Parse(l)!.AsObject()).ToList();
+        var login = rows.Single(r => (string?)r["type"] == "Login");
+        login["request"] = ((string)login["request"]!).Replace("agent1", "agent2").Replace("WS-01", "XS-01");
+        rows.Single(r => (string?)r["type"] == "GetPolicyRiders")["error"] = "host timeout";
+        rows.Add(new System.Text.Json.Nodes.JsonObject { ["time"] = "2026-11-03T10:00:00Z", ["category"] = "Audit", ["type"] = "Ping", ["request"] = "<Ping><Channel>desk</Channel></Ping>" });
+        File.WriteAllText(seeded, string.Join("\n", rows.Select(r => r.ToJsonString())) + "\n");
+
+        // a refused diff (a rule nobody decided) is exit 3 with nothing on stdout, so a consumer never reads a partial result
+        File.WriteAllText(Normalization.PathOf(dir), """
+        { "version": 2, "rules": [
+          { "id": "norm:session-id", "decision": "dec:summary-needs-a-beneficiary", "scope": "global", "target": "any", "field": "**/SessionId" },
+          { "id": "norm:workstation-number", "decision": "dec:summary-needs-a-beneficiary", "scope": "call:Auth/*", "target": "request", "field": "Login/Workstation", "match": "[0-9]+$" }
+        ] }
+        """);
+        var refused = Run(legacyDir, env, "oracle", "diff", "PolicyWizard", Scn, "--capture", seeded, "--json");
+        Assert.Equal(3, refused.Code);
+        Assert.Equal("", refused.Out);
+        var decisions = Path.Combine(dir, "registry", "decisions.json");
+        File.WriteAllText(decisions, File.ReadAllText(decisions).Replace("\"cite\": [\"handler:CoverSummaryForm/btnConfirm_Click\"]",
+            "\"cite\": [\"handler:CoverSummaryForm/btnConfirm_Click\", \"norm:session-id\", \"norm:workstation-number\"]"));
+
+        // with differences: exit 1, stdout is the JSON alone (it parses whole), every recorded call in recorded order with the capture
+        // call it paired with (or null), then the capture call nothing pairs with
+        var diff = Run(legacyDir, env, "oracle", "diff", "PolicyWizard", Scn, "--capture", seeded, "--json");
+        Assert.True(diff.Code == 1, diff.Out + diff.Err);
+        var root = JsonDocument.Parse(diff.Out).RootElement;
+        string S(JsonElement e, string name) => e.GetProperty(name) is var v && v.ValueKind == JsonValueKind.Null ? "null" : v.ValueKind == JsonValueKind.Number ? v.GetInt32().ToString() : v.GetString()!;
+        Assert.Equal(OracleDiff.JsonSchema, root.GetProperty("schema").GetInt32());
+        Assert.Equal("scn:rider-added 6 6 7", $"{S(root, "scenario")} {S(root, "recordedCalls")} {S(root, "replayedCalls")} {S(root, "differences")}");
+        var calls = root.GetProperty("calls").EnumerateArray().Select(c =>
+            $"{S(c, "recordedSeq")} {S(c, "captureSeq")} {S(c, "call")} [{string.Join(", ", c.GetProperty("notCompared").EnumerateArray().Select(x => x.GetString()))}]"
+            + string.Concat(c.GetProperty("differences").EnumerateArray().Select(d => $" | {S(d, "level")} {S(d, "kind")} {S(d, "path")}: {S(d, "legacy")} -> {S(d, "new")}")));
+        Assert.Equal(new[]
+        {
+            "1 1 Auth/Login [] | request changed Login/User: redacted:* -> redacted:* | request changed Login/Workstation: WS-<norm:workstation-number> -> XS-<norm:workstation-number>",
+            "2 3 Policy/GetPolicy [Audit]",
+            "3 2 Product/GetRiders []",
+            "4 null Product/GetLimits [] | call missing null: null -> null",
+            "5 4 Policy/SaveRider [] | request block missing SaveRider/Audit: SaveRider/Audit/Reason = \"client request\"; SaveRider/Audit/Channel = \"desk\" -> null | request changed SaveRider/Rider/EffectiveDate: 2024-01-01 -> 2026-11-03",
+            "6 5 Policy/GetPolicyRiders [] | error changed error: null -> host timeout",
+            "null 6 Audit/Ping [] | call extra null: null -> null",
+        }, calls.Select(c => System.Text.RegularExpressions.Regex.Replace(c, "redacted:[0-9a-f]{8}", "redacted:*")));
+        Assert.Equal(7, root.GetProperty("calls").EnumerateArray().Sum(c => c.GetProperty("differences").GetArrayLength()));    // every difference sits under one call
+        var user = root.GetProperty("calls")[0].GetProperty("differences")[0];
+        Assert.NotEqual(S(user, "legacy"), S(user, "new"));                                                    // two users, two pseudonyms
+        var block = root.GetProperty("calls")[4].GetProperty("differences")[0];
+        Assert.Equal(new[] { "SaveRider/Audit/Reason=client request", "SaveRider/Audit/Channel=desk" }, block.GetProperty("leaves").EnumerateArray().Select(l => $"{S(l, "path")}={S(l, "value")}"));
+        Assert.Equal(0, root.GetProperty("calls")[4].GetProperty("differences")[1].GetProperty("leaves").GetArrayLength());
+        Assert.Contains("the legacy client makes this call; the new client never does", S(root.GetProperty("calls")[3].GetProperty("differences")[0], "detail"));
+        foreach (var raw in new[] { "agent1", "agent2", "WS-01", "XS-01", "Ada Lovelace", "S-0" }) Assert.DoesNotContain(raw, diff.Out);    // redacted and normalized as the report
+        Assert.Equal("2 2 10", $"{S(root.GetProperty("rules"), "version")} {root.GetProperty("rules").GetProperty("masked").GetProperty("norm:workstation-number").GetInt32()} {root.GetProperty("rules").GetProperty("masked").GetProperty("norm:session-id").GetInt32()}");
+        Assert.Equal(Recording.Load(Recording.RecordingDir(dir, Scn)).Seal, S(root.GetProperty("recording"), "seal"));
+        Assert.Equal(Recording.Load(Recording.ReplayDir(dir, Scn)).Seal, S(root.GetProperty("replay"), "seal"));
+
+        // the text report of the same replay is unchanged: one field's values quoted, a block's leaves, an absent error
+        var report = Run(legacyDir, env, "oracle", "diff", "PolicyWizard", Scn);
+        Assert.Equal(1, report.Code);
+        Assert.StartsWith("scn:rider-added: 6 recorded call(s), 6 replayed, 7 difference(s)\n", report.Out);
+        Assert.Contains("legacy: \"WS-<norm:workstation-number>\"\n   new: \"XS-<norm:workstation-number>\"", report.Out);
+        Assert.Contains("legacy: SaveRider/Audit/Reason = \"client request\"; SaveRider/Audit/Channel = \"desk\"\n   new: (absent)", report.Out);
+        Assert.Contains("legacy: \"(no error)\"\n   new: \"host timeout\"", report.Out);
+
+        // after the fixes: exit 0, and every call is listed, each paired, with no difference (a consumer sets "none", not only "open");
+        // --json may come before the positionals
+        var fixedRun = Capture(Path.Combine(scratch, "fixed.jsonl"), c => { c.SkipsLimits = false; c.OmitsAudit = false; c.DatesFromClock = false; });
+        var clean = Run(legacyDir, env, "oracle", "diff", "--json", "PolicyWizard", Scn, "--capture", fixedRun);
+        Assert.True(clean.Code == 0, clean.Out + clean.Err);
+        var cleanCalls = JsonDocument.Parse(clean.Out).RootElement.GetProperty("calls").EnumerateArray().ToList();
+        Assert.Equal(new[] { "1 1", "2 3", "3 2", "4 4", "5 5", "6 6" }, cleanCalls.Select(c => $"{S(c, "recordedSeq")} {S(c, "captureSeq")}"));
+        Assert.All(cleanCalls, c => Assert.Equal(0, c.GetProperty("differences").GetArrayLength()));
+    }
+
+    [Fact]
     public void issue_36_reads_reorder_between_writes_but_never_across_one_and_payloads_compare_by_field()
     {
         var root = Path.Combine(_f.OutRoot, "36unit");
@@ -455,9 +545,9 @@ public sealed class OracleTests
         var lines = json.Differences.Select(x => $"{x.Part} {x.Kind} {x.Path} {x.Legacy}|{x.New}|{x.Detail}").ToList();
         Assert.Equal(new[]
         {
-            "request extra extra |\"true\"|",
+            "request extra extra |true|",
             "request changed q/name a|b|",
-            "request missing q/tags[2] \"y\"||",
+            "request missing q/tags[2] y||",
             "dataset changed T rows 2|3|",
             "dataset changed T[1]/B p|r|differs in 2 of 2 rows; the first is shown",
         }, lines);

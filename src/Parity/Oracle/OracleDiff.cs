@@ -1,4 +1,7 @@
 using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Parity.Oracle;
 
@@ -6,12 +9,23 @@ namespace Parity.Oracle;
 /// One difference between the legacy client's recorded calls and the new client's replayed ones. Part is <c>call</c> (a call made
 /// by one side only, or a pair too large to compare), <c>order</c>, <c>request</c>, <c>reply</c>, <c>dataset</c> or <c>error</c>; Kind
 /// is <c>missing</c> (the legacy side has it, the new side does not), <c>extra</c>, <c>changed</c>, <c>reordered</c> or
-/// <c>not-compared</c> (the pair is over the per-call size limit). Fields counts the leaves under a
-/// missing or extra block; Detail carries what the line needs besides the values.
+/// <c>not-compared</c> (the pair is over the per-call size limit). Legacy and New are the values after normalization, null where that
+/// side has none (a missing field's new value, an error only one side logged); a missing or extra block's value is its leaves as one
+/// text. Fields counts the leaves under a missing or extra block; Leaves lists them, one per field; Detail carries what the line
+/// needs besides the values.
 /// </summary>
-public sealed record Difference(string Part, string Kind, int? LegacySeq, int? NewSeq, string Call, string? Path, string? Legacy, string? New, int Fields, string? Detail);
+public sealed record Difference(string Part, string Kind, int? LegacySeq, int? NewSeq, string Call, string? Path, string? Legacy, string? New, int Fields, string? Detail, List<Leaf>? Leaves = null);
 
-public sealed record DiffResult(string Scenario, RecordingFile Legacy, RecordingFile Replay, NormSet Rules, List<Difference> Differences, List<string> NotCompared);
+/// <summary>One field of a missing or extra block: its full path and its value after normalization.</summary>
+public sealed record Leaf(string Path, string Value);
+
+/// <summary>
+/// One call of the comparison: a recorded call with the capture call it was paired with (null when the new client never makes it),
+/// or a capture call no recorded call pairs with (LegacySeq null). NotCompared names the legacy reply tables the pair did not compare.
+/// </summary>
+public sealed record CallMatch(int? LegacySeq, int? NewSeq, string Call, List<string> NotCompared);
+
+public sealed record DiffResult(string Scenario, RecordingFile Legacy, RecordingFile Replay, NormSet Rules, List<Difference> Differences, List<string> NotCompared, List<CallMatch> Calls);
 
 /// <summary>
 /// The comparison: calls are paired by Category/Type and order within it (an alignment per call key, so a skipped call does not
@@ -63,6 +77,7 @@ public static class OracleDiff
         //    calls of a key, skips the ones whose requests fit worst
         var pairs = new List<(RecordedCall L, RecordedCall N)>();
         var diffs = new List<Difference>();
+        var unpaired = new List<CallMatch>();
         foreach (var key in legacy.Calls.Select(c => c.Key).Concat(replay.Calls.Select(c => c.Key)).Distinct(StringComparer.Ordinal))
         {
             var ls = legacy.Calls.Where(c => c.Key == key).ToList();
@@ -70,8 +85,12 @@ public static class OracleDiff
             foreach (var (l, n) in Align(ls, ns, (a, b) => ls.Count == ns.Count ? 0 : FieldDiff(Payload.Flatten(L.Request(a)), Payload.Flatten(N.Request(b)), "request", a, b).Count))
             {
                 if (l != null && n != null) pairs.Add((l, n));
-                else if (l != null) diffs.Add(new Difference("call", "missing", l.Seq, null, key, null, null, null, 0, "the legacy client makes this call; the new client never does"));
-                else diffs.Add(new Difference("call", "extra", null, n!.Seq, key, null, null, null, 0, "the new client makes this call; the legacy client never does"));
+                else
+                {
+                    unpaired.Add(new CallMatch(l?.Seq, n?.Seq, key, new()));
+                    if (l != null) diffs.Add(new Difference("call", "missing", l.Seq, null, key, null, null, null, 0, "the legacy client makes this call; the new client never does"));
+                    else diffs.Add(new Difference("call", "extra", null, n!.Seq, key, null, null, null, 0, "the new client makes this call; the legacy client never does"));
+                }
             }
         }
         rules.Masked.Clear();
@@ -94,21 +113,25 @@ public static class OracleDiff
 
         // 3. each pair's content
         var notCompared = new List<string>();
+        var calls = new List<CallMatch>();
         foreach (var (l, n) in pairs)
         {
+            var skippedTables = new List<string>();
+            calls.Add(new CallMatch(l.Seq, n.Seq, l.Key, skippedTables));
             if (TooLarge(L, l, N, n, maxCallMb) is { } over) { diffs.Add(over); continue; }
             diffs.AddRange(FieldDiff(Req(L, l), Req(N, n), "request", l, n));
             diffs.AddRange(FieldDiff(Rep(L, l), Rep(N, n), "reply", l, n));
             var le = l.Error == null ? null : M("error", l, "error", l.Error);
             var ne = n.Error == null ? null : M("error", n, "error", n.Error);
             if (!string.Equals(le?.Trim(), ne?.Trim(), StringComparison.Ordinal))
-                diffs.Add(new Difference("error", "changed", l.Seq, n.Seq, l.Key, "error", le ?? "(no error)", ne ?? "(no error)", 0, null));
-            diffs.AddRange(DatasetDiff(L.Dataset(l), N.Dataset(n), l, n, (side, p, v) => M("dataset", side, p, v), notCompared));
+                diffs.Add(new Difference("error", "changed", l.Seq, n.Seq, l.Key, "error", le, ne, 0, null));
+            diffs.AddRange(DatasetDiff(L.Dataset(l), N.Dataset(n), l, n, (side, p, v) => M("dataset", side, p, v), notCompared, skippedTables));
         }
 
         var order = new Dictionary<string, int>(StringComparer.Ordinal) { ["call"] = 0, ["order"] = 1, ["request"] = 2, ["reply"] = 3, ["error"] = 4, ["dataset"] = 5 };
         diffs = diffs.OrderBy(d => d.LegacySeq ?? int.MaxValue).ThenBy(d => d.NewSeq ?? 0).ThenBy(d => order[d.Part]).ThenBy(d => d.Path, StringComparer.Ordinal).ToList();
-        return new DiffResult(scn, legacy, replay, rules, diffs, notCompared);
+        calls = calls.Concat(unpaired).OrderBy(c => c.LegacySeq ?? int.MaxValue).ThenBy(c => c.NewSeq ?? 0).ToList();
+        return new DiffResult(scn, legacy, replay, rules, diffs, notCompared, calls);
     }
 
     /// <summary>The not-compared difference for a pair whose payload on either side is over the limit; null when both fit.</summary>
@@ -130,7 +153,7 @@ public static class OracleDiff
     /// top-level table. Only the top-level tables the new client's reply holds are compared, with every table nested in them; the
     /// legacy reply's other top-level tables are listed as not compared.
     /// </summary>
-    private static IEnumerable<Difference> DatasetDiff(string? legacyText, string? newText, RecordedCall l, RecordedCall n, Func<RecordedCall, string, string, string> mask, List<string> notCompared)
+    private static IEnumerable<Difference> DatasetDiff(string? legacyText, string? newText, RecordedCall l, RecordedCall n, Func<RecordedCall, string, string, string> mask, List<string> notCompared, List<string> skippedTables)
     {
         var lds = Payload.ParseDataset(legacyText);
         var nds = Payload.ParseDataset(newText);
@@ -152,6 +175,7 @@ public static class OracleDiff
         {
             var skipped = lt.Select(t => t.Top).Distinct().Where(t => !asked.Contains(t)).ToList();
             if (skipped.Count > 0) notCompared.Add($"#{l.Seq} {l.Key}: {string.Join(", ", skipped)}");
+            skippedTables.AddRange(skipped);
         }
         foreach (var t in nt)
         {
@@ -226,8 +250,9 @@ public static class OracleDiff
         foreach (var (root, leaves) in groups)
         {
             var block = leaves.Count > 1 || leaves[0] != root;
-            var values = string.Join("; ", leaves.Select(x => block ? $"{x} = \"{has.Leaves[x]}\"" : $"\"{has.Leaves[x]}\""));
-            yield return new Difference(part, kind, lc.Seq, nc.Seq, lc.Key, root, kind == "missing" ? values : null, kind == "extra" ? values : null, block ? leaves.Count : 0, null);
+            var values = block ? string.Join("; ", leaves.Select(x => $"{x} = \"{has.Leaves[x]}\"")) : has.Leaves[leaves[0]];
+            yield return new Difference(part, kind, lc.Seq, nc.Seq, lc.Key, root, kind == "missing" ? values : null, kind == "extra" ? values : null, block ? leaves.Count : 0, null,
+                leaves.Select(x => new Leaf(x, has.Leaves[x])).ToList());
         }
     }
 
@@ -305,9 +330,10 @@ public static class OracleDiff
             };
             sb.Append($"\n{i}. {what}: {at} {d.Call}" + (d.Path != null ? $" {d.Path}" + (d.Fields > 0 ? $" ({d.Fields} fields)" : "") : "") + "\n");
             if (d.Detail != null) sb.Append($"   {d.Detail}\n");
-            if (d.Kind == "missing" && d.Part != "call" && d.Legacy != null) sb.Append($"   legacy: {d.Legacy}\n   new: (absent)\n");
-            else if (d.Kind == "extra" && d.Part != "call" && d.New != null) sb.Append($"   legacy: (absent)\n   new: {d.New}\n");
-            else if (d.Kind == "changed") sb.Append($"   legacy: \"{d.Legacy}\"\n   new: \"{d.New}\"\n");
+            string Shown(string v) => d.Part is "request" or "reply" && d.Fields == 0 ? $"\"{v}\"" : v;               // one field quoted; a block's leaves already are
+            if (d.Kind == "missing" && d.Part != "call" && d.Legacy != null) sb.Append($"   legacy: {Shown(d.Legacy)}\n   new: (absent)\n");
+            else if (d.Kind == "extra" && d.Part != "call" && d.New != null) sb.Append($"   legacy: (absent)\n   new: {Shown(d.New)}\n");
+            else if (d.Kind == "changed") sb.Append($"   legacy: \"{d.Legacy ?? "(no error)"}\"\n   new: \"{d.New ?? "(no error)"}\"\n");
             else if (d.Kind == "not-compared") sb.Append($"   legacy: {d.Legacy}\n   new: {d.New}\n");
             if (where == null) continue;
             var callers = where(d.Call);
@@ -319,4 +345,48 @@ public static class OracleDiff
             sb.Append($"\nnot compared (legacy reply tables the new client does not ask for): {string.Join("; ", r.NotCompared)}\n");
         return sb.ToString();
     }
+
+    // ---- the per-call JSON (parity oracle diff --json, docs/oracle.md) ----
+
+    /// <summary>The version of the <c>--json</c> shape; bumped on a change that breaks a consumer, never on an added field.</summary>
+    public const int JsonSchema = 1;
+
+    public sealed record JsonReport(int Schema, string Scenario, int RecordedCalls, int ReplayedCalls, int Differences, JsonRecording Recording, JsonReplay Replay, JsonRules Rules, List<JsonCall> Calls);
+    public sealed record JsonRecording(string Seal, string Recorded, string? RecordedBy, string? Environment, string? LegacyBuild);
+    public sealed record JsonReplay(string Seal);
+    public sealed record JsonRules(string Hash, int? Version, SortedDictionary<string, int> Masked);
+    public sealed record JsonCall(int? RecordedSeq, int? CaptureSeq, string Call, List<string> NotCompared, List<JsonDifference> Differences);
+    public sealed record JsonDifference(string Level, string Kind, string? Path, string? Legacy, string? New, List<Leaf> Leaves, string? Detail);
+
+    private static readonly JsonSerializerOptions JsonOut = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        WriteIndented = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.Never,                                                       // a null says "none", so it is written
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,                                                    // read by programs, never put in HTML
+    };
+
+    /// <summary>
+    /// The machine-readable result: per call, recorded calls in their order and then the capture calls no recorded call pairs with,
+    /// each with the sequence on both sides and its differences (none for a call that matched). The values are the report's: read
+    /// from the redacted recording and replay, after normalization.
+    /// </summary>
+    public static JsonReport ToJson(DiffResult r)
+    {
+        var byCall = r.Differences.ToLookup(d => (d.LegacySeq, d.LegacySeq == null ? d.NewSeq : null));                // a difference belongs to its recorded call, else its capture call
+        var calls = r.Calls.Select(c => new JsonCall(c.LegacySeq, c.NewSeq, c.Call, c.NotCompared,
+            byCall[(c.LegacySeq, c.LegacySeq == null ? c.NewSeq : null)].Select(d => new JsonDifference(
+                d.Part,
+                d.Fields > 0 ? $"block {d.Kind}" : d.Kind,
+                d.Path, d.Legacy, d.New,
+                d.Fields > 0 ? d.Leaves ?? new() : new(),
+                d.Detail)).ToList())).ToList();
+        var p = r.Legacy.Provenance;
+        return new JsonReport(JsonSchema, r.Scenario, r.Legacy.Calls.Count, r.Replay.Calls.Count, r.Differences.Count,
+            new JsonRecording(r.Legacy.Seal, p.Recorded, p.RecordedBy, p.Environment, p.LegacyBuild), new JsonReplay(r.Replay.Seal),
+            new JsonRules(r.Rules.Hash, r.Rules.Version > 0 ? r.Rules.Version : null, new SortedDictionary<string, int>(r.Rules.Masked, StringComparer.Ordinal)),
+            calls);
+    }
+
+    public static string RenderJson(DiffResult r) => JsonSerializer.Serialize(ToJson(r), JsonOut).Replace("\r\n", "\n") + "\n";
 }

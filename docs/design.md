@@ -250,6 +250,10 @@ recording. Decisions:
   reversible.
 - **State reset is not the tool's.** The replay command owns the starting state; `docs/oracle.md` states the
   contract. A reset mechanism is specific to each host and database.
+- **A result a program can read.** `parity oracle diff --json` (issue 40) prints the same comparison per call: every
+  recorded call with the capture call it paired with, the unpaired capture calls, and each difference's level, kind,
+  path and both values after redaction and normalization; exit codes unchanged. The shape is versioned (`schema`)
+  and documented in `docs/oracle.md`, with the choices the issue left open.
 
 ## What it deliberately does not do
 

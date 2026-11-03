@@ -46,7 +46,7 @@ from the manifest, which the agent cannot shrink.
 | manifest diff | `parity diff <old.json> <new.json>` | controls, events, bindings, validation rules, handlers, methods, service calls, dynamic UI, raw and diagnostics, variant deltas and factories added / removed / changed by id, exit 1 when they differ |
 | `registry/*.json` | the `map` phase, `parity registry` | the context around the units: scenarios, decisions, each service's error cases; checked against the extract and STALE after a re-extract until reviewed (`docs/adopt.md`, The map phase and the registries) |
 | `recordings/<scenario>/` | `parity oracle export`, in the record phase | one scenario's calls from the host's per-call log: an ordered index, a request, reply and dataset file per call, provenance, redacted and sealed (`docs/oracle.md`) |
-| oracle diff, `verified/<scenario>.json` | `parity oracle diff`, `parity oracle verify` | the new client's calls against the recording, a work list by call and field; verify runs the scenario's tests and, only when they pass with an empty diff, sets the scenario's `lastVerified` |
+| oracle diff, `verified/<scenario>.json` | `parity oracle diff`, `parity oracle verify` | the new client's calls against the recording, a work list by call and field (`--json`: per call, for a program); verify runs the scenario's tests and, only when they pass with an empty diff, sets the scenario's `lastVerified` |
 | rebind | `parity rebind <spec.md>` | a `STALE` spec moved to the new hash when nothing it cites changed, else the affected rules as a work list (exit 1) |
 
 Every id is stable and citeable: `ctrl:Form/field`, `dyn:Form/handler/local`, `evt:Form/field.Event`,
