@@ -37,7 +37,7 @@ A fix that ends as only a code patch has escaped the system.
 | extract | script | config, form glob | manifests, module index | `raw == 0 && diag == 0` or each entry acknowledged in `extractor-debt.md` |
 | capture | script (yours) | module service-call ids | `fixtures/*.json` | every `svc:` id has at least one fixture; a synthetic one is labelled, shape-verified and explained |
 | map | agent, then human | legacy source, manifests, `module.json`, fixtures | `registry/*.json`, `evidence/` | `parity registry check` without an error (scenario warnings allowed) and the registry stamped against this extract |
-| record | human (agent helps) | one run of a scenario in the legacy client, the host's per-call log | `recordings/<scenario>/`, `normalization.json` | the recording sealed; every normalization rule backed by a `dec:` entry |
+| record | human (agent helps) | one run of a scenario in the legacy client, the host's per-call log | `recordings/<scenario>/`, `normalization.json`, `oracle.json` | the recording sealed; every normalization rule and the oracle settings backed by a `dec:` entry |
 | specify | agent, then human | rendered manifest, fixtures, evidence | `spec/<Form>.md` | `parity lint` green; human sets `status: reviewed` |
 | scaffold | script (yours, optional) | manifest, categories | component skeleton | every control mapped or explicitly dropped |
 | implement | agent | spec, fixtures, skeleton, recordings | components, tests | `parity lint --gate --implement <dir>` green; each recorded scenario `parity oracle verify` |
@@ -234,7 +234,7 @@ recording. Decisions:
 - **One capture format for both sides.** The new client is captured through the same host log and imported through
   the same export and redaction as the recording. Capture in the new client's adapter would compare two serializers.
 - **Matching by `Category/Type` and order within the key**, an order-preserving alignment when the counts differ,
-  reads free between two writes, nothing across a write (writes named in `oracle.writes`).
+  reads free between two writes, nothing across a write (writes named in `recordings/oracle.json`).
 - **Two-level comparison**: the call sequence, then each pair's request and reply fields (a missing subtree is one
   block, not a line per field), its error, and its dataset per table and row, restricted to the tables the new
   client's reply holds, since the table filter is a header the log does not keep.

@@ -134,7 +134,7 @@ not_above() {
 }
 
 # --- recordings and verifications (#36), in every phase -------------------------------------------------------
-# legacy/<module>/recordings/ (the legacy client's recorded calls and normalization.json) is written only in the record
+# legacy/<module>/recordings/ (the legacy client's recorded calls, normalization.json and oracle.json) is written only in the record
 # phase, by parity oracle export or the person recording; legacy/<module>/verified/ only by parity oracle verify, never by
 # a tool call, in any phase. Read, Grep and Glob may read both. A write tool aimed at either, a shell word or an MCP value
 # that resolves into either, a bare 'recordings' or 'verified' word in a command that changes directory (the guard cannot

@@ -109,23 +109,35 @@ public static class OracleModule
         return set;
     }
 
-    /// <summary><c>legacy/extract.config.json</c> next to the module folder, where the oracle settings live unless <c>--config</c> names another.</summary>
-    public static string ConfigPath(string moduleDir) =>
-        Path.Combine(Path.GetDirectoryName(Path.GetFullPath(moduleDir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)) ?? ".", "extract.config.json");
+    public const string SettingsFile = "oracle.json";
+
+    /// <summary><c>legacy/&lt;Module&gt;/recordings/oracle.json</c>: under <c>recordings/</c>, so the guard keeps it read-only to the agent outside the record phase, like <c>normalization.json</c>.</summary>
+    public static string SettingsPath(string moduleDir) => Path.Combine(moduleDir, "recordings", SettingsFile);
+
+    private static readonly JsonSerializerOptions StrictOptions = new(Json.Options) { UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow };
+
+    /// <summary>The oracle settings of a module; an absent file sets nothing, an unreadable one or one with a key outside <c>replay</c>, <c>writes</c> and <c>redact</c> is refused.</summary>
+    public static OracleConfig LoadSettings(string moduleDir)
+    {
+        var path = SettingsPath(moduleDir);
+        if (!File.Exists(path)) return new OracleConfig();
+        try { return JsonSerializer.Deserialize<OracleConfig>(File.ReadAllText(path), StrictOptions) ?? throw new JsonException("the file is empty"); }
+        catch (JsonException ex) { throw new InvalidOperationException($"{Recording.Rel(path)} is not valid oracle settings (replay, writes, redact): {ex.Message}"); }
+    }
 
     private static readonly System.Text.RegularExpressions.Regex OracleIdRx = new(@"^oracle:sha256:[0-9a-f]{16}$");
 
     /// <summary>Whether a decision may cite this id: <c>oracle:&lt;hash&gt;</c>, the settings it approved.</summary>
     public static bool IsOracleId(string id) => OracleIdRx.IsMatch(id);
 
-    /// <summary>The hash of the parsed <c>oracle</c> section, so edits elsewhere in the config do not count; <c>none</c> when it sets nothing.</summary>
+    /// <summary>The hash of the parsed settings, so formatting and comments in the file do not count; <c>none</c> when they set nothing.</summary>
     public static string SettingsHash(OracleConfig cfg) =>
         cfg is { Replay: null, Writes.Count: 0, Redact.Count: 0 } ? "none" : Recording.Hash(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(cfg, Json.Options).Replace("\r\n", "\n")));
 
     /// <summary>ORACLE-UNDECIDED when the settings are set and no decision cites their hash; null when decided or empty.</summary>
     public static string? Undecided(string hash, IEnumerable<Decision> decisions) =>
         hash == "none" || decisions.Any(d => d.Cite.Contains("oracle:" + hash)) ? null
-            : $"the oracle settings in extract.config.json decide what a verification trusts (replay command, writes, redaction), so a person decides them: add a dec: entry to registry/decisions.json that cites oracle:{hash} and says why these settings are right";
+            : $"the oracle settings in recordings/oracle.json decide what a verification trusts (replay command, writes, redaction), so a person decides them: add a dec: entry to registry/decisions.json that cites oracle:{hash} and says why these settings are right";
 
     /// <summary>The settings hash, refused while no decision covers it.</summary>
     public static string Settings(string moduleDir, OracleConfig cfg)
@@ -290,7 +302,7 @@ public static class OracleModule
                 : v.Date != s.LastVerified ? $"the last verification is dated {v.Date}"
                 : v.RecordingSeal != rec.Seal ? "the recording changed since"
                 : v.RulesHash != rules.Hash ? "the normalization rules changed since"
-                : v.OracleHash != oracleHash ? "the oracle settings in extract.config.json changed since"
+                : v.OracleHash != oracleHash ? "the oracle settings in recordings/oracle.json changed since"
                 : v.ScenarioVersion != s.Version ? "the scenario's version changed since"
                 : null;
             if (why != null)

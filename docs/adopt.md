@@ -160,8 +160,8 @@ Pick the phases to fit the work a person does in between (recording fixtures aft
 Where the backend host keeps a per-call log, the oracle layer (`docs/oracle.md`) adds a record step and a verify
 step. Once `map` has written the scenario: set `legacy/.phase` to `record`, a person runs the scenario once in the
 legacy client with the log on, and `parity oracle export` turns that run into `legacy/<Module>/recordings/<scenario>/`
-(the `parity-record` skill helps). Configure `oracle.writes`, `oracle.redact` and `oracle.replay` in
-`legacy/extract.config.json` and set `PARITY_REDACT_KEY` first. In `implement`, `parity oracle verify` runs the
+(the `parity-record` skill helps). Configure `writes`, `redact` and `replay` in
+`legacy/<Module>/recordings/oracle.json` (a template is in `legacy/templates/oracle.json`; a person decides it, like the normalization rules) and set `PARITY_REDACT_KEY` first. In `implement`, `parity oracle verify` runs the
 scenario's tests and diffs the new client's calls against the recording until it says `verified`; it is the only
 thing that sets a recorded scenario's `lastVerified`. The map phase can add `"wire": ["Category/Type"]` to a
 dependency entry, so the report says where the legacy client makes each call.

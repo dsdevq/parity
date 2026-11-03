@@ -28,12 +28,12 @@ parity - reverse-engineer a legacy WinForms module into a citable manifest and g
   parity registry query   <module-dir> [--touches <id>] [--role <r>] [--right <r>] [--negative|--positive] [--unverified]
   parity registry catalog <module-dir> [--out <file.md>]  dependencies with shapes, callers, error cases and fixture provenance
   parity oracle export <module-dir> <scn:id> --log <rows.jsonl>[,...] (--session <id>[,...] | --from <time> [--to <time>])
-                  --recorded-by <name> [--environment <env>] [--legacy-build <build>] [--replace] [--config <extract.config.json>]
+                  --recorded-by <name> [--environment <env>] [--legacy-build <build>] [--replace]
                                                        record phase: one scenario's host log rows into recordings/<scenario>/, redacted and sealed
-  parity oracle diff   <module-dir> <scn:id> [--capture <rows.jsonl>] [--config <extract.config.json>]
+  parity oracle diff   <module-dir> <scn:id> [--capture <rows.jsonl>]
                                                        the new client's calls (a capture, else the last replay) against the recording; exit 1 on a difference
-  parity oracle verify <module-dir> <scn:id> [--config <extract.config.json>]
-                                                       run oracle.replay (the scenario's tests), diff its capture; only a green run with no difference sets lastVerified
+  parity oracle verify <module-dir> <scn:id>
+                                                       run replay from recordings/oracle.json (the scenario's tests), diff its capture; only a green run with no difference sets lastVerified
   parity probe    <project.csproj> [--forms <glob>]    anonymized statement shapes; paste into an issue
   parity report   <manifest.json>                      anonymized raw/diagnostics/unresolved; review, then paste into an issue
   parity hash     <manifest.json>
@@ -170,8 +170,7 @@ try
             var sub = Positional(opts, 0) ?? throw new ArgumentException("oracle: the subcommand is export, diff or verify");
             var dir = Positional(opts, 1) ?? throw new ArgumentException($"oracle {sub} needs <module-dir> (legacy/<Module>)");
             var scn = Positional(opts, 2) ?? throw new ArgumentException($"oracle {sub} needs <scn:id>");
-            var cfgPath = Opt(opts, "config") ?? OracleModule.ConfigPath(dir);
-            var oracle = File.Exists(cfgPath) ? ExtractConfig.Load(cfgPath).Oracle : opts.ContainsKey("config") ? throw new ArgumentException($"no config at {cfgPath}") : new OracleConfig();
+            var oracle = OracleModule.LoadSettings(dir);
             var key = Environment.GetEnvironmentVariable("PARITY_REDACT_KEY");
             var today = DateOnly.FromDateTime(DateTime.UtcNow);
             static List<string> List(string? v) => (v ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
@@ -196,7 +195,7 @@ try
                 }
                 case "verify":
                 {
-                    if (string.IsNullOrWhiteSpace(oracle.Replay)) throw new InvalidOperationException($"no oracle.replay in {cfgPath}: verify runs that command (the scenario's tests, which write the capture) and refuses without it");
+                    if (string.IsNullOrWhiteSpace(oracle.Replay)) throw new InvalidOperationException($"no replay in {Recording.Rel(OracleModule.SettingsPath(dir))}: verify runs that command (the scenario's tests, which write the capture) and refuses without it");
                     var r = OracleModule.Verify(dir, scn, oracle, new ShellReplayRunner(oracle.Replay, Console.Error), key, today);
                     Console.Write(r.Text);
                     return r.ExitCode;

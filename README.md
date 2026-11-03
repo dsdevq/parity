@@ -307,7 +307,7 @@ stable ids, locations, a service boundary, or a coverage lint, and those are the
 src/Parity/          the CLI: Project/ (csproj, index, compilation), Passes/ (designer, handlers, duplicates, extractor), Render/, Lint/, Oracle/ (record, diff, verify)
 fixtures/            WinFormsStubs (stand-ins for WinForms + DevExpress), SampleLegacy (synthetic mess), SampleLegacy.Build (its DLL)
 examples/            complete module folders: spec, registry, recorded and synthetic fixtures
-templates/           spec.md, extractor-debt.md, fixture.json, evidence.json, extract.config.json, control-categories.json, normalization.json
+templates/           spec.md, extractor-debt.md, fixture.json, evidence.json, extract.config.json, control-categories.json, normalization.json, oracle.json
 adopt/               what goes into the consuming repo: skills, hooks, settings
 docs/                design, manifest schema, spec grammar, lint codes, adoption, the oracle layer, pilot metrics, prior art
 tests/               xunit over the fixture, and a synthetic host with a per-call log for the oracle layer

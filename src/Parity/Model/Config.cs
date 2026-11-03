@@ -35,9 +35,6 @@ public sealed class ExtractConfig
     public List<string> SharedState { get; set; } = new();
     /// <summary>How deep below a handler shared-state reads and writes are recorded; null means <see cref="MaxCallDepth"/>, 0 means handlers only.</summary>
     public int? SharedStateDepth { get; set; }
-    /// <summary>The oracle layer (issue #36): which wire calls write, what export redacts, and the command that replays a scenario.</summary>
-    public OracleConfig Oracle { get; set; } = new();
-
     [JsonIgnore] public string BaseDir { get; set; } = ".";
 
     public static ExtractConfig Load(string path)
@@ -60,7 +57,10 @@ public sealed class GuardConfig
     public List<string> AllowRoots { get; set; } = new();
 }
 
-/// <summary>The oracle layer's settings (<c>docs/oracle.md</c>). Read by <c>parity oracle export</c>, <c>diff</c> and <c>verify</c>.</summary>
+/// <summary>
+/// The oracle layer's settings (<c>docs/oracle.md</c>), the file <c>legacy/&lt;Module&gt;/recordings/oracle.json</c>. Read by
+/// <c>parity oracle export</c>, <c>diff</c> and <c>verify</c>.
+/// </summary>
 public sealed class OracleConfig
 {
     /// <summary>

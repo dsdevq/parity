@@ -28,6 +28,7 @@ legacy/<Module>/
   recordings/<slug>/recording.json      the ordered index (category, type, sequence, write), provenance, redaction count, seal
   recordings/<slug>/calls/NNN.request.<xml|json|txt>, NNN.reply.<...>, NNN.dataset.<xml|json>
   recordings/normalization.json         the normalization rules (one file per module)
+  recordings/oracle.json                the oracle settings: writes, redact, replay (one file per module)
   replays/<slug>/                       the new client's last capture, same format; rewritten by every diff --capture and verify
   verified/<slug>.json                  written only by parity oracle verify
 ```
@@ -68,9 +69,9 @@ parity oracle export legacy/<Module> scn:<id> --log <dump.jsonl>[,<dump2.jsonl>]
 
 - **Selective.** A session (`--session`) or a time window (`--from`, `--to`) is required; filters intersect. One
   run of one scenario, never a whole log.
-- **Writes.** `oracle.writes` in `legacy/extract.config.json` lists the calls that change host state as
+- **Writes.** `writes` in `recordings/oracle.json` (Oracle settings, below) lists the calls that change host state as
   `Category/Type` globs; each call in the index carries `write` from it.
-- **Redaction.** `oracle.redact` lists rules: `target` (`request`, `reply`, `dataset`, `error` or `any`), `field`
+- **Redaction.** `redact` lists rules: `target` (`request`, `reply`, `dataset`, `error` or `any`), `field`
   (a field path glob, below) and an optional `match` (a regular expression; only its matches are replaced). A
   redacted value becomes `redacted:<8 hex>`, an HMAC of the value under `PARITY_REDACT_KEY`. The key keeps the
   pseudonyms of a recording and a replay equal, so a redacted field is still compared, and keeps them from being
@@ -167,13 +168,16 @@ Normalization is the main way to game a diff ("ignore the field that differs"), 
 
 ## Oracle settings
 
-`oracle` in `legacy/extract.config.json` (`replay`, `writes`, `redact`) decides what a verification trusts: the command whose
-capture is compared, which calls order the comparison, which values never reach a recording. It is held like a rule:
-a canonical hash of the parsed `oracle` object (edits elsewhere in the config do not count) must be cited by a `dec:`
-entry of `registry/decisions.json` as `oracle:sha256:<16 hex>`; without one `ORACLE-UNDECIDED` refuses `diff` and
-`verify` and fails `registry check`, and the message names the hash to cite. The hash is recorded in each
-verification, so changing the settings leaves verified scenarios unbacked until they are verified again. An empty
-`oracle` needs no decision.
+`legacy/<Module>/recordings/oracle.json` (`replay`, `writes`, `redact`; a template is in `legacy/templates/oracle.json`)
+decides what a verification trusts: the command whose capture is compared, which calls order the comparison, which
+values never reach a recording. It is held exactly like `normalization.json`: the file sits under `recordings/`, so
+the guard keeps it read-only to the agent outside the record phase (the agent cannot loosen the settings and then
+cite a decision of its own), and a canonical hash of the parsed settings (formatting does not count) must be cited
+by a `dec:` entry of `registry/decisions.json` as `oracle:sha256:<16 hex>`; without one `ORACLE-UNDECIDED` refuses
+`diff` and `verify` and fails `registry check`, and the message names the hash to cite. The hash is recorded in each
+verification, so changing the settings leaves verified scenarios unbacked until they are verified again. A key
+outside `replay`, `writes` and `redact`, or a file that is not valid settings, is `ORACLE-INVALID`. An absent or
+empty file needs no decision. `extract.config.json` no longer holds an `oracle` section.
 
 ## Verify
 
@@ -181,7 +185,7 @@ verification, so changing the settings leaves verified scenarios unbacked until 
 parity oracle verify legacy/<Module> scn:<id>
 ```
 
-1. Runs `oracle.replay` from `legacy/extract.config.json` with `sh -c` (Git Bash's `sh` on Windows, as the hooks),
+1. Runs `replay` from `recordings/oracle.json` with `sh -c` (Git Bash's `sh` on Windows, as the hooks),
    from the current directory, with `PARITY_SCENARIO`, `PARITY_CAPTURE` (a temporary file) and `PARITY_MODULE_DIR`
    set; `{scenario}`, `{capture}` and `{module}` in the command are replaced by the same values, quoted. The command
    is the scenario's tests: the new client runs the scenario against the local host with logging on, and the
@@ -192,8 +196,8 @@ parity oracle verify legacy/<Module> scn:<id>
    replay seal, call count, the legacy reply tables not compared) and sets the scenario's `lastVerified` in `registry/scenarios.json`, editing that one
    value in place so the file keeps its layout.
 
-Exit 0 verified, 1 not verified (red tests or a difference), 3 refused. Verify reads its command from the config
-only: there is no flag to run something else.
+Exit 0 verified, 1 not verified (red tests or a difference), 3 refused. Verify reads its command from the settings
+file only: there is no flag to run something else.
 
 ## Guard rails
 
@@ -201,7 +205,7 @@ only: there is no flag to run something else.
 |---|---|
 | Recordings are read-only to the agent outside record | the guard refuses, in every phase but `record`, a write tool aimed under `legacy/<module>/recordings/`, and a shell word or MCP value that resolves there (also a bare `recordings` after a `cd`, and such a path behind a variable); export refuses outside `record`; the seal catches what a hook cannot see |
 | A normalization rule needs a human decision | `NORM-UNDECIDED` refuses the diff and fails `registry check`; the rules file is under `recordings/`, so it changes only in `record` |
-| The oracle settings need a human decision | `ORACLE-UNDECIDED` refuses the diff and verify and fails `registry check` until a `dec:` entry cites the settings' hash; a change unbacks every verification |
+| The oracle settings need a human decision | `recordings/oracle.json` is under `recordings/`, so it changes only in `record`; `ORACLE-UNDECIDED` refuses the diff and verify and fails `registry check` until a `dec:` entry cites the settings' hash; a change unbacks every verification |
 | Only the diff marks a scenario verified | `verified/` is refused to every tool call in every phase, `record` included; for a recorded scenario `registry check` refuses a `lastVerified` that a current verification (same date, recording, rules, oracle settings and scenario version) does not back: `SCENARIO-VERIFY-UNBACKED` |
 | Reports are readable without domain knowledge | the report format above; every difference is a call, a field and two values |
 
@@ -235,7 +239,7 @@ whether it shows the reply the way the legacy client does is still the spec's to
 4. **Normalization rules.** One JSON file per module with `global`, per-call and per-scenario scopes,
    every rule tied to a `dec:` entry that cites it. One file keeps every exception in one reviewable place; the
    hash binds each verification to the rule set it used.
-5. **Reads vs writes.** Writes are named in config (`oracle.writes`) and recorded in the index; they order the
+5. **Reads vs writes.** Writes are named in the oracle settings (`writes`) and recorded in the index; they order the
    comparison. Reads are compared on their request and on the dataset tables the new client asks for; mapping a
    reply onto the screen stays with the spec. No snapshot/restore is built (decision 1).
 6. **Home.** Inside parity. The layer reuses the registry (scenarios, decisions, dependencies and `module.json`

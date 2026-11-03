@@ -297,10 +297,12 @@ public static partial class Registry
             f.AddRange(ruleFindings);
             ids.UnionWith(NormIds(Oracle.Normalization.PathOf(moduleDir)));
         }
-        var oracleCfg = File.Exists(Oracle.OracleModule.ConfigPath(moduleDir)) ? ExtractConfig.Load(Oracle.OracleModule.ConfigPath(moduleDir)).Oracle : new OracleConfig();
+        var oracleCfg = new OracleConfig();
+        try { oracleCfg = Oracle.OracleModule.LoadSettings(moduleDir); }
+        catch (InvalidOperationException ex) { f.Add(new Finding(Rel(Oracle.OracleModule.SettingsPath(moduleDir)), 0, "ORACLE-INVALID", "error", ex.Message)); }
         var oracleHash = Oracle.OracleModule.SettingsHash(oracleCfg);
         if (Oracle.OracleModule.Undecided(oracleHash, l.Decisions.Select(x => x.D)) is { } undecided)
-            f.Add(new Finding(Rel(Oracle.OracleModule.ConfigPath(moduleDir)), 0, "ORACLE-UNDECIDED", "error", undecided));
+            f.Add(new Finding(Rel(Oracle.OracleModule.SettingsPath(moduleDir)), 0, "ORACLE-UNDECIDED", "error", undecided));
         var evidence = new EvidenceSet(moduleDir);
         void Cites(string file, int line, string who, IEnumerable<string> cites, bool evOk = true)
         {

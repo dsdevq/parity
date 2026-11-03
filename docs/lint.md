@@ -74,4 +74,5 @@ output format (`docs/adopt.md`, The map phase and the registries). Exit 1 on err
 | SCENARIO-UNKNOWN | error | a recording names a scenario `scenarios.json` lacks |
 | NORM-INVALID | error | `recordings/normalization.json` is not valid JSON, has a key or field outside its schema, a malformed `version` (an optional label), `id`, `scope`, `target` or `field`, or a `match` that is not a regular expression |
 | NORM-UNDECIDED | error | a normalization rule names no decision, a decision `decisions.json` lacks, or one that does not cite the rule; `parity oracle diff` and `verify` refuse to run while one exists |
-| ORACLE-UNDECIDED | error | `oracle` in `extract.config.json` is set and no decision cites its hash (`oracle:sha256:<16 hex>`, named in the message); `parity oracle diff` and `verify` refuse to run |
+| ORACLE-UNDECIDED | error | `recordings/oracle.json` sets something and no decision cites its hash (`oracle:sha256:<16 hex>`, named in the message); `parity oracle diff` and `verify` refuse to run |
+| ORACLE-INVALID | error | `recordings/oracle.json` is not JSON, or has a key outside `replay`, `writes` and `redact`, or a value of the wrong type |

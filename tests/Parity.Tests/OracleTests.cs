@@ -52,10 +52,12 @@ public sealed class OracleTests
         return dir;
     }
 
-    /// <summary>Writes the oracle settings to the extract config next to the module, and a decision that cites their hash.</summary>
+    /// <summary>Writes the oracle settings to recordings/oracle.json, and a decision that cites their hash.</summary>
     private static void WriteSettings(string moduleDir, OracleConfig cfg, bool decide = true)
     {
-        File.WriteAllText(Path.Combine(Path.GetDirectoryName(moduleDir)!, "extract.config.json"), JsonSerializer.Serialize(new { project = "x.csproj", oracle = cfg }, Json.Options));
+        Directory.CreateDirectory(Path.GetDirectoryName(OracleModule.SettingsPath(moduleDir))!);
+        File.WriteAllText(OracleModule.SettingsPath(moduleDir), JsonSerializer.Serialize(cfg, Json.Options));
+        Assert.Equal(OracleModule.SettingsHash(cfg), OracleModule.SettingsHash(OracleModule.LoadSettings(moduleDir)));
         if (decide) Decide(moduleDir, cfg);
     }
 
@@ -245,6 +247,24 @@ public sealed class OracleTests
     }
 
     [Fact]
+    public void issue_36_oracle_settings_with_an_unknown_key_or_a_wrong_type_are_refused_not_ignored()
+    {
+        var dir = Module("36oraclebad");
+        Assert.Equal("none", OracleModule.SettingsHash(OracleModule.LoadSettings(dir)));                              // absent: sets nothing
+        var path = OracleModule.SettingsPath(dir);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        foreach (var bad in new[] { "{ \"wirtes\": [] }", "{ \"writes\": \"Policy/Save*\" }", "[]", "{ \"writes\": [" })
+        {
+            File.WriteAllText(path, bad);
+            Assert.Contains("recordings/oracle.json", Assert.Throws<InvalidOperationException>(() => OracleModule.LoadSettings(dir)).Message);
+            Assert.Contains(Registry.Check(dir, gate: false), x => x.Code == "ORACLE-INVALID");
+        }
+        File.WriteAllText(path, "{ // comments and formatting do not change the hash\n  \"writes\": [\"A/B\"] }");
+        Assert.Equal(OracleModule.SettingsHash(new OracleConfig { Writes = new() { "A/B" } }), OracleModule.SettingsHash(OracleModule.LoadSettings(dir)));
+        Assert.DoesNotContain(Registry.Check(dir, gate: false), x => x.Code == "ORACLE-INVALID");
+    }
+
+    [Fact]
     public void issue_36_guard_keeps_recordings_and_verifications_out_of_reach_of_agent_writes()
     {
         if (GuardHookTests.Sh() == null) return; // no POSIX shell: the hook cannot run here at all
@@ -266,6 +286,8 @@ public sealed class OracleTests
                 {
                     ("Write", new { file_path = rec, content = "<SaveRider/>" }, null),
                     ("Edit", new { file_path = Path.Combine(work, "legacy", "M", "recordings", "normalization.json"), old_string = "1", new_string = "2" }, null),
+                    ("Edit", new { file_path = Path.Combine(work, "legacy", "M", "recordings", "oracle.json"), old_string = "\"writes\": [\"Policy/Save*\"]", new_string = "\"writes\": []" }, null),
+                    ("Bash", new { command = "echo '{\"writes\":[]}' > recordings/oracle.json" }, Path.Combine(work, "legacy", "M")),
                     ("Bash", new { command = "sed -i 's/2024/2026/' " + rec }, null),
                     ("Bash", new { command = "cd legacy/M && rm -r recordings" }, null),
                     ("Bash", new { command = "echo '{}' > recordings/normalization.json" }, Path.Combine(work, "legacy", "M")),
@@ -280,6 +302,7 @@ public sealed class OracleTests
                 foreach (var (tool, input) in new (string, object)[]
                 {
                     ("Read", new { file_path = rec }),
+                    ("Read", new { file_path = "legacy/M/recordings/oracle.json" }),
                     ("Grep", new { pattern = "EffectiveDate", path = "legacy/M/recordings" }),
                     ("Bash", new { command = "parity oracle verify legacy/M scn:rider-added" }),
                     ("Edit", new { file_path = "legacy/M/fixtures/x.json", old_string = "\"shapeVerified\": false", new_string = "\"shapeVerified\": true" }),
@@ -293,6 +316,7 @@ public sealed class OracleTests
             // the record phase: recordings and the rules may change; a verification still may not
             File.WriteAllText(Path.Combine(work, "legacy", ".phase"), "record\n");
             Assert.Equal(0, GuardHookTests.Run(work, Call("Write", new { file_path = rec, content = "<SaveRider/>" }), hideJq: false).Code);
+            Assert.Equal(0, GuardHookTests.Run(work, Call("Write", new { file_path = "legacy/M/recordings/oracle.json", content = "{}" }), hideJq: false).Code);
             Assert.Equal(0, GuardHookTests.Run(work, Call("Bash", new { command = "git add legacy/M/recordings/rider-added" }), hideJq: false).Code);
             var v = GuardHookTests.Run(work, Call("Write", new { file_path = "legacy/M/verified/rider-added.json", content = "{}" }), hideJq: false);
             Assert.Equal(2, v.Code);
