@@ -498,6 +498,36 @@ public sealed class OracleTests
     }
 
     [Fact]
+    public void issue_40_a_dataset_cell_one_side_lacks_is_json_null_while_the_report_still_says_absent()
+    {
+        var root = Path.Combine(_f.OutRoot, "40cell");
+        RecordingFile Side(string name, string dataset)
+        {
+            var dir = Path.Combine(root, name);
+            Directory.CreateDirectory(Path.Combine(dir, "calls"));
+            var files = new SortedDictionary<string, string>(StringComparer.Ordinal);
+            foreach (var (rel, text) in new[] { ("calls/001.request.json", "{}"), ("calls/001.dataset.json", dataset) })
+            {
+                File.WriteAllText(Path.Combine(dir, rel), text);
+                files[rel] = Recording.Hash(File.ReadAllBytes(Path.Combine(dir, rel)));
+            }
+            var call = new RecordedCall(1, "E", "Find", false, "calls/001.request.json", null, "calls/001.dataset.json", null, null);
+            var r = new RecordingFile(1, "recording", "scn:x", 1, new Provenance("2026-11-03", null, null, "t", new(), 1, "test", Recording.Tool), 0, new() { call }, files, "");
+            return r with { Seal = Recording.SealOf(r) };
+        }
+        // row 2 of the legacy reply has no B cell; the new reply has B = "(absent)" as text, the report's own word
+        var diff = OracleDiff.Compare(Path.Combine(root, "l"), Side("l", "{\"T\":[{\"A\":1,\"B\":\"p\"},{\"A\":2}]}"),
+                                      Path.Combine(root, "n"), Side("n", "{\"T\":[{\"A\":1,\"B\":\"p\"},{\"A\":2,\"B\":\"(absent)\"}]}"), new NormSet());
+        var json = JsonDocument.Parse(OracleDiff.RenderJson(diff)).RootElement.GetProperty("calls")[0].GetProperty("differences");
+        var d = Assert.Single(json.EnumerateArray());
+        Assert.Equal("dataset changed T[2]/B", $"{d.GetProperty("level").GetString()} {d.GetProperty("kind").GetString()} {d.GetProperty("path").GetString()}");
+        Assert.Equal(JsonValueKind.Null, d.GetProperty("legacy").ValueKind);                                      // a missing cell is null ...
+        Assert.Equal("(absent)", d.GetProperty("new").GetString());                                            // ... a cell whose text is "(absent)" is not
+        var report = OracleDiff.Render(diff, _ => new());
+        Assert.Contains("legacy: \"(absent)\"\n   new: \"(absent)\"", report);                                  // the text report is unchanged
+    }
+
+    [Fact]
     public void issue_36_reads_reorder_between_writes_but_never_across_one_and_payloads_compare_by_field()
     {
         var root = Path.Combine(_f.OutRoot, "36unit");
