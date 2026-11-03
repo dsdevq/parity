@@ -115,7 +115,7 @@ parity oracle diff legacy/<Module> scn:<id> [--capture <rows.jsonl>]
 `--capture` takes the host log rows of one new-client run (all of them: the replay command's output is one run),
 imports them into `replays/<slug>/` through the same redaction as a recording, and diffs. Without it, the last
 replay is diffed. Exit 0 when there is no difference, 1 when there is, 3 when the diff is refused (a broken seal,
-a rule without a decision, a scenario the registry lacks). It never marks anything verified.
+a rule without a decision, a scenario the registry lacks, a recording made at another version of the scenario). It never marks anything verified.
 
 **Matching.** Calls are paired by `Category/Type` and their order among the calls of that key. When one side has
 fewer calls of a key, the pairing is an order-preserving alignment that skips the calls whose requests fit worst,
@@ -212,8 +212,6 @@ file only: there is no flag to run something else.
 `Read`, `Grep` and `Glob` may read recordings in every phase. A shell command that names either folder is refused
 whatever it does, `git add` included: stage the module folder (`git add legacy/<Module>`) instead. The guard is for a cooperative agent: what a program
 does with a path it builds itself is outside it, which is why the seal and the registry check exist too. A shell word under a module folder, or after a `cd`, that holds `$`, a backtick, `%x%` or a brace is refused in every phase, since the guard cannot see where it resolves.
-
-`diff` and `verify` refuse a recording made at another version of the scenario than the registry's current one (exit 3); record the scenario again.
 
 ## State and the contract the tool expects
 
