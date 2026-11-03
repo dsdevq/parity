@@ -206,7 +206,11 @@ public static class OracleDiff
     /// The work list, readable without domain knowledge: one summary line, then each difference with the call, the field, both values,
     /// and where the legacy client makes the call (from the svc: ids whose <c>wire</c> names it in registry/dependencies.json).
     /// </summary>
-    public static string Render(DiffResult r, Func<string, List<string>> where)
+    /// <remarks>
+    /// With <paramref name="where"/> null (the standalone diff, which reads no registry) the "legacy client" line is left out, and
+    /// <paramref name="note"/>, when given, follows the provenance line.
+    /// </remarks>
+    public static string Render(DiffResult r, Func<string, List<string>>? where, string? note = null)
     {
         var sb = new StringBuilder();
         sb.Append($"{r.Scenario}: {r.Legacy.Calls.Count} recorded call(s), {r.Replay.Calls.Count} replayed, {r.Differences.Count} difference(s)\n");
@@ -215,6 +219,7 @@ public static class OracleDiff
                   + (p.LegacyBuild != null ? $", legacy build {p.LegacyBuild}" : "") + $"; rules: {(r.Rules.Rules.Count == 0 ? "none" : "normalization.json" + (r.Rules.Version > 0 ? $" version {r.Rules.Version}" : ""))}");
         if (r.Rules.Masked.Count > 0) sb.Append(" (masked: " + string.Join(", ", r.Rules.Masked.Select(x => $"{x.Key} {x.Value}")) + ")");
         sb.Append('\n');
+        if (note != null) sb.Append(note).Append('\n');
         var i = 0;
         foreach (var d in r.Differences)
         {
@@ -237,6 +242,7 @@ public static class OracleDiff
             if (d.Kind == "missing" && d.Part != "call" && d.Legacy != null) sb.Append($"   legacy: {d.Legacy}\n   new: (absent)\n");
             else if (d.Kind == "extra" && d.Part != "call" && d.New != null) sb.Append($"   legacy: (absent)\n   new: {d.New}\n");
             else if (d.Kind == "changed") sb.Append($"   legacy: \"{d.Legacy}\"\n   new: \"{d.New}\"\n");
+            if (where == null) continue;
             var callers = where(d.Call);
             sb.Append(callers.Count > 0
                 ? "   legacy client: " + string.Join("; ", callers) + "\n"

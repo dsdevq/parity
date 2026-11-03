@@ -511,6 +511,101 @@ public sealed class OracleTests
         Assert.Contains(Normalization.Load(dir, decisions).Findings, x => x.Code == "NORM-INVALID" && x.Message.Contains("version"));
     }
 
+    /// <summary>
+    /// Issue #39: a consuming repo with a recording and a new-client capture but no map-phase registry (no extracted manifest) cannot
+    /// run the registry diff; the standalone diff (<c>--recording</c>, <c>--capture</c>) compares them with no registry read, with the
+    /// recording's own redaction and normalization, the same exit codes, and nothing written.
+    /// </summary>
+    [Fact]
+    public void issue_39_the_standalone_diff_compares_a_recording_and_a_capture_with_no_registry_and_writes_nothing()
+    {
+        // a recording made where a registry exists, with its settings and a decided normalization rule beside it
+        var dir = Module("39");
+        var scratch = Path.Combine(_f.OutRoot, "copies", "39", "scratch");
+        Directory.CreateDirectory(scratch);
+        var (log, session) = RecordLegacy(scratch);
+        var cfg = Config();
+        Phase(dir, "record");
+        WriteSettings(dir, cfg);
+        File.WriteAllText(Normalization.PathOf(dir), """
+        { "rules": [ { "id": "norm:session-id", "decision": "dec:summary-needs-a-beneficiary", "scope": "global", "target": "any", "field": "**/SessionId" } ] }
+        """);
+        var decisions = Path.Combine(dir, "registry", "decisions.json");
+        File.WriteAllText(decisions, File.ReadAllText(decisions).Replace("\"cite\": [\"handler:CoverSummaryForm/btnConfirm_Click\"]", "\"cite\": [\"handler:CoverSummaryForm/btnConfirm_Click\", \"norm:session-id\"]"));
+        OracleModule.Export(new ExportRequest(dir, Scn, "recording", new() { log }, new() { session }, null, null, "alex", "local", "4.2.1", false, cfg, Key, Today));
+        var seeded = Capture(Path.Combine(scratch, "seeded.jsonl"), _ => { });
+        var fixedRun = Capture(Path.Combine(scratch, "fixed.jsonl"), c => { c.SkipsLimits = false; c.OmitsAudit = false; c.DatesFromClock = false; });
+
+        // the consuming repo: the recordings folder only, no registry, no module.json, no manifests
+        var consumer = Path.Combine(_f.OutRoot, "copies", "39consumer", "legacy", "PolicyWizard");
+        foreach (var f in Directory.EnumerateFiles(Path.Combine(dir, "recordings"), "*", SearchOption.AllDirectories))
+        {
+            var to = Path.Combine(consumer, Path.GetRelativePath(dir, f));
+            Directory.CreateDirectory(Path.GetDirectoryName(to)!);
+            File.Copy(f, to);
+        }
+        var recording = Path.Combine(consumer, "recordings", "rider-added");
+        var cwd = Path.GetDirectoryName(consumer)!;
+        var env = new Dictionary<string, string?> { ["PARITY_REDACT_KEY"] = Key };
+        string[] Files() => Directory.EnumerateFileSystemEntries(Path.GetDirectoryName(cwd)!, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal).ToArray();
+        var before = Files();
+
+        // the bug: the registry diff refuses the scenario, since the map phase never wrote one
+        var registry = Run(cwd, env, "oracle", "diff", "PolicyWizard", Scn, "--capture", seeded);
+        Assert.Equal(3, registry.Code);
+        Assert.Contains("registry/scenarios.json", registry.Err);
+
+        // standalone: the seeded differences, the session id masked by the recording's own rule, the redaction applied to the capture
+        var diff = Run(cwd, env, "oracle", "diff", "--recording", recording, "--capture", seeded);
+        Assert.True(diff.Code == 1, diff.Out + diff.Err);
+        Assert.StartsWith("scn:rider-added: 6 recorded call(s), 5 replayed, 3 difference(s)\n", diff.Out);
+        Assert.Contains(OracleModule.StandaloneNote + "\n", diff.Out);
+        Assert.Contains("(masked: norm:session-id 10)", diff.Out);
+        Assert.Contains("1. missing call: #4 Product/GetLimits", diff.Out);
+        Assert.Contains("2. request block missing: #5 Policy/SaveRider SaveRider/Audit (2 fields)", diff.Out);
+        Assert.DoesNotContain("legacy client:", diff.Out);                                                       // no registry, so no wire mapping to point at
+        Assert.DoesNotContain("agent1", diff.Out);                                                               // the capture went through the redaction
+        var green = Run(cwd, env, "oracle", "diff", "--recording", recording, "--capture", fixedRun);
+        Assert.True(green.Code == 0, green.Out + green.Err);
+        Assert.StartsWith("scn:rider-added: 6 recorded call(s), 6 replayed, 0 difference(s)\n", green.Out);
+        Assert.Equal(before, Files());                                                                           // no replays/, no verified/, no registry edit
+
+        // a sealed replay folder is a capture too: the registry diff's own import of the same rows gives the same report
+        Phase(dir, "implement");
+        OracleModule.Diff(dir, Scn, seeded, cfg, Key, Today);
+        var fromDir = Run(cwd, env, "oracle", "diff", "--recording", recording, "--capture", Recording.ReplayDir(dir, Scn));
+        Assert.Equal(1, fromDir.Code);
+        Assert.Equal(diff.Out, fromDir.Out);
+        var asRecording = Run(cwd, env, "oracle", "diff", "--recording", Recording.ReplayDir(dir, Scn), "--capture", seeded);
+        Assert.Equal(3, asRecording.Code);
+        Assert.Contains("holds a replay, not a recording", asRecording.Err);
+        var recordingAsCapture = Run(cwd, env, "oracle", "diff", "--recording", recording, "--capture", recording);
+        Assert.Equal(3, recordingAsCapture.Code);
+        Assert.Contains("--capture takes a replay of scn:rider-added", recordingAsCapture.Err);
+
+        // refused as the registry diff refuses: no redaction key for the recording's rules, a broken seal, an invalid rule
+        Assert.Contains("PARITY_REDACT_KEY", Run(cwd, new Dictionary<string, string?> { ["PARITY_REDACT_KEY"] = null }, "oracle", "diff", "--recording", recording, "--capture", seeded) is { Code: 3 } k ? k.Err : "exit was not 3");
+        var request = Path.Combine(recording, "calls", "005.request.xml");
+        var original = File.ReadAllText(request);
+        File.WriteAllText(request, original.Replace("<Channel>desk</Channel>", ""));
+        var tampered = Run(cwd, env, "oracle", "diff", "--recording", recording, "--capture", seeded);
+        Assert.Equal(3, tampered.Code);
+        Assert.Contains("no longer matches its seal (calls/005.request.xml was edited after export)", tampered.Err);
+        File.WriteAllText(request, original);
+        var rules = Path.Combine(consumer, "recordings", Normalization.FileName);
+        var rulesText = File.ReadAllText(rules);
+        File.WriteAllText(rules, rulesText.Replace("\"scope\": \"global\"", "\"scope\": \"everywhere\""));
+        var invalid = Run(cwd, env, "oracle", "diff", "--recording", recording, "--capture", seeded);
+        Assert.Equal(3, invalid.Code);
+        Assert.Contains("NORM-INVALID", invalid.Err);
+        File.WriteAllText(rules, rulesText);
+
+        // usage: one form or the other, and the standalone form needs both sides
+        Assert.Equal(2, Run(cwd, env, "oracle", "diff", "PolicyWizard", Scn, "--recording", recording, "--capture", seeded).Code);
+        Assert.Equal(2, Run(cwd, env, "oracle", "diff", "--recording", recording).Code);
+        Assert.Equal(3, Run(cwd, env, "oracle", "diff", "--recording", recording, "--capture", Path.Combine(scratch, "absent.jsonl")).Code);
+    }
+
     private (int Code, string Out, string Err) Run(string cwd, IDictionary<string, string?> env, params string[] args)
     {
         var psi = new ProcessStartInfo(Environment.ProcessPath ?? "dotnet") { WorkingDirectory = cwd, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };

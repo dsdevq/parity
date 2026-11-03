@@ -64,9 +64,14 @@ public static partial class Normalization
     /// Reads and checks the rule set: schema (NORM-INVALID) and a decision behind every rule (NORM-UNDECIDED). The hash of the file
     /// is what a verification is bound to, so any change to the rules unbacks it. An absent file is no rules.
     /// </summary>
-    public static (NormSet Set, List<Finding> Findings) Load(string moduleDir, IReadOnlyCollection<Decision> decisions)
+    public static (NormSet Set, List<Finding> Findings) Load(string moduleDir, IReadOnlyCollection<Decision> decisions) => LoadFile(PathOf(moduleDir), decisions);
+
+    /// <summary>
+    /// <see cref="Load"/> for a rules file at <paramref name="path"/>. With <paramref name="decisions"/> null the rules are checked for
+    /// their schema only, not for the decision behind each: the standalone diff, which reads no registry and marks nothing verified.
+    /// </summary>
+    public static (NormSet Set, List<Finding> Findings) LoadFile(string path, IReadOnlyCollection<Decision>? decisions)
     {
-        var path = PathOf(moduleDir);
         var f = new List<Finding>();
         if (!File.Exists(path)) return (new NormSet(), f);
         var file = Recording.Rel(path);
@@ -87,7 +92,7 @@ public static partial class Normalization
         var rules = new List<NormRule>();
         if (!root.TryGetProperty("rules", out var items) || items.ValueKind != JsonValueKind.Array) { Bad(1, "needs 'rules': [...]"); return (new NormSet(), f); }
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        var byId = decisions.GroupBy(d => d.Id).ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+        var byId = (decisions ?? Array.Empty<Decision>()).GroupBy(d => d.Id).ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
         foreach (var item in items.EnumerateArray())
         {
             if (item.ValueKind != JsonValueKind.Object) { Bad(0, "every rule must be an object"); continue; }
@@ -111,10 +116,13 @@ public static partial class Normalization
                 try { _ = new Regex(match); }
                 catch (ArgumentException ex) { Bad(line, $"{who}: match '{match}' is not a regular expression: {ex.Message}"); ok = false; }
             var decision = Str("decision");
-            if (decision == null) { Bad(line, $"{who} names no decision; a normalization rule hides a difference, so a person decides it: add a dec: entry to registry/decisions.json that cites {who} and says why the value may differ, then name it in 'decision'", "NORM-UNDECIDED"); ok = false; }
-            else if (!byId.TryGetValue(decision, out var d)) { Bad(line, $"{who}: decision {decision} is not in registry/decisions.json", "NORM-UNDECIDED"); ok = false; }
-            else if (id != null && !d.Cite.Contains(id)) { Bad(line, $"{who}: {decision} does not cite {id}; the decision must name the rule it allows", "NORM-UNDECIDED"); ok = false; }
-            if (ok) rules.Add(new NormRule(id!, decision!, scope!, target!, field!, match));
+            if (decisions != null)
+            {
+                if (decision == null) { Bad(line, $"{who} names no decision; a normalization rule hides a difference, so a person decides it: add a dec: entry to registry/decisions.json that cites {who} and says why the value may differ, then name it in 'decision'", "NORM-UNDECIDED"); ok = false; }
+                else if (!byId.TryGetValue(decision, out var d)) { Bad(line, $"{who}: decision {decision} is not in registry/decisions.json", "NORM-UNDECIDED"); ok = false; }
+                else if (id != null && !d.Cite.Contains(id)) { Bad(line, $"{who}: {decision} does not cite {id}; the decision must name the rule it allows", "NORM-UNDECIDED"); ok = false; }
+            }
+            if (ok) rules.Add(new NormRule(id!, decision ?? "", scope!, target!, field!, match));
         }
         var hash = Recording.Hash(Encoding.UTF8.GetBytes(text.Replace("\r\n", "\n")));
         var set = new NormSet { Version = version, Hash = hash, Rules = rules };

@@ -24,7 +24,7 @@ public sealed record RecordingFile(int Schema, string Kind, string Scenario, int
     List<RecordedCall> Calls, SortedDictionary<string, string> Files, string Seal);
 
 public sealed record ExportRequest(string ModuleDir, string Scenario, string Kind, List<string> Logs, List<string> Sessions, DateTimeOffset? From, DateTimeOffset? To,
-    string? RecordedBy, string? Environment, string? LegacyBuild, bool Replace, OracleConfig Config, string? RedactKey, DateOnly Today);
+    string? RecordedBy, string? Environment, string? LegacyBuild, bool Replace, OracleConfig Config, string? RedactKey, DateOnly Today, int? ScenarioVersion = null);
 
 public static partial class Recording
 {
@@ -98,7 +98,8 @@ public static partial class Recording
         if (!replay && q.Sessions.Count == 0 && q.From == null && q.To == null)
             throw new InvalidOperationException("export is selective: name the session (--session) or the time window (--from, --to) of the one scenario run");
         if (q.Logs.Count == 0) throw new InvalidOperationException("no host log given (--log)");
-        var version = OracleModule.ScenarioVersion(q.ModuleDir, q.Scenario);
+        // a recording always takes its version from the registry; only the standalone diff's temporary replay names one
+        var version = replay && q.ScenarioVersion is { } given ? given : OracleModule.ScenarioVersion(q.ModuleDir, q.Scenario);
         if (!replay && string.IsNullOrWhiteSpace(q.RecordedBy)) throw new InvalidOperationException("a recording needs --recorded-by: who ran the scenario in the legacy client");
         if (!replay && Directory.Exists(dir) && !q.Replace)
             throw new InvalidOperationException($"{Rel(dir)} exists; a recording is replaced only on purpose (--replace)");
