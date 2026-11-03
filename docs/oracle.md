@@ -216,28 +216,21 @@ normalization.
 {
   "schema": 1,
   "scenario": "scn:rider-added",
-  "recordedCalls": 6,
-  "replayedCalls": 6,
-  "differences": 4,
-  "recording": { "seal": "sha256:...", "recorded": "2026-11-03", "recordedBy": "alex", "environment": "local", "legacyBuild": "4.2.1" },
-  "replay": { "seal": "sha256:..." },
-  "rules": { "hash": "sha256:...", "version": 1, "masked": { "norm:session-id": 10 } },
   "calls": [
     { "recordedSeq": 1, "captureSeq": 1, "call": "Auth/Login", "notCompared": [], "differences": [] },
     { "recordedSeq": 2, "captureSeq": 3, "call": "Policy/GetPolicy", "notCompared": ["Audit"], "differences": [] },
     { "recordedSeq": 4, "captureSeq": null, "call": "Product/GetLimits", "notCompared": [],
-      "differences": [ { "level": "call", "kind": "missing", "path": null, "legacy": null, "new": null, "leaves": [],
+      "differences": [ { "level": "call", "kind": "missing", "path": null, "legacy": null, "new": null,
                          "detail": "the legacy client makes this call; the new client never does" } ] },
     { "recordedSeq": 5, "captureSeq": 4, "call": "Policy/SaveRider", "notCompared": [],
       "differences": [
         { "level": "request", "kind": "block missing", "path": "SaveRider/Audit",
           "legacy": "SaveRider/Audit/Reason = \"client request\"; SaveRider/Audit/Channel = \"desk\"", "new": null,
-          "leaves": [ { "path": "SaveRider/Audit/Reason", "value": "client request" }, { "path": "SaveRider/Audit/Channel", "value": "desk" } ],
           "detail": null },
         { "level": "request", "kind": "changed", "path": "SaveRider/Rider/EffectiveDate", "legacy": "2024-01-01", "new": "2026-11-03",
-          "leaves": [], "detail": null } ] },
+          "detail": null } ] },
     { "recordedSeq": null, "captureSeq": 6, "call": "Audit/Ping", "notCompared": [],
-      "differences": [ { "level": "call", "kind": "extra", "path": null, "legacy": null, "new": null, "leaves": [],
+      "differences": [ { "level": "call", "kind": "extra", "path": null, "legacy": null, "new": null,
                          "detail": "the new client makes this call; the legacy client never does" } ] }
   ]
 }
@@ -247,16 +240,15 @@ normalization.
   empty), then every capture call no recorded call pairs with (`recordedSeq` null). `captureSeq` is the capture
   call it was paired with, null when the new client never makes it.
 - `level`: `call`, `order`, `request`, `reply`, `error` or `dataset`. `kind`: `missing` (the legacy side has it, the
-  new side does not), `extra`, `changed`, `block missing` and `block extra` (a missing or extra subtree, its fields
-  in `leaves`), or `reordered` (level `order`).
+  new side does not), `extra`, `changed`, `block missing` and `block extra` (a missing or extra subtree), or `reordered`
+  (level `order`).
 - `path`: the field path (Field paths, above); for a dataset, `Table/Column`, `Table[row]/Column` or `Table rows`;
   `error` for the error; null for a whole call, an order difference or a whole missing dataset.
 - `legacy`, `new`: the value on each side as text, null where that side has none (a missing field's `new`, an error
-  only one client got). A block's value is its leaves as the report prints them; `leaves` lists them one by one.
+  only one client got). A missing or extra value is the text the report prints (a single
+  field's value in quotes, a block's leaves as `path = "value"` joined by `; `).
   A dataset difference carries the report's words where there is no single value (`tables Policy, Audit`, `3 row(s)`).
 - `detail`: the report's explanation line, or null. `notCompared`: the legacy reply tables the pair did not compare.
-- `recording`, `replay`, `rules`: what was compared, so a stored result can be told apart from one made against
-  another recording, replay or rule set.
 - `schema` changes only when a consumer would break (a field removed, renamed or retyped, a value with a new
   meaning); an added field keeps it.
 
@@ -414,12 +406,11 @@ read once. A generated dataset of that shape (`Issue38Tests`) diffs in about 2 s
 1. **Unpaired capture calls are listed too**, after the recorded calls, with `recordedSeq` null, so every
    difference the report holds is in the JSON and a consumer can count extra calls without reading the report.
 2. **Kinds.** The issue named `block missing`; its mirror `block extra` and the order level's `reordered` follow the
-   same words, so `kind` alone says whether `leaves` holds anything.
+   same words.
 3. **Values are text or null.** Absent is null, never the report's `(absent)` or `(no error)`. A block keeps the
-   report's one-text value in `legacy`/`new` and adds `leaves`, so a consumer that wants one value per difference has
-   one and a consumer that wants each field has them.
-4. **What was compared travels with the result** (seals, rules hash and version, masked counts), and per call the
-   tables not compared: the inputs a consumer needs to say `not-compared` or to tell a stale result.
+   report's one-text value in `legacy`/`new`.
+4. **Per call, the tables not compared** (`notCompared`): the input a consumer needs to say `not-compared`. Nothing
+   about the recording, replay or rules travels with the result; a field added later keeps `schema`.
 5. **A refusal prints nothing on stdout.** Exit 3 with the reason on stderr, as without `--json`: a consumer never
    reads a partial document.
 6. **Only `diff`.** `verify` keeps writing `verified/<slug>.json` on an empty diff; a consumer that needs the per-call

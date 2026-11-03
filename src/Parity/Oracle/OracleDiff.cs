@@ -11,13 +11,10 @@ namespace Parity.Oracle;
 /// is <c>missing</c> (the legacy side has it, the new side does not), <c>extra</c>, <c>changed</c>, <c>reordered</c> or
 /// <c>not-compared</c> (the pair is over the per-call size limit). Legacy and New are the values after normalization, null where that
 /// side has none (a missing field's new value, an error only one side logged); a missing or extra block's value is its leaves as one
-/// text. Fields counts the leaves under a missing or extra block; Leaves lists them, one per field; Detail carries what the line
+/// text. Fields counts the leaves under a missing or extra block; Detail carries what the line
 /// needs besides the values.
 /// </summary>
-public sealed record Difference(string Part, string Kind, int? LegacySeq, int? NewSeq, string Call, string? Path, string? Legacy, string? New, int Fields, string? Detail, List<Leaf>? Leaves = null);
-
-/// <summary>One field of a missing or extra block: its full path and its value after normalization.</summary>
-public sealed record Leaf(string Path, string Value);
+public sealed record Difference(string Part, string Kind, int? LegacySeq, int? NewSeq, string Call, string? Path, string? Legacy, string? New, int Fields, string? Detail);
 
 /// <summary>
 /// One call of the comparison: a recorded call with the capture call it was paired with (null when the new client never makes it),
@@ -250,9 +247,8 @@ public static class OracleDiff
         foreach (var (root, leaves) in groups)
         {
             var block = leaves.Count > 1 || leaves[0] != root;
-            var values = block ? string.Join("; ", leaves.Select(x => $"{x} = \"{has.Leaves[x]}\"")) : has.Leaves[leaves[0]];
-            yield return new Difference(part, kind, lc.Seq, nc.Seq, lc.Key, root, kind == "missing" ? values : null, kind == "extra" ? values : null, block ? leaves.Count : 0, null,
-                leaves.Select(x => new Leaf(x, has.Leaves[x])).ToList());
+            var values = string.Join("; ", leaves.Select(x => block ? $"{x} = \"{has.Leaves[x]}\"" : $"\"{has.Leaves[x]}\""));
+            yield return new Difference(part, kind, lc.Seq, nc.Seq, lc.Key, root, kind == "missing" ? values : null, kind == "extra" ? values : null, block ? leaves.Count : 0, null);
         }
     }
 
@@ -330,9 +326,8 @@ public static class OracleDiff
             };
             sb.Append($"\n{i}. {what}: {at} {d.Call}" + (d.Path != null ? $" {d.Path}" + (d.Fields > 0 ? $" ({d.Fields} fields)" : "") : "") + "\n");
             if (d.Detail != null) sb.Append($"   {d.Detail}\n");
-            string Shown(string v) => d.Part is "request" or "reply" && d.Fields == 0 ? $"\"{v}\"" : v;               // one field quoted; a block's leaves already are
-            if (d.Kind == "missing" && d.Part != "call" && d.Legacy != null) sb.Append($"   legacy: {Shown(d.Legacy)}\n   new: (absent)\n");
-            else if (d.Kind == "extra" && d.Part != "call" && d.New != null) sb.Append($"   legacy: (absent)\n   new: {Shown(d.New)}\n");
+            if (d.Kind == "missing" && d.Part != "call" && d.Legacy != null) sb.Append($"   legacy: {d.Legacy}\n   new: (absent)\n");
+            else if (d.Kind == "extra" && d.Part != "call" && d.New != null) sb.Append($"   legacy: (absent)\n   new: {d.New}\n");
             else if (d.Kind == "changed") sb.Append($"   legacy: \"{d.Legacy ?? "(no error)"}\"\n   new: \"{d.New ?? "(no error)"}\"\n");
             else if (d.Kind == "not-compared") sb.Append($"   legacy: {d.Legacy}\n   new: {d.New}\n");
             if (where == null) continue;
@@ -351,12 +346,9 @@ public static class OracleDiff
     /// <summary>The version of the <c>--json</c> shape; bumped on a change that breaks a consumer, never on an added field.</summary>
     public const int JsonSchema = 1;
 
-    public sealed record JsonReport(int Schema, string Scenario, int RecordedCalls, int ReplayedCalls, int Differences, JsonRecording Recording, JsonReplay Replay, JsonRules Rules, List<JsonCall> Calls);
-    public sealed record JsonRecording(string Seal, string Recorded, string? RecordedBy, string? Environment, string? LegacyBuild);
-    public sealed record JsonReplay(string Seal);
-    public sealed record JsonRules(string Hash, int? Version, SortedDictionary<string, int> Masked);
+    public sealed record JsonReport(int Schema, string Scenario, List<JsonCall> Calls);
     public sealed record JsonCall(int? RecordedSeq, int? CaptureSeq, string Call, List<string> NotCompared, List<JsonDifference> Differences);
-    public sealed record JsonDifference(string Level, string Kind, string? Path, string? Legacy, string? New, List<Leaf> Leaves, string? Detail);
+    public sealed record JsonDifference(string Level, string Kind, string? Path, string? Legacy, string? New, string? Detail);
 
     private static readonly JsonSerializerOptions JsonOut = new()
     {
@@ -379,13 +371,8 @@ public static class OracleDiff
                 d.Part,
                 d.Fields > 0 ? $"block {d.Kind}" : d.Kind,
                 d.Path, d.Legacy, d.New,
-                d.Fields > 0 ? d.Leaves ?? new() : new(),
                 d.Detail)).ToList())).ToList();
-        var p = r.Legacy.Provenance;
-        return new JsonReport(JsonSchema, r.Scenario, r.Legacy.Calls.Count, r.Replay.Calls.Count, r.Differences.Count,
-            new JsonRecording(r.Legacy.Seal, p.Recorded, p.RecordedBy, p.Environment, p.LegacyBuild), new JsonReplay(r.Replay.Seal),
-            new JsonRules(r.Rules.Hash, r.Rules.Version > 0 ? r.Rules.Version : null, new SortedDictionary<string, int>(r.Rules.Masked, StringComparer.Ordinal)),
-            calls);
+        return new JsonReport(JsonSchema, r.Scenario, calls);
     }
 
     public static string RenderJson(DiffResult r) => JsonSerializer.Serialize(ToJson(r), JsonOut).Replace("\r\n", "\n") + "\n";
