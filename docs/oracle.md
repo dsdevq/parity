@@ -164,8 +164,9 @@ imports them into `replays/<slug>/` through the same redaction as a recording, a
 replay is diffed. `--max-call-mb` (default 64, `0` for no limit) bounds one side of one call: its request,
 reply and dataset files together. A pair over it on either side is not compared and is one `call not compared`
 difference that names the call, both sizes, the limit and the flag, so the diff never hangs on a payload nobody sized
-and never passes over one in silence. Exit 0 when there is no difference, 1 when there is, 3 when the diff is refused (a broken seal,
-a rule without a decision, a scenario the registry lacks, a recording made at another version of the scenario). It never marks anything verified.
+and never passes over one in silence. Exit 0 when there is no difference, 1 when there is, 3 when the diff is refused
+(a broken seal, a rule without a decision, a scenario the registry lacks, a recording made at another version of the
+scenario). It never marks anything verified.
 
 **Standalone.** `parity oracle diff --recording <recordings/<slug>/> --capture <replays/<slug>/ | rows.jsonl>` runs the same
 diff with no registry read and nothing written:
