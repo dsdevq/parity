@@ -19,7 +19,7 @@ may change; the guard refuses it everywhere else. The reference is docs/oracle.m
 3. Check `redact` and `writes` in `legacy/<Module>/recordings/oracle.json` (from `legacy/templates/oracle.json`; with `replay`, the command
    `parity oracle verify` runs) with the person: every field that carries a
    person, an id or an amount needs a redaction rule, and every call that changes host state is a write.
-   The settings need a `dec:` entry in `registry/decisions.json` that cites `oracle:<hash>` (`registry check` prints the hash), written from
+   The settings need a `dec:` entry in `legacy/<Module>/registry/decisions.json` that cites `oracle:<hash>` (`registry check` prints the hash), written from
    what the person said. `PARITY_REDACT_KEY` must be set (the same private value wherever recordings and replays are exported).
 4. Run `"${PARITY_BIN:-parity}" oracle export legacy/<Module> scn:<id> --log <dump> --session <id> --recorded-by <name> --environment <env> --legacy-build <build>`.
    It prints the folder, the call count, the writes, how many values it redacted and the seal.
