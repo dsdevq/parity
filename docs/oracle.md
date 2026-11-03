@@ -210,7 +210,7 @@ knowledge, so the map phase writes it.
 nothing else. A repo that keeps its own per-call state (`none`, `open`, `not-compared`) reads it instead of
 parsing text. The exit codes stay 0, 1 and 3; a refused diff (exit 3) prints nothing on stdout, its reason goes to
 stderr as without `--json`. Every value is the report's: read from the redacted recording and replay, after
-normalization.
+normalization. It works on both forms of `oracle diff`, the registry one and the standalone one.
 
 ```json
 {
