@@ -241,7 +241,7 @@ normalization. It works on both forms of `oracle diff`, the registry one and the
   call it was paired with, null when the new client never makes it.
 - `level`: `call`, `order`, `request`, `reply`, `error` or `dataset`. `kind`: `missing` (the legacy side has it, the
   new side does not), `extra`, `changed`, `block missing` and `block extra` (a missing or extra subtree), or `reordered`
-  (level `order`).
+  (level `order`), or `not-compared` (level `call`: the pair is over `--max-call-mb`, so none of it was compared).
 - `path`: the field path (Field paths, above); for a dataset, `Table/Column`, `Table[row]/Column` or `Table rows`;
   `error` for the error; null for a whole call, an order difference or a whole missing dataset.
 - `legacy`, `new`: the value on each side as text, null where that side has none (a missing field's `new`, an error
