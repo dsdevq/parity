@@ -37,7 +37,7 @@
     { "id": "Harbor", "subclasses": ["HarborCustomerForm"] },
     { "id": "Meadow", "project": "C:/src/LegacyApp/Tenants/Meadow/Meadow.csproj", "selfAssembly": "C:/src/LegacyApp/Tenants/Meadow/bin/Debug/Meadow.dll", "factories": ["LegacyApp.Forms.CustomerFormFactory.Create"] }
   ],
-  "//oracle": "The oracle layer (docs/oracle.md). writes: Category/Type globs of the wire calls that change host state (reads may reorder between writes, nothing crosses one). redact: values export replaces by a keyed pseudonym (PARITY_REDACT_KEY), by target (request, reply, dataset, error, any), field path glob and optional regex. replay: the command parity oracle verify runs, the scenario's tests, which write the host log rows of the run to $PARITY_CAPTURE.",
+  "//oracle": "The oracle layer (docs/oracle.md). writes: Category/Type globs of the wire calls that change host state (reads may reorder between writes, nothing crosses one). redact: values export replaces by a keyed pseudonym (PARITY_REDACT_KEY), by target (request, reply, dataset, error, any), field path glob and optional regex. replay: the command parity oracle verify runs, the scenario's tests, which write the host log rows of the run to $PARITY_CAPTURE. A person decides this section: diff and verify refuse until a dec: entry in registry/decisions.json cites its hash (oracle:sha256:..., printed by registry check), and a change unbacks every verification.",
   "oracle": {
     "writes": ["Policy/Save*", "*/Delete*"],
     "redact": [

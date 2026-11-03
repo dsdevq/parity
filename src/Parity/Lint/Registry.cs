@@ -297,13 +297,17 @@ public static partial class Registry
             f.AddRange(ruleFindings);
             ids.UnionWith(NormIds(Oracle.Normalization.PathOf(moduleDir)));
         }
+        var oracleCfg = File.Exists(Oracle.OracleModule.ConfigPath(moduleDir)) ? ExtractConfig.Load(Oracle.OracleModule.ConfigPath(moduleDir)).Oracle : new OracleConfig();
+        var oracleHash = Oracle.OracleModule.SettingsHash(oracleCfg);
+        if (Oracle.OracleModule.Undecided(oracleHash, l.Decisions.Select(x => x.D)) is { } undecided)
+            f.Add(new Finding(Rel(Oracle.OracleModule.ConfigPath(moduleDir)), 0, "ORACLE-UNDECIDED", "error", undecided));
         var evidence = new EvidenceSet(moduleDir);
         void Cites(string file, int line, string who, IEnumerable<string> cites, bool evOk = true)
         {
             foreach (var id in cites)
             {
                 if (id.StartsWith("ev:", StringComparison.Ordinal) && evOk) { if (evidence.Check(id) is { } bad) f.Add(new Finding(file, line, bad.Code, "error", $"{who}: '{id}' {bad.Message}")); }
-                else if (!ids.Contains(id)) f.Add(new Finding(file, line, "CITE-UNKNOWN", "error", $"{who}: '{id}' is not an id of the module's manifests"));
+                else if (!ids.Contains(id) && !Oracle.OracleModule.IsOracleId(id)) f.Add(new Finding(file, line, "CITE-UNKNOWN", "error", $"{who}: '{id}' is not an id of the module's manifests"));
             }
         }
 
@@ -354,7 +358,7 @@ public static partial class Registry
 
         // recordings: each sealed, for a scenario the registry has at its current version; a recorded scenario's lastVerified backed
         // by the verification parity oracle verify wrote against the same recording and rules
-        if (l.HasScenarios) f.AddRange(Oracle.OracleModule.Check(moduleDir, l.Scenarios.Select(x => (x.S, x.Line)).ToList(), scnFile, rules));
+        if (l.HasScenarios) f.AddRange(Oracle.OracleModule.Check(moduleDir, l.Scenarios.Select(x => (x.S, x.Line)).ToList(), scnFile, rules, oracleHash));
 
         return f.OrderBy(x => x.File, StringComparer.Ordinal).ThenBy(x => x.Line).ThenBy(x => x.Code, StringComparer.Ordinal).ThenBy(x => x.Message, StringComparer.Ordinal).ToList();
     }

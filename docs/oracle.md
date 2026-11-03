@@ -27,7 +27,7 @@ the spec and the manifest. A legacy refusal shows up in a recording as a call th
 legacy/<Module>/
   recordings/<slug>/recording.json      the ordered index (category, type, sequence, write), provenance, redaction count, seal
   recordings/<slug>/calls/NNN.request.<xml|json|txt>, NNN.reply.<...>, NNN.dataset.<xml|json>
-  recordings/normalization.json         the versioned normalization rules (one file per module)
+  recordings/normalization.json         the normalization rules (one file per module)
   replays/<slug>/                       the new client's last capture, same format; rewritten by every diff --capture and verify
   verified/<slug>.json                  written only by parity oracle verify
 ```
@@ -78,9 +78,12 @@ parity oracle export legacy/<Module> scn:<id> --log <dump.jsonl>[,<dump2.jsonl>]
   refuses rules without the key. Keep the key out of the repo and use the same value wherever recordings and
   replays are exported. A value no rule names stays as the host logged it: export prints a reminder to read the
   files before committing.
+- **Datasets are checked.** Every row's dataset must be a serialized DataSet (XML, or a JSON object of tables), with or
+  without redaction rules; export, and the replay import, name the row and the call when one is not.
 - **Provenance.** `recording.json` carries the date, environment, legacy build, who recorded, the dump file names,
   the row count and how the rows were selected. Never the session id or the log's user column.
-- **Sealed.** The index holds a hash of every file and a seal over the index. `diff` and `verify` refuse a recording
+- **Sealed.** The index holds a hash of every file (line endings read as LF, so a checkout that converts them is not an
+  edit) and a seal over the index. `diff` and `verify` refuse a recording
   whose seal no longer matches and name the edited, missing or added file; `parity registry check` reports it as
   `RECORDING-TAMPERED`. Restore it from git or record again.
 - **Only in `record`.** Export refuses in any other phase (it runs where `legacy/.phase` is `record` or absent), and
@@ -126,7 +129,7 @@ call that changes sides of a paired write is a `call order` difference.
 | order | a call made before a write by one client and after it by the other |
 | request, reply | a changed value (`request differs`), or a missing or extra field. Leaves missing under a node the other side lacks are one `block missing` with the field count, not one line per field |
 | error | the logged error text differs |
-| dataset | only the tables the new client's reply holds, because the table filter travels in a header the log does not keep: a table only the new reply has, a row count, a missing or extra column, and per column the number of rows that differ with the first one shown. Legacy tables the new client does not ask for are listed under "not compared" |
+| dataset | only the tables the new client's reply holds, because the table filter travels in a header the log does not keep: a table only the new reply has, a row count, a missing or extra column, and per column the number of rows that differ with the first one shown. Legacy tables the new client does not ask for are listed under "not compared" and kept in the verification. A capture whose reply holds no dataset (or no table) where the recording has one is a `dataset missing` difference: nothing was compared |
 
 **The report** reads without domain knowledge: a summary line (`scn:x: 6 recorded call(s), 5 replayed, 3
 difference(s)`), the recording's provenance and the rules applied (with how many values each masked), then one
@@ -156,12 +159,21 @@ knowledge, so the map phase writes it.
 - Every rule names a `dec:` entry of `registry/decisions.json`, and that decision must cite the rule's id. A rule
   without one is `NORM-UNDECIDED` and the diff refuses to run. The decision's question is the one a person can
   judge without domain knowledge ("the value is different every session: may the diff ignore it?").
-- `version` goes up with every change. A verification records the version and the file's hash; a rule set that
-  changed under a version some scenario was verified against is `NORM-VERSION`, and that scenario's
-  `lastVerified` is no longer backed (below).
+- `version` is an optional label. A verification records the file's hash, so any change to the rules leaves the
+  scenarios verified under the old ones unbacked (`SCENARIO-VERIFY-UNBACKED`, below).
 
 Normalization is the main way to game a diff ("ignore the field that differs"), which is why the file sits under
 `recordings/`: the guard keeps it read-only outside the record phase, and a decision with an owner backs every rule.
+
+## Oracle settings
+
+`oracle` in `legacy/extract.config.json` (`replay`, `writes`, `redact`) decides what a verification trusts: the command whose
+capture is compared, which calls order the comparison, which values never reach a recording. It is held like a rule:
+a canonical hash of the parsed `oracle` object (edits elsewhere in the config do not count) must be cited by a `dec:`
+entry of `registry/decisions.json` as `oracle:sha256:<16 hex>`; without one `ORACLE-UNDECIDED` refuses `diff` and
+`verify` and fails `registry check`, and the message names the hash to cite. The hash is recorded in each
+verification, so changing the settings leaves verified scenarios unbacked until they are verified again. An empty
+`oracle` needs no decision.
 
 ## Verify
 
@@ -176,8 +188,8 @@ parity oracle verify legacy/<Module> scn:<id>
    command writes the host log rows of that run to `$PARITY_CAPTURE`. Its exit code is the test result.
 2. A non-zero exit is "not verified: the tests are not green". A green run that left no capture is refused.
 3. The capture is imported into `replays/<slug>/` (redacted; the raw file is deleted) and diffed.
-4. Only an empty diff writes `verified/<slug>.json` (scenario version, date, recording seal, rules version and hash,
-   replay seal, call count) and sets the scenario's `lastVerified` in `registry/scenarios.json`, editing that one
+4. Only an empty diff writes `verified/<slug>.json` (scenario version, date, recording seal, rules hash, oracle settings hash,
+   replay seal, call count, the legacy reply tables not compared) and sets the scenario's `lastVerified` in `registry/scenarios.json`, editing that one
    value in place so the file keeps its layout.
 
 Exit 0 verified, 1 not verified (red tests or a difference), 3 refused. Verify reads its command from the config
@@ -189,7 +201,8 @@ only: there is no flag to run something else.
 |---|---|
 | Recordings are read-only to the agent outside record | the guard refuses, in every phase but `record`, a write tool aimed under `legacy/<module>/recordings/`, and a shell word or MCP value that resolves there (also a bare `recordings` after a `cd`, and such a path behind a variable); export refuses outside `record`; the seal catches what a hook cannot see |
 | A normalization rule needs a human decision | `NORM-UNDECIDED` refuses the diff and fails `registry check`; the rules file is under `recordings/`, so it changes only in `record` |
-| Only the diff marks a scenario verified | `verified/` is refused to every tool call in every phase, `record` included; for a recorded scenario `registry check` refuses a `lastVerified` that a current verification (same date, recording, rules and scenario version) does not back: `SCENARIO-VERIFY-UNBACKED` |
+| The oracle settings need a human decision | `ORACLE-UNDECIDED` refuses the diff and verify and fails `registry check` until a `dec:` entry cites the settings' hash; a change unbacks every verification |
+| Only the diff marks a scenario verified | `verified/` is refused to every tool call in every phase, `record` included; for a recorded scenario `registry check` refuses a `lastVerified` that a current verification (same date, recording, rules, oracle settings and scenario version) does not back: `SCENARIO-VERIFY-UNBACKED` |
 | Reports are readable without domain knowledge | the report format above; every difference is a call, a field and two values |
 
 `Read`, `Grep` and `Glob` may read recordings in every phase. A shell command that names either folder is refused
@@ -219,9 +232,9 @@ whether it shows the reply the way the legacy client does is still the spec's to
 3. **Capturing the new client's side.** The same host log, imported through the same export and redaction. Capture
    in the new client's adapter would compare what the adapter believes it sent with what the host logged for the
    legacy client: two formats and two serializers, and every difference between them a false positive.
-4. **Normalization rules.** One versioned JSON file per module with `global`, per-call and per-scenario scopes,
+4. **Normalization rules.** One JSON file per module with `global`, per-call and per-scenario scopes,
    every rule tied to a `dec:` entry that cites it. One file keeps every exception in one reviewable place; the
-   version and the hash bind each verification to the rule set it used.
+   hash binds each verification to the rule set it used.
 5. **Reads vs writes.** Writes are named in config (`oracle.writes`) and recorded in the index; they order the
    comparison. Reads are compared on their request and on the dataset tables the new client asks for; mapping a
    reply onto the screen stays with the spec. No snapshot/restore is built (decision 1).

@@ -86,7 +86,10 @@ public static class OracleDiff
                 diffs.Add(new Difference("error", "changed", l.Seq, n.Seq, l.Key, "error", le ?? "(no error)", ne ?? "(no error)", 0, null));
             var lt = Payload.Tables(L.Dataset(l), (p, v) => M("dataset", l, p, v));
             var nt = Payload.Tables(N.Dataset(n), (p, v) => M("dataset", n, p, v));
-            if (lt != null)
+            if (lt is { Count: > 0 } && nt is not { Count: > 0 })
+                diffs.Add(new Difference("dataset", "missing", l.Seq, n.Seq, l.Key, null, $"tables {string.Join(", ", lt.Select(t => t.Name))}", null, 0,
+                    "the legacy client's reply holds a dataset; the new client's capture holds none, so nothing was compared"));
+            else if (lt != null)
             {
                 var asked = nt?.Select(t => t.Name).ToHashSet(StringComparer.Ordinal) ?? new HashSet<string>();
                 var skipped = lt.Where(t => !asked.Contains(t.Name)).Select(t => t.Name).ToList();
@@ -209,7 +212,7 @@ public static class OracleDiff
         sb.Append($"{r.Scenario}: {r.Legacy.Calls.Count} recorded call(s), {r.Replay.Calls.Count} replayed, {r.Differences.Count} difference(s)\n");
         var p = r.Legacy.Provenance;
         sb.Append($"recording: recorded {p.Recorded}" + (p.RecordedBy != null ? $" by {p.RecordedBy}" : "") + (p.Environment != null ? $", {p.Environment}" : "")
-                  + (p.LegacyBuild != null ? $", legacy build {p.LegacyBuild}" : "") + $"; rules: {(r.Rules.Version == 0 ? "none" : $"normalization.json version {r.Rules.Version}")}");
+                  + (p.LegacyBuild != null ? $", legacy build {p.LegacyBuild}" : "") + $"; rules: {(r.Rules.Rules.Count == 0 ? "none" : "normalization.json" + (r.Rules.Version > 0 ? $" version {r.Rules.Version}" : ""))}");
         if (r.Rules.Masked.Count > 0) sb.Append(" (masked: " + string.Join(", ", r.Rules.Masked.Select(x => $"{x.Key} {x.Value}")) + ")");
         sb.Append('\n');
         var i = 0;
@@ -222,6 +225,7 @@ public static class OracleDiff
                 ("call", "missing") => "missing call",
                 ("call", "extra") => "extra call",
                 ("order", _) => "call order",
+                ("dataset", "missing") when d.Path == null => "dataset missing",
                 (_, "missing") when d.Fields > 0 => $"{d.Part} block missing",
                 (_, "extra") when d.Fields > 0 => $"{d.Part} block extra",
                 (_, "missing") => $"{d.Part} field missing",

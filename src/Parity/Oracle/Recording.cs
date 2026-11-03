@@ -47,6 +47,9 @@ public static partial class Recording
 
     public static string Hash(byte[] bytes) => "sha256:" + Convert.ToHexString(SHA256.HashData(bytes))[..16].ToLowerInvariant();
 
+    /// <summary>The hash of a recorded text file with CRLF read as LF, so a checkout that converts line endings does not look edited.</summary>
+    public static string TextHash(byte[] bytes) => Hash(Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(bytes).Replace("\r\n", "\n")));
+
     /// <summary>The seal: one hash over the index with the seal blanked, which carries each file's hash.</summary>
     public static string SealOf(RecordingFile r) =>
         Hash(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(r with { Seal = "", Files = new SortedDictionary<string, string>(r.Files, StringComparer.Ordinal) }, Json.Options).Replace("\r\n", "\n")));
@@ -69,7 +72,7 @@ public static partial class Recording
         {
             var f = Path.Combine(dir, rel);
             if (!File.Exists(f)) problems.Add($"{rel} is missing");
-            else if (Hash(File.ReadAllBytes(f)) != hash) problems.Add($"{rel} was edited after export");
+            else if (TextHash(File.ReadAllBytes(f)) != hash) problems.Add($"{rel} was edited after export");
         }
         var calls = Path.Combine(dir, "calls");
         if (Directory.Exists(calls))
@@ -81,7 +84,7 @@ public static partial class Recording
         return problems;
     }
 
-    public static string Read(string dir, string? rel) => rel == null ? "" : File.ReadAllText(Path.Combine(dir, rel));
+    public static string Read(string dir, string? rel) => rel == null ? "" : File.ReadAllText(Path.Combine(dir, rel)).Replace("\r\n", "\n");
 
     /// <summary>
     /// <c>parity oracle export</c> (kind recording) and the capture import of <c>diff</c> and <c>verify</c> (kind replay): selects the
@@ -119,7 +122,7 @@ public static partial class Recording
                 var rel = $"calls/{seq:000}.{part}.{Payload.Format(text)}";
                 var bytes = Encoding.UTF8.GetBytes(text);
                 File.WriteAllBytes(Path.Combine(tmp, rel), bytes);
-                files[rel] = Hash(bytes);
+                files[rel] = TextHash(bytes);
                 return rel;
             }
             var calls = new List<RecordedCall>();
@@ -129,7 +132,7 @@ public static partial class Recording
                 var request = redactor.Text("request", row.Request);
                 var reply = row.Reply == null ? null : redactor.Text("reply", row.Reply);
                 string? dataset;
-                try { dataset = row.Dataset == null ? null : redactor.DatasetText(row.Dataset); }
+                try { dataset = row.Dataset == null ? null : redactor.DatasetText(row.Dataset); _ = Payload.Tables(dataset); }
                 catch (InvalidOperationException ex) { throw new InvalidOperationException($"row {i} of the selection ({key}): {ex.Message}"); }
                 var error = row.Error == null ? null : redactor.Text("error", row.Error);
                 calls.Add(new RecordedCall(i, row.Category, row.Type, q.Config.Writes.Any(w => Payload.CallMatch(w, key)),

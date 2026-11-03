@@ -52,6 +52,31 @@ public sealed class OracleTests
         return dir;
     }
 
+    /// <summary>Writes the oracle settings to the extract config next to the module, and a decision that cites their hash.</summary>
+    private static void WriteSettings(string moduleDir, OracleConfig cfg, bool decide = true)
+    {
+        File.WriteAllText(Path.Combine(Path.GetDirectoryName(moduleDir)!, "extract.config.json"), JsonSerializer.Serialize(new { project = "x.csproj", oracle = cfg }, Json.Options));
+        if (decide) Decide(moduleDir, cfg);
+    }
+
+    private static void Decide(string moduleDir, OracleConfig cfg)
+    {
+        var hash = OracleModule.SettingsHash(cfg);
+        var decisions = Path.Combine(moduleDir, "registry", "decisions.json");
+        File.WriteAllText(decisions, File.ReadAllText(decisions).Replace("  \"decisions\": [\n", $$"""
+          "decisions": [
+            {
+              "id": "dec:oracle-settings-{{hash["sha256:".Length..]}}",
+              "question": "May the verification trust these oracle settings (replay command, writes, redaction)?",
+              "answer": "Yes. A person reviewed them.",
+              "owner": "alex",
+              "date": "2026-11-03",
+              "cite": ["oracle:{{hash}}"]
+            },
+
+        """.Replace("\r\n", "\n")));
+    }
+
     private static void Phase(string moduleDir, string phase) => File.WriteAllText(Path.Combine(Path.GetDirectoryName(moduleDir)!, ".phase"), phase + "\n");
 
     /// <summary>The legacy client's run, between other sessions' calls, dumped as the host log.</summary>
@@ -107,8 +132,15 @@ public sealed class OracleTests
         Assert.Contains(written, t => t.Contains("<Workstation>WS-01</Workstation>"));                       // what no rule names stays as logged
         Assert.Contains("exists", Assert.Throws<InvalidOperationException>(() => OracleModule.Export(Export())).Message);
 
-        // replay the seeded new client: without a rule, the session id differs in every call
+        // the oracle settings decide what a verification trusts: undecided, the diff refuses; with a decision citing their hash, it runs
         Phase(dir, "implement");
+        WriteSettings(dir, cfg, decide: false);
+        Assert.Contains("ORACLE-UNDECIDED", Assert.Throws<InvalidOperationException>(() => OracleModule.Diff(dir, Scn, Capture(Path.Combine(scratch, "new-0.jsonl"), _ => { }), cfg, Key, Today)).Message);
+        Assert.Contains(Registry.Check(dir, gate: false), x => x.Code == "ORACLE-UNDECIDED" && x.Message.Contains(OracleModule.SettingsHash(cfg)));
+        Decide(dir, cfg);
+        Assert.DoesNotContain(Registry.Check(dir, gate: false), x => x.Code is "ORACLE-UNDECIDED" or "CITE-UNKNOWN");
+
+        // replay the seeded new client: without a rule, the session id differs in every call
         var raw = OracleModule.Diff(dir, Scn, Capture(Path.Combine(scratch, "new-1.jsonl"), _ => { }), cfg, Key, Today);
         Assert.Contains(raw.Differences, d => d.Path != null && d.Path.EndsWith("SessionId", StringComparison.Ordinal));
 
@@ -116,7 +148,6 @@ public sealed class OracleTests
         var rules = Normalization.PathOf(dir);
         File.WriteAllText(rules, """
         {
-          "version": 1,
           "rules": [
             { "id": "norm:session-id", "decision": "dec:session-id-differs-every-login", "scope": "global", "target": "any", "field": "**/SessionId", "match": null }
           ]
@@ -159,6 +190,11 @@ public sealed class OracleTests
         Assert.Contains(Registry.Check(dir, gate: false), x => x.Code == "RECORDING-TAMPERED" && x.Message.Contains("calls/005.request.xml"));
         File.WriteAllText(request, original);
 
+        // a checkout that converts line endings (core.autocrlf) is not an edit
+        foreach (var f in Directory.EnumerateFiles(recDir, "*", SearchOption.AllDirectories)) File.WriteAllText(f, File.ReadAllText(f).Replace("\r\n", "\n").Replace("\n", "\r\n"));
+        Assert.DoesNotContain(Registry.Check(dir, gate: false), x => x.Code is "RECORDING-TAMPERED" or "RECORDING-INVALID");
+        Assert.Equal(3, OracleModule.Diff(dir, Scn, null, cfg, Key, Today).Differences.Count);
+
         // verify: a red replay or a replay with differences leaves the scenario unverified; after the fixes it is verified, no human step
         var fixes = new NewClient(new SyntheticHost(), Today);
         IReplayRunner Runner(int exit) => new DelegateRunner(r => { Capture(r.Capture, c => { c.SkipsLimits = fixes.SkipsLimits; c.OmitsAudit = fixes.OmitsAudit; c.DatesFromClock = fixes.DatesFromClock; }); return exit; });
@@ -181,17 +217,31 @@ public sealed class OracleTests
         var scenariosText = File.ReadAllText(Path.Combine(dir, "registry", "scenarios.json"));
         Assert.Contains("      \"cite\": [\"handler:CoverSummaryForm/btnConfirm_Click\"],\n      \"lastVerified\": \"2026-11-03\"\n    },", scenariosText);  // the file keeps its layout
         Assert.DoesNotContain(Registry.Check(dir, gate: false), x => x.Severity == "error");
+        var verification = JsonSerializer.Deserialize<Verification>(File.ReadAllText(Recording.VerifiedFile(dir, Scn)), Json.Options)!;
+        Assert.Equal(new[] { "#2 Policy/GetPolicy: Audit" }, verification.NotCompared);                          // the skipped tables are on the record
 
         // only verify sets lastVerified on a recorded scenario: a hand-set date, or a rule change after verifying, is not backed
         File.WriteAllText(Path.Combine(dir, "registry", "scenarios.json"), scenariosText.Replace("\"lastVerified\": \"2026-11-03\"", "\"lastVerified\": \"2026-11-04\""));
         Assert.Contains(Registry.Check(dir, gate: false), x => x.Code == "SCENARIO-VERIFY-UNBACKED" && x.Message.Contains("dated 2026-11-03"));
         File.WriteAllText(Path.Combine(dir, "registry", "scenarios.json"), scenariosText);
-        File.WriteAllText(rules, File.ReadAllText(rules).Replace("\"match\": null", "\"match\": \"S-.*\""));
-        var changed = Registry.Check(dir, gate: false);
-        Assert.Contains(changed, x => x.Code == "NORM-VERSION");
-        Assert.Contains(changed, x => x.Code == "SCENARIO-VERIFY-UNBACKED" && x.Message.Contains("normalization rules changed"));
-        File.WriteAllText(rules, File.ReadAllText(rules).Replace("\"version\": 1", "\"version\": 2"));
-        Assert.DoesNotContain(Registry.Check(dir, gate: false), x => x.Code == "NORM-VERSION");
+        var rulesText = File.ReadAllText(rules);
+        File.WriteAllText(rules, rulesText.Replace("\"match\": null", "\"match\": \"S-.*\""));
+        Assert.Contains(Registry.Check(dir, gate: false), x => x.Code == "SCENARIO-VERIFY-UNBACKED" && x.Message.Contains("normalization rules changed"));
+        File.WriteAllText(rules, rulesText);
+        Assert.DoesNotContain(Registry.Check(dir, gate: false), x => x.Severity == "error");
+
+        // changing the oracle settings (here: no write is a write any more) needs a decision, and unbacks the verification either way
+        var loosened = Config(); loosened.Writes = new();
+        WriteSettings(dir, loosened, decide: false);
+        var loose = Registry.Check(dir, gate: false);
+        Assert.Contains(loose, x => x.Code == "ORACLE-UNDECIDED");
+        Assert.Contains(loose, x => x.Code == "SCENARIO-VERIFY-UNBACKED" && x.Message.Contains("oracle settings"));
+        Assert.Contains("ORACLE-UNDECIDED", Assert.Throws<InvalidOperationException>(() => OracleModule.Verify(dir, Scn, loosened, Runner(0), Key, Today)).Message);
+        Decide(dir, loosened);
+        Assert.DoesNotContain(Registry.Check(dir, gate: false), x => x.Code == "ORACLE-UNDECIDED");
+        Assert.Contains(Registry.Check(dir, gate: false), x => x.Code == "SCENARIO-VERIFY-UNBACKED" && x.Message.Contains("oracle settings"));
+        WriteSettings(dir, cfg, decide: false);
+        Assert.DoesNotContain(Registry.Check(dir, gate: false), x => x.Severity == "error");
     }
 
     [Fact]
@@ -263,11 +313,7 @@ public sealed class OracleTests
         var (log, session) = RecordLegacy(scratch);
         var seeded = Capture(Path.Combine(scratch, "seeded.jsonl"), _ => { });
         var fixedRun = Capture(Path.Combine(scratch, "fixed.jsonl"), c => { c.SkipsLimits = false; c.OmitsAudit = false; c.DatesFromClock = false; });
-        void Configure(string replay) => File.WriteAllText(Path.Combine(legacyDir, "extract.config.json"), JsonSerializer.Serialize(new
-        {
-            project = "x.csproj",
-            oracle = new { writes = new[] { "Policy/Save*" }, redact = new[] { new { target = "any", field = "**/User" } }, replay },
-        }));
+        void Configure(string replay) => WriteSettings(dir, new OracleConfig { Writes = new() { "Policy/Save*" }, Redact = new() { new RedactRule { Target = "any", Field = "**/User" } }, Replay = replay });
         Configure("cp '" + seeded + "' \"$PARITY_CAPTURE\"");
         var env = new Dictionary<string, string?> { ["PARITY_REDACT_KEY"] = Key };
         Phase(dir, "record");
@@ -351,10 +397,52 @@ public sealed class OracleTests
         }, lines);
         Assert.Equal("#1 C/Find: U", Assert.Single(json.NotCompared));
 
+        // a capture without the dataset (or with no table in it) where the recording has one is a difference, not a pass
+        foreach (var capture in new string?[] { null, "{}" })
+        {
+            var missing = Compare(Side("l", ("E/Find", false, "{}", "{\"T\":[{\"A\":1}],\"U\":[{\"Z\":1}]}")), Side("n", ("E/Find", false, "{}", capture)));
+            Assert.Equal("dataset missing 1 E/Find tables T, U", Assert.Single(missing.Differences) is var nd ? $"{nd.Part} {nd.Kind} {nd.LegacySeq} {nd.Call} {nd.Legacy}" : "");
+            Assert.Empty(missing.NotCompared);
+        }
+
         // XML: one element on one side pairs with the first of several on the other; only the extra one differs, as one block
         var xml = Compare(Side("l", ("D/Put", false, "<Put><Item><Code>a</Code><Qty>1</Qty></Item><Item><Code>b</Code><Qty>2</Qty></Item></Put>", null)),
                           Side("n", ("D/Put", false, "<Put><Item><Code>a</Code><Qty>1</Qty></Item></Put>", null)));
         Assert.Equal("request missing Put/Item[2] 2", Assert.Single(xml.Differences) is var b ? $"{b.Part} {b.Kind} {b.Path} {b.Fields}" : "");
+    }
+
+    [Fact]
+    public void issue_36_a_dataset_that_is_not_a_serialized_dataset_is_refused_at_export_and_at_the_replay_import_with_the_call_named()
+    {
+        var dir = Module("36ds");
+        var log = Path.Combine(_f.OutRoot, "copies", "36ds", "bad.jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(log)!);
+        File.WriteAllText(log, "{\"time\":\"2026-11-03T09:00:00Z\",\"session\":\"s1\",\"user\":\"u\",\"category\":\"Product\",\"type\":\"GetRiders\",\"request\":\"<GetRiders/>\",\"dataset\":\"plain text\"}\n");
+        var none = new OracleConfig();
+        var export = new ExportRequest(dir, Scn, "recording", new() { log }, new() { "s1" }, null, null, "alex", null, null, false, none, null, Today);
+        Phase(dir, "record");
+        Assert.Contains("row 1 of the selection (Product/GetRiders)", Assert.Throws<InvalidOperationException>(() => OracleModule.Export(export)).Message);
+        Assert.False(Directory.Exists(Recording.RecordingDir(dir, Scn)));
+        Assert.Contains("row 1 of the selection (Product/GetRiders)", Assert.Throws<InvalidOperationException>(() => OracleModule.Import(dir, Scn, log, none, null, Today)).Message);
+        Assert.False(Directory.Exists(Recording.ReplayDir(dir, Scn)));
+    }
+
+    [Fact]
+    public void issue_36_normalization_rules_need_no_version_but_a_malformed_one_is_refused()
+    {
+        var dir = Module("36ver");
+        Directory.CreateDirectory(Path.Combine(dir, "recordings"));
+        var rule = "{ \"id\": \"norm:session-id\", \"decision\": \"dec:summary-needs-a-beneficiary\", \"scope\": \"global\", \"target\": \"any\", \"field\": \"**/SessionId\" }";
+        var decisions = Registry.Decisions(dir).Select(d => d with { Cite = d.Cite.Append("norm:session-id").ToList() }).ToList();
+        File.WriteAllText(Normalization.PathOf(dir), "{ \"rules\": [ " + rule + " ] }");
+        var (set, findings) = Normalization.Load(dir, decisions);
+        Assert.Empty(findings);
+        Assert.Equal(0, set.Version);
+        Assert.Single(set.Rules);
+        File.WriteAllText(Normalization.PathOf(dir), "{ \"version\": 7, \"rules\": [ " + rule + " ] }");
+        Assert.Equal(7, Normalization.Load(dir, decisions).Set.Version);
+        File.WriteAllText(Normalization.PathOf(dir), "{ \"version\": \"two\", \"rules\": [ " + rule + " ] }");
+        Assert.Contains(Normalization.Load(dir, decisions).Findings, x => x.Code == "NORM-INVALID" && x.Message.Contains("version"));
     }
 
     private (int Code, string Out, string Err) Run(string cwd, IDictionary<string, string?> env, params string[] args)

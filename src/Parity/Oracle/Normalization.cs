@@ -13,7 +13,7 @@ namespace Parity.Oracle;
 /// </summary>
 public sealed record NormRule(string Id, string Decision, string Scope, string Target, string Field, string? Match);
 
-/// <summary>The loaded rule set of a module: its version, its hash (what a verification is bound to) and the rules.</summary>
+/// <summary>The loaded rule set of a module: its optional version label, its hash (what a verification is bound to) and the rules.</summary>
 public sealed class NormSet
 {
     public int Version { get; init; }
@@ -46,7 +46,7 @@ public sealed class NormSet
 }
 
 /// <summary>
-/// <c>legacy/&lt;Module&gt;/recordings/normalization.json</c>: the versioned rule set the diff applies. It sits under
+/// <c>legacy/&lt;Module&gt;/recordings/normalization.json</c>: the rule set the diff applies. It sits under
 /// <c>recordings/</c>, so the guard keeps it read-only to the agent outside the record phase, and every rule must name a
 /// <c>dec:</c> entry of <c>registry/decisions.json</c> that cites the rule back: a rule nobody decided is refused, not applied.
 /// </summary>
@@ -61,8 +61,8 @@ public static partial class Normalization
     public static string PathOf(string moduleDir) => Path.Combine(moduleDir, "recordings", FileName);
 
     /// <summary>
-    /// Reads and checks the rule set: schema (NORM-INVALID), a decision behind every rule (NORM-UNDECIDED), and a version raised on
-    /// every change since a scenario was verified (NORM-VERSION). An absent file is version 0 with no rules.
+    /// Reads and checks the rule set: schema (NORM-INVALID) and a decision behind every rule (NORM-UNDECIDED). The hash of the file
+    /// is what a verification is bound to, so any change to the rules unbacks it. An absent file is no rules.
     /// </summary>
     public static (NormSet Set, List<Finding> Findings) Load(string moduleDir, IReadOnlyCollection<Decision> decisions)
     {
@@ -78,8 +78,12 @@ public static partial class Normalization
         catch (JsonException ex) { Bad(0, $"is not JSON: {ex.Message}"); return (new NormSet(), f); }
         if (root.ValueKind != JsonValueKind.Object) { Bad(1, "must be a JSON object with 'version' and 'rules'"); return (new NormSet(), f); }
         foreach (var p in root.EnumerateObject().Where(p => p.Name is not ("version" or "rules"))) Bad(LineOf(p.Name), $"'{p.Name}' is not a key of {FileName}; it holds 'version' and 'rules'");
-        var version = root.TryGetProperty("version", out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var n) && n >= 1 ? n : 0;
-        if (version == 0) Bad(1, "needs 'version', a whole number from 1, raised on every change to the rules");
+        var version = 0;
+        if (root.TryGetProperty("version", out var v))
+        {
+            if (v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var n) && n >= 1) version = n;
+            else Bad(1, "'version' is an optional label and must be a whole number from 1");
+        }
         var rules = new List<NormRule>();
         if (!root.TryGetProperty("rules", out var items) || items.ValueKind != JsonValueKind.Array) { Bad(1, "needs 'rules': [...]"); return (new NormSet(), f); }
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -113,16 +117,6 @@ public static partial class Normalization
             if (ok) rules.Add(new NormRule(id!, decision!, scope!, target!, field!, match));
         }
         var hash = Recording.Hash(Encoding.UTF8.GetBytes(text.Replace("\r\n", "\n")));
-        var verified = Path.Combine(moduleDir, "verified");
-        if (version > 0 && Directory.Exists(verified))
-            foreach (var vf in Directory.EnumerateFiles(verified, "*.json").OrderBy(x => x, StringComparer.Ordinal))
-            {
-                Verification? rec;
-                try { rec = JsonSerializer.Deserialize<Verification>(File.ReadAllText(vf), Json.Options); }
-                catch (JsonException) { continue; }
-                if (rec != null && rec.RulesVersion == version && rec.RulesHash != hash)
-                    Bad(1, $"the rules changed since {rec.Scenario} was verified against version {version}; raise 'version' with every change, so a verification names the rule set it used", "NORM-VERSION");
-            }
         var set = new NormSet { Version = version, Hash = hash, Rules = rules };
         set.Compile();
         return (set, f);

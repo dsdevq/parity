@@ -62,16 +62,16 @@ output format (`docs/adopt.md`, The map phase and the registries). Exit 1 on err
 | REGISTRY-ORPHAN | error | a `dependencies.json` entry names a `svc:` id the module no longer calls |
 | REGISTRY-UNCITED | error | a scenario cites nothing, or an error case names neither a fixture nor a cite |
 | FIXTURE-MISSING | error | an error case's fixture does not exist or records another service |
-| CITE-UNKNOWN | error | a scenario's `exercises` or any `cite` holds an id that is not in the module's manifests, or an `ev:` id with no record; a decision cites a `norm:` id `recordings/normalization.json` does not declare |
+| CITE-UNKNOWN | error | a scenario's `exercises` or any `cite` holds an id that is not in the module's manifests, or an `ev:` id with no record; a decision cites a `norm:` id `recordings/normalization.json` does not declare (an `oracle:` id is the settings hash, not checked against the manifests) |
 | EV-STALE, EV-INVALID | error | a cited `ev:` record, as in spec lint |
 | SCENARIO-UNKNOWN | error | a fixture's `scenario` is not in `scenarios.json` |
 | SCENARIO-UNREFERENCED | warning, error with `--gate` | no fixture names the scenario and no spec rule lists it under `scenarios:` |
 | SCENARIO-UNVERIFIED | warning, error with `--gate` | the scenario has no `lastVerified` date |
-| SCENARIO-VERIFY-UNBACKED | error | a recorded scenario's `lastVerified` is not backed by `verified/<scenario>.json` with the same date, recording seal, rules hash and scenario version: only `parity oracle verify` sets it (`docs/oracle.md`) |
+| SCENARIO-VERIFY-UNBACKED | error | a recorded scenario's `lastVerified` is not backed by `verified/<scenario>.json` with the same date, recording seal, rules hash, oracle settings hash and scenario version: only `parity oracle verify` sets it (`docs/oracle.md`) |
 | RECORDING-INVALID | error | a `recordings/<scenario>/recording.json` that cannot be read, or that sits in another scenario's folder |
 | RECORDING-TAMPERED | error | a recorded file was edited, removed or added, or the index edited, after export; restore it from git or record again |
 | RECORDING-VERSION | error | the recording was made for an older version of its scenario |
 | SCENARIO-UNKNOWN | error | a recording names a scenario `scenarios.json` lacks |
-| NORM-INVALID | error | `recordings/normalization.json` is not valid JSON, has a key or field outside its schema, a missing or malformed `version`, `id`, `scope`, `target` or `field`, or a `match` that is not a regular expression |
+| NORM-INVALID | error | `recordings/normalization.json` is not valid JSON, has a key or field outside its schema, a malformed `version` (an optional label), `id`, `scope`, `target` or `field`, or a `match` that is not a regular expression |
 | NORM-UNDECIDED | error | a normalization rule names no decision, a decision `decisions.json` lacks, or one that does not cite the rule; `parity oracle diff` and `verify` refuse to run while one exists |
-| NORM-VERSION | error | the rules changed since a scenario was verified against the same `version`; raise it with every change |
+| ORACLE-UNDECIDED | error | `oracle` in `extract.config.json` is set and no decision cites its hash (`oracle:sha256:<16 hex>`, named in the message); `parity oracle diff` and `verify` refuse to run |

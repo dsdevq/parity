@@ -8,9 +8,10 @@ namespace Parity.Oracle;
 
 /// <summary>
 /// <c>verified/&lt;scenario&gt;.json</c>, written only by <c>parity oracle verify</c> after the replay's tests passed and the diff was
-/// empty: the recording, the rule set and the replay it compared, by seal and hash. A scenario's <c>lastVerified</c> is backed by it.
+/// empty: the recording, the rule set, the oracle settings and the replay it compared, by seal and hash, and the legacy reply tables
+/// it did not compare. A scenario's <c>lastVerified</c> is backed by it.
 /// </summary>
-public sealed record Verification(string Scenario, int ScenarioVersion, string Date, string RecordingSeal, int RulesVersion, string RulesHash, string ReplaySeal, int Calls, string Tests);
+public sealed record Verification(string Scenario, int ScenarioVersion, string Date, string RecordingSeal, string RulesHash, string OracleHash, string ReplaySeal, int Calls, string Tests, List<string> NotCompared);
 
 /// <summary>One run of the replay command: the scenario, where its capture goes, and the module.</summary>
 public sealed record ReplayRun(string Scenario, string Capture, string ModuleDir);
@@ -108,6 +109,32 @@ public static class OracleModule
         return set;
     }
 
+    /// <summary><c>legacy/extract.config.json</c> next to the module folder, where the oracle settings live unless <c>--config</c> names another.</summary>
+    public static string ConfigPath(string moduleDir) =>
+        Path.Combine(Path.GetDirectoryName(Path.GetFullPath(moduleDir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)) ?? ".", "extract.config.json");
+
+    private static readonly System.Text.RegularExpressions.Regex OracleIdRx = new(@"^oracle:sha256:[0-9a-f]{16}$");
+
+    /// <summary>Whether a decision may cite this id: <c>oracle:&lt;hash&gt;</c>, the settings it approved.</summary>
+    public static bool IsOracleId(string id) => OracleIdRx.IsMatch(id);
+
+    /// <summary>The hash of the parsed <c>oracle</c> section, so edits elsewhere in the config do not count; <c>none</c> when it sets nothing.</summary>
+    public static string SettingsHash(OracleConfig cfg) =>
+        cfg is { Replay: null, Writes.Count: 0, Redact.Count: 0 } ? "none" : Recording.Hash(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(cfg, Json.Options).Replace("\r\n", "\n")));
+
+    /// <summary>ORACLE-UNDECIDED when the settings are set and no decision cites their hash; null when decided or empty.</summary>
+    public static string? Undecided(string hash, IEnumerable<Decision> decisions) =>
+        hash == "none" || decisions.Any(d => d.Cite.Contains("oracle:" + hash)) ? null
+            : $"the oracle settings in extract.config.json decide what a verification trusts (replay command, writes, redaction), so a person decides them: add a dec: entry to registry/decisions.json that cites oracle:{hash} and says why these settings are right";
+
+    /// <summary>The settings hash, refused while no decision covers it.</summary>
+    public static string Settings(string moduleDir, OracleConfig cfg)
+    {
+        var hash = SettingsHash(cfg);
+        if (Undecided(hash, Registry.Decisions(moduleDir)) is { } why) throw new InvalidOperationException("ORACLE-UNDECIDED: " + why);
+        return hash;
+    }
+
     /// <summary>Imports a capture (host log rows of one new-client run) as the scenario's replay, through the same redaction as a recording.</summary>
     public static (string Dir, RecordingFile File) Import(string moduleDir, string scenario, string capture, OracleConfig cfg, string? redactKey, DateOnly today) =>
         Recording.Export(new ExportRequest(moduleDir, scenario, "replay", new() { capture }, new(), null, null, null, null, null, true, cfg, redactKey, today));
@@ -117,6 +144,7 @@ public static class OracleModule
     {
         var (recDir, rec) = SealedRecording(moduleDir, scenario);
         var rules = Rules(moduleDir);
+        Settings(moduleDir, cfg);
         var (repDir, rep) = capture != null ? Import(moduleDir, scenario, capture, cfg, redactKey, today) : LoadReplay(moduleDir, scenario);
         return OracleDiff.Compare(recDir, rec, repDir, rep, rules);
     }
@@ -138,6 +166,7 @@ public static class OracleModule
         var version = ScenarioVersion(moduleDir, scenario);
         var (recDir, rec) = SealedRecording(moduleDir, scenario);
         var rules = Rules(moduleDir);
+        var oracleHash = Settings(moduleDir, cfg);
         var capture = Path.Combine(Path.GetTempPath(), $"parity-capture-{Guid.NewGuid():N}.jsonl");
         try
         {
@@ -150,7 +179,7 @@ public static class OracleModule
             var report = OracleDiff.Render(diff, Where(moduleDir));
             if (diff.Differences.Count > 0) return new VerifyResult(false, 1, report + $"\n{scenario}: not verified: {diff.Differences.Count} difference(s)\n");
             var date = today.ToString("yyyy-MM-dd");
-            var v = new Verification(scenario, version, date, rec.Seal, rules.Version, rules.Hash, rep.Seal, rec.Calls.Count, "replay command exit 0");
+            var v = new Verification(scenario, version, date, rec.Seal, rules.Hash, oracleHash, rep.Seal, rec.Calls.Count, "replay command exit 0", diff.NotCompared);
             var vf = Recording.VerifiedFile(moduleDir, scenario);
             Directory.CreateDirectory(Path.GetDirectoryName(vf)!);
             File.WriteAllText(vf, JsonSerializer.Serialize(v, Json.Options).Replace("\r\n", "\n") + "\n");
@@ -229,7 +258,7 @@ public static class OracleModule
     /// (RECORDING-TAMPERED, SCENARIO-UNKNOWN, RECORDING-VERSION), and a recorded scenario's lastVerified backed by a current
     /// verification (SCENARIO-VERIFY-UNBACKED).
     /// </summary>
-    public static List<Finding> Check(string moduleDir, List<(Scenario S, int Line)> scenarios, string scnFile, NormSet rules)
+    public static List<Finding> Check(string moduleDir, List<(Scenario S, int Line)> scenarios, string scnFile, NormSet rules, string oracleHash)
     {
         var f = new List<Finding>();
         var root = Path.Combine(moduleDir, "recordings");
@@ -261,6 +290,7 @@ public static class OracleModule
                 : v.Date != s.LastVerified ? $"the last verification is dated {v.Date}"
                 : v.RecordingSeal != rec.Seal ? "the recording changed since"
                 : v.RulesHash != rules.Hash ? "the normalization rules changed since"
+                : v.OracleHash != oracleHash ? "the oracle settings in extract.config.json changed since"
                 : v.ScenarioVersion != s.Version ? "the scenario's version changed since"
                 : null;
             if (why != null)

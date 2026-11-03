@@ -170,7 +170,7 @@ try
             var sub = Positional(opts, 0) ?? throw new ArgumentException("oracle: the subcommand is export, diff or verify");
             var dir = Positional(opts, 1) ?? throw new ArgumentException($"oracle {sub} needs <module-dir> (legacy/<Module>)");
             var scn = Positional(opts, 2) ?? throw new ArgumentException($"oracle {sub} needs <scn:id>");
-            var cfgPath = Opt(opts, "config") ?? Path.Combine(Path.GetDirectoryName(Path.GetFullPath(dir).TrimEnd('/', '\\')) ?? ".", "extract.config.json");
+            var cfgPath = Opt(opts, "config") ?? OracleModule.ConfigPath(dir);
             var oracle = File.Exists(cfgPath) ? ExtractConfig.Load(cfgPath).Oracle : opts.ContainsKey("config") ? throw new ArgumentException($"no config at {cfgPath}") : new OracleConfig();
             var key = Environment.GetEnvironmentVariable("PARITY_REDACT_KEY");
             var today = DateOnly.FromDateTime(DateTime.UtcNow);

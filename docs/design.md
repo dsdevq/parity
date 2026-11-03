@@ -238,9 +238,9 @@ recording. Decisions:
 - **Two-level comparison**: the call sequence, then each pair's request and reply fields (a missing subtree is one
   block, not a line per field), its error, and its dataset per table and row, restricted to the tables the new
   client's reply holds, since the table filter is a header the log does not keep.
-- **Normalization is a decided exception.** One versioned file per module under `recordings/` (so the guard keeps it
+- **Normalization is a decided exception.** One file per module under `recordings/` (so the guard keeps it
   read-only outside `record`), scoped global, per call or per scenario, each rule backed by a `dec:` entry that cites
-  it. A verification is bound to the rule set's version and hash.
+  it. A verification is bound to the rule set's hash, and to the hash of the `oracle` settings, which a `dec:` entry must cite too.
 - **Verified is computed.** `parity oracle verify` runs the configured replay command (the scenario's tests, which
   write the capture), refuses a red run or a missing capture, and only on an empty diff writes `verified/` and the
   scenario's `lastVerified`. `registry check` refuses a `lastVerified` on a recorded scenario that no current
