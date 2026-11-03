@@ -37,6 +37,16 @@
     { "id": "Harbor", "subclasses": ["HarborCustomerForm"] },
     { "id": "Meadow", "project": "C:/src/LegacyApp/Tenants/Meadow/Meadow.csproj", "selfAssembly": "C:/src/LegacyApp/Tenants/Meadow/bin/Debug/Meadow.dll", "factories": ["LegacyApp.Forms.CustomerFormFactory.Create"] }
   ],
+  "//oracle": "The oracle layer (docs/oracle.md). writes: Category/Type globs of the wire calls that change host state (reads may reorder between writes, nothing crosses one). redact: values export replaces by a keyed pseudonym (PARITY_REDACT_KEY), by target (request, reply, dataset, error, any), field path glob and optional regex. replay: the command parity oracle verify runs, the scenario's tests, which write the host log rows of the run to $PARITY_CAPTURE.",
+  "oracle": {
+    "writes": ["Policy/Save*", "*/Delete*"],
+    "redact": [
+      { "target": "any", "field": "**/ClientName" },
+      { "target": "dataset", "field": "Client/*" },
+      { "target": "any", "field": "**", "match": "[0-9]{3}-[0-9]{2}-[0-9]{4}" }
+    ],
+    "replay": "npx playwright test e2e/scenarios --grep \"$PARITY_SCENARIO\" && sh tools/dump-host-log.sh > \"$PARITY_CAPTURE\""
+  },
   "output": ".",
   "//guard": "Read by legacy/hooks/guard-legacy.sh in the specify and implement phases. denyTools: more MCP tool-name globs to refuse (code-index and code-graph servers are built in). allowRoots: more readable directories besides this repo, relative to this file.",
   "guard": { "denyTools": [], "allowRoots": [] }

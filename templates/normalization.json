@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "norm:session-id",
+      "decision": "dec:session-id-differs-every-login",
+      "scope": "global",
+      "target": "request",
+      "field": "**/SessionId",
+      "match": null
+    }
+  ]
+}

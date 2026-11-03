@@ -9,9 +9,13 @@ A bug is never fixed with only a code patch. Classify first.
 
 1. Ensure `legacy/.phase` contains `bug` (reading the legacy source is allowed in this phase, but start
    from the manifest).
-2. Locate: find the control in `legacy/<Module>/manifests/<Form>.md` (search the caption or field
+2. Replay first: when a recorded scenario covers the screen (`"${PARITY_BIN:-parity}" registry query legacy/<Module> --touches <id>`
+   and `legacy/<Module>/recordings/`), run `"${PARITY_BIN:-parity}" oracle diff legacy/<Module> scn:<id> --capture <rows of a
+   new-client run>`: a difference in the calls is the bug's first evidence. A path nobody recorded yet is a
+   recording for a person to make, not a guess.
+3. Locate: find the control in `legacy/<Module>/manifests/<Form>.md` (search the caption or field
    name). Note its `evt:` ids, the handlers, and the methods they reach. Read the slices.
-3. Classify, exactly one:
+4. Classify, exactly one:
    - **Spec has the rule, implementation violates it.** Write or fix the test for that rule id, then the
      code. Output: a test.
    - **Spec lacks the rule, manifest has the behavior.** Switch to a specify session: add the rule with
@@ -22,4 +26,4 @@ A bug is never fixed with only a code patch. Classify first.
      Output: an issue, then the above once fixed.
    - **The legacy itself is wrong or strange.** Add `quirk: preserve` or `quirk: diverge` to the rule
      with `decided-by` from the user. Output: a spec line.
-4. Report the classification and the artifact that changed. If only code changed, you skipped a step.
+5. Report the classification and the artifact that changed. If only code changed, you skipped a step.

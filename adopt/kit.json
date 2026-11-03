@@ -44,6 +44,11 @@
       "prompt": "Run the parity-implement skill for form {form} of module {module}."
     },
     {
+      "name": "record",
+      "skill": "parity-record",
+      "driven": false
+    },
+    {
       "name": "bug",
       "skill": "parity-bug",
       "driven": false

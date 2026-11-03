@@ -10,5 +10,5 @@ embedded in the binary; nothing here is copied by hand.
   what the phase driver tells the agent. Add a skill folder, a hook script or a template and list it there;
   `parity init` and `parity doctor` need no change.
 
-Run `parity init` and then `parity doctor` in the consuming repo. `legacy/.phase` holds one of `extract`, `map`,
+Run `parity init` and then `parity doctor` in the consuming repo. `legacy/.phase` holds one of `extract`, `record`, `map`,
 `specify`, `implement`, `bug`. See `docs/adopt.md`.

@@ -9,7 +9,7 @@ below touches the legacy repo.
 legacy/
   extract.config.json           skeleton from the detected csproj; yours to edit (Steps, 2)
   control-categories.json       from templates/, extended with custom controls
-  .phase                        extract | map | specify | implement | bug   (read by the hooks)
+  .phase                        extract | record | map | specify | implement | bug   (read by the hooks)
   hooks/guard-legacy.sh         from adopt/hooks
   hooks/lint-on-stop.sh         from adopt/hooks
   templates/                    the kit's templates (spec.md, fixture.json, evidence.json, extractor-debt.md, ...)
@@ -20,6 +20,10 @@ legacy/
     fixtures/<name>.json        recorded service calls
     evidence/<Form>.json        written by parity evidence add; quoted legacy lines specs cite as ev:
     registry/                   scenarios.json, decisions.json, dependencies.json (map phase, see below)
+    recordings/<scenario>/      written by parity oracle export in the record phase: one scenario's host calls, sealed (docs/oracle.md)
+    recordings/normalization.json  the versioned normalization rules, each backed by a dec: decision
+    replays/<scenario>/         the new client's last capture, written by parity oracle diff --capture and verify
+    verified/<scenario>.json    written only by parity oracle verify
     spec/<Form>.md
     extractor-debt.md           only when raw/diagnostics exist
 .claude/
@@ -150,8 +154,17 @@ Pick the phases to fit the work a person does in between (recording fixtures aft
 8. Set `.phase` to `implement`, fresh session, `parity-implement` skill. The agent gets the spec, the
    fixtures and your scaffold; tests are named with rule ids; the stop hook runs
    `parity lint --gate --implement <dir>`.
-9. A bug report goes through `parity-bug`: locate the control id, classify, land the fix as a test, a
-   spec line or an extractor issue.
+9. A bug report goes through `parity-bug`: replay the nearest recorded scenario, locate the control id,
+   classify, land the fix as a test, a spec line or an extractor issue.
+
+Where the backend host keeps a per-call log, the oracle layer (`docs/oracle.md`) adds a record step and a verify
+step. Once `map` has written the scenario: set `legacy/.phase` to `record`, a person runs the scenario once in the
+legacy client with the log on, and `parity oracle export` turns that run into `legacy/<Module>/recordings/<scenario>/`
+(the `parity-record` skill helps). Configure `oracle.writes`, `oracle.redact` and `oracle.replay` in
+`legacy/extract.config.json` and set `PARITY_REDACT_KEY` first. In `implement`, `parity oracle verify` runs the
+scenario's tests and diffs the new client's calls against the recording until it says `verified`; it is the only
+thing that sets a recorded scenario's `lastVerified`. The map phase can add `"wire": ["Category/Type"]` to a
+dependency entry, so the report says where the legacy client makes each call.
 
 ## The map phase and the registries
 
@@ -166,7 +179,7 @@ needs a reader, in three files under `legacy/<Module>/registry/`:
 |---|---|---|
 | `scenarios.json` | `scn:<words>` | `id`, `version`, `title`, `role`, `rights[]`, `negative`, `exercises[]` (manifest ids), `cite[]`; `lastVerified` (YYYY-MM-DD) once run against the host |
 | `decisions.json` | `dec:<words>` | `id`, `question`, `answer`, `owner`, `date` (YYYY-MM-DD), `cite[]` |
-| `dependencies.json` | one per `svc:` id of `module.json` | `id`, `errors[]` of `{ case, reply, fixture | cite[] }` |
+| `dependencies.json` | one per `svc:` id of `module.json` | `id`, `errors[]` of `{ case, reply, fixture | cite[] }`; optional `wire[]`, the host log's `Category/Type` names of its calls (`docs/oracle.md`) |
 
 Each file also carries `"module": "sha256:<16 hex>"`, the extract revision it was reviewed against (one
 hash over every manifest's hash). The schema is closed: a field outside the lists above is
@@ -216,7 +229,11 @@ red spec. Both are a few lines of shell reading the hook's JSON from stdin.
 
 ## The guard hook
 
-`guard-legacy.sh` is a PreToolUse hook. In `extract` and `bug` it does nothing; `map` is described above. In `specify` and
+`guard-legacy.sh` is a PreToolUse hook. In every phase, without a phase file too, it keeps `legacy/<Module>/recordings/`
+read-only outside `record` and `legacy/<Module>/verified/` out of reach of every tool call: a write tool aimed there, and a
+shell word or MCP value that resolves there, are refused, while `Read`, `Grep` and `Glob` may read them (`docs/oracle.md`,
+Guard rails). It needs `jq` for that check only when the call names one of the two. Otherwise, in `extract`, `record` and
+`bug` it does nothing; `map` is described above. In `specify` and
 `implement` it works as an **allow-list**: a tool call may only touch the consuming repo (the directory
 the hook runs in) minus the legacy source root, plus the directories in `guard.allowRoots`. The manifests,
 specs, fixtures, evidence and scaffold are all inside the repo, so they need no entry. The legacy root

@@ -11,7 +11,7 @@ namespace Parity.Tools;
 /// <summary>
 /// legacy/extract.config.json for a repo that has none: the kit's template with the keys the legacy csproj determines filled in
 /// (project, selfAssembly, referenceDirs, references and whether the embedded .NET references are used), the keys that are the
-/// adopter's decision emptied (serviceBoundary, variants), and every other key, including ones a later template adds, left as the template has it.
+/// adopter's decision emptied (serviceBoundary, variants, oracle), and every other key, including ones a later template adds, left as the template has it.
 /// </summary>
 public static class ConfigSkeleton
 {
@@ -35,6 +35,7 @@ public static class ConfigSkeleton
         cfg["referencesFromProject"] = true;
         cfg["serviceBoundary"] = new JsonArray();
         cfg["variants"] = new JsonArray();
+        cfg["oracle"] = new JsonObject { ["writes"] = new JsonArray(), ["redact"] = new JsonArray(), ["replay"] = null };
         cfg["formBaseTypes"] = Strings(defaults.FormBaseTypes);
         cfg["ignoreCalls"] = Strings(defaults.IgnoreCalls);
 

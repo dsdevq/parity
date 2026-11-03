@@ -5,7 +5,9 @@ refuse any spec written from it that does not **cover** that manifest. It exists
 porting a legacy screen never has to guess, because everything it may claim has an id and a line.
 
 It is not a converter, not a code generator, not a code-search index. It produces facts about one
-module, deterministically, and checks a human-readable spec against them.
+module, deterministically, and checks a human-readable spec against them. Where the legacy client talks to
+a backend host that logs its calls, it also records each scenario's calls once and diffs the new client's
+calls against them, so a port is checked against what the legacy client actually sends (`docs/oracle.md`).
 
 ```
 legacy csproj ──extract──> manifests/<Form>.json + .md   (deterministic, cited, complete or loudly incomplete)
@@ -43,6 +45,8 @@ from the manifest, which the agent cannot shrink.
 | lint findings | `parity lint` | `file:line CODE message`, exit 1 on errors |
 | manifest diff | `parity diff <old.json> <new.json>` | controls, events, bindings, validation rules, handlers, methods, service calls, dynamic UI, raw and diagnostics, variant deltas and factories added / removed / changed by id, exit 1 when they differ |
 | `registry/*.json` | the `map` phase, `parity registry` | the context around the units: scenarios, decisions, each service's error cases; checked against the extract and STALE after a re-extract until reviewed (`docs/adopt.md`, The map phase and the registries) |
+| `recordings/<scenario>/` | `parity oracle export`, in the record phase | one scenario's calls from the host's per-call log: an ordered index, a request, reply and dataset file per call, provenance, redacted and sealed (`docs/oracle.md`) |
+| oracle diff, `verified/<scenario>.json` | `parity oracle diff`, `parity oracle verify` | the new client's calls against the recording, a work list by call and field; verify runs the scenario's tests and, only when they pass with an empty diff, sets the scenario's `lastVerified` |
 | rebind | `parity rebind <spec.md>` | a `STALE` spec moved to the new hash when nothing it cites changed, else the affected rules as a work list (exit 1) |
 
 Every id is stable and citeable: `ctrl:Form/field`, `dyn:Form/handler/local`, `evt:Form/field.Event`,
@@ -268,6 +272,7 @@ Use `referencesFromProject` or list the project's own output folder.
 | Facts, not guesses | `HEDGE` rejects probably / likely / assume / should / seems / typically / usually / maybe / might; uncertainty goes under Open questions, which keeps the gate closed |
 | Decisions are owned | `DROP-REASON` for dropped controls and quirks; `STATUS` requires a named reviewer and a date |
 | Implementation traces to rules | `COV-TEST` wants each `R-` id in the title of an active, non-skipped test |
+| Behaviour is checked against the legacy client's wire calls | `parity oracle verify`: a recorded scenario is verified only by green tests and an empty diff; recordings are sealed and read-only outside the record phase; a normalization rule needs a `dec:` decision (`NORM-UNDECIDED`); a hand-set `lastVerified` is `SCENARIO-VERIFY-UNBACKED` |
 
 Full list: `docs/lint.md`.
 
@@ -299,13 +304,13 @@ stable ids, locations, a service boundary, or a coverage lint, and those are the
 ## Layout
 
 ```
-src/Parity/          the CLI: Project/ (csproj, index, compilation), Passes/ (designer, handlers, duplicates, extractor), Render/, Lint/
+src/Parity/          the CLI: Project/ (csproj, index, compilation), Passes/ (designer, handlers, duplicates, extractor), Render/, Lint/, Oracle/ (record, diff, verify)
 fixtures/            WinFormsStubs (stand-ins for WinForms + DevExpress), SampleLegacy (synthetic mess), SampleLegacy.Build (its DLL)
 examples/            complete module folders: spec, registry, recorded and synthetic fixtures
-templates/           spec.md, extractor-debt.md, fixture.json, evidence.json, extract.config.json, control-categories.json
+templates/           spec.md, extractor-debt.md, fixture.json, evidence.json, extract.config.json, control-categories.json, normalization.json
 adopt/               what goes into the consuming repo: skills, hooks, settings
-docs/                design, manifest schema, spec grammar, lint codes, adoption, pilot metrics, prior art
-tests/               xunit over the fixture
+docs/                design, manifest schema, spec grammar, lint codes, adoption, the oracle layer, pilot metrics, prior art
+tests/               xunit over the fixture, and a synthetic host with a per-call log for the oracle layer
 ```
 
 MIT.

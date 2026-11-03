@@ -37,9 +37,10 @@ A fix that ends as only a code patch has escaped the system.
 | extract | script | config, form glob | manifests, module index | `raw == 0 && diag == 0` or each entry acknowledged in `extractor-debt.md` |
 | capture | script (yours) | module service-call ids | `fixtures/*.json` | every `svc:` id has at least one fixture; a synthetic one is labelled, shape-verified and explained |
 | map | agent, then human | legacy source, manifests, `module.json`, fixtures | `registry/*.json`, `evidence/` | `parity registry check` without an error (scenario warnings allowed) and the registry stamped against this extract |
+| record | human (agent helps) | one run of a scenario in the legacy client, the host's per-call log | `recordings/<scenario>/`, `normalization.json` | the recording sealed; every normalization rule backed by a `dec:` entry |
 | specify | agent, then human | rendered manifest, fixtures, evidence | `spec/<Form>.md` | `parity lint` green; human sets `status: reviewed` |
 | scaffold | script (yours, optional) | manifest, categories | component skeleton | every control mapped or explicitly dropped |
-| implement | agent | spec, fixtures, skeleton | components, tests | `parity lint --gate --implement <dir>` green |
+| implement | agent | spec, fixtures, skeleton, recordings | components, tests | `parity lint --gate --implement <dir>` green; each recorded scenario `parity oracle verify` |
 
 Each phase is its own session for an agent. The only thing that crosses a phase boundary is a committed file.
 
@@ -51,7 +52,7 @@ Each phase is its own session for an agent. The only thing that crosses a phase 
 | do not assume | nothing to check against | every rule cites ids; `HEDGE` rejects hedging words |
 | cover the whole form | "whole" undefined | coverage is computed from the manifest |
 | implement from the spec, not the code | the code is available | a hook denies the legacy path during specify and implement |
-| verify parity | a judgement call | tests carry rule ids; `COV-TEST` finds the missing ones |
+| verify parity | a judgement call | tests carry rule ids; `COV-TEST` finds the missing ones; a recorded scenario is verified only by green tests and an empty diff against the legacy client's calls |
 | follow the steps | one session blends them | one skill per phase, each stops at its gate |
 
 ## Extraction
@@ -218,6 +219,37 @@ diff-based check never fires in the flow the extract skill prescribes: the agent
 agent runs deterministic scripts and cannot do the review, which needs the legacy source and belongs to `map`.
 So in `extract` the hook prints the stale modules and "run the map phase next" and lets the turn end. In
 `map`, `specify` and `implement` the same finding blocks until map has reviewed and stamped the registry.
+
+## The oracle layer
+
+Reading-based checks stop at "the spec says what the legacy code says"; whether that reading is right was a
+reviewer's judgement. The oracle layer (issue 36, user-facing description in `docs/oracle.md`) makes it computed
+for everything that reaches the backend: the host's own per-call log is the recorder, so the legacy client needs no
+instrumentation, a person records each scenario once, and every later run of the new client is diffed against that
+recording. Decisions:
+
+- **Home: inside parity**, as `parity oracle`. It reuses the registry (scenarios, decisions, and dependencies with
+  `module.json` callers, which say where the legacy client makes a call), the phase file and the guard hook. A
+  sibling tool would duplicate them or read parity's files anyway.
+- **One capture format for both sides.** The new client is captured through the same host log and imported through
+  the same export and redaction as the recording. Capture in the new client's adapter would compare two serializers.
+- **Matching by `Category/Type` and order within the key**, an order-preserving alignment when the counts differ,
+  reads free between two writes, nothing across a write (writes named in `oracle.writes`).
+- **Two-level comparison**: the call sequence, then each pair's request and reply fields (a missing subtree is one
+  block, not a line per field), its error, and its dataset per table and row, restricted to the tables the new
+  client's reply holds, since the table filter is a header the log does not keep.
+- **Normalization is a decided exception.** One versioned file per module under `recordings/` (so the guard keeps it
+  read-only outside `record`), scoped global, per call or per scenario, each rule backed by a `dec:` entry that cites
+  it. A verification is bound to the rule set's version and hash.
+- **Verified is computed.** `parity oracle verify` runs the configured replay command (the scenario's tests, which
+  write the capture), refuses a red run or a missing capture, and only on an empty diff writes `verified/` and the
+  scenario's `lastVerified`. `registry check` refuses a `lastVerified` on a recorded scenario that no current
+  verification backs, and the guard refuses every tool write to `verified/`.
+- **Recordings are evidence**, so they are sealed (a hash per file, a seal over the index) and redacted at export
+  with a keyed pseudonym, which keeps redacted fields comparable between recording and replay without making them
+  reversible.
+- **State reset is not the tool's.** The replay command owns the starting state; `docs/oracle.md` states the
+  contract. A reset mechanism is specific to each host and database.
 
 ## What it deliberately does not do
 

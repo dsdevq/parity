@@ -38,7 +38,7 @@ public static partial class Registry
     private static readonly string[] AllFiles = { DecisionsFile, DependenciesFile, ScenariosFile };
     private static readonly string[] ScenarioKeys = { "id", "version", "title", "role", "rights", "negative", "exercises", "lastVerified", "cite" };
     private static readonly string[] DecisionKeys = { "id", "question", "answer", "owner", "date", "cite" };
-    private static readonly string[] DependencyKeys = { "id", "errors" };
+    private static readonly string[] DependencyKeys = { "id", "errors", "wire" };
     private static readonly string[] ErrorKeys = { "case", "reply", "fixture", "cite" };
 
     [GeneratedRegex(@"^scn:[a-z0-9]+(?:-[a-z0-9]+)*$")] private static partial Regex ScnIdRx();
@@ -46,6 +46,7 @@ public static partial class Registry
     [GeneratedRegex(@"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$")] private static partial Regex TokenRx();
     [GeneratedRegex(@"""module""\s*:\s*""[^""]*""")] private static partial Regex StampRx();
     [GeneratedRegex(@"^(scn:[^@\s]+)(?:@(\d+))?$")] public static partial Regex ScenarioRefRx();
+    [GeneratedRegex(@"^[^/\s]+/[^/\s]+$")] private static partial Regex WireRx();
 
     public static string DirOf(string moduleDir) => Path.Combine(moduleDir, "registry");
 
@@ -80,7 +81,7 @@ public static partial class Registry
         public readonly List<Finding> Findings = new();
         public readonly List<(Scenario S, int Line)> Scenarios = new();
         public readonly List<(Decision D, int Line)> Decisions = new();
-        public readonly List<(string Id, List<CatalogError> Errors, int Line)> Dependencies = new();
+        public readonly List<(string Id, List<CatalogError> Errors, List<string> Wire, int Line)> Dependencies = new();
         public bool HasScenarios, HasDecisions, HasDependencies;
     }
 
@@ -177,7 +178,9 @@ public static partial class Registry
                             if (!citeOk) Bad(line, $"{who}: error '{c}': cite must be a list of ids");
                             errors.Add(new CatalogError(c ?? "", reply ?? "", Str(e, "fixture"), cite));
                         }
-                        if (id != null) l.Dependencies.Add((id, errors, line));
+                        var wire = Strs(item, "wire", out var wireOk);
+                        if (!wireOk || wire.Any(w => !WireRx().IsMatch(w))) Bad(line, $"{who}: wire must be a list of wire calls as Category/Type, the names the host log gives this service's calls");
+                        if (id != null) l.Dependencies.Add((id, errors, wire, line));
                         break;
                     }
                 }
@@ -219,6 +222,35 @@ public static partial class Registry
         return ids;
     }
 
+    /// <summary>The rule ids a normalization file declares, read leniently: an id names a rule even when the rule has other problems.</summary>
+    private static IEnumerable<string> NormIds(string path)
+    {
+        try
+        {
+            var root = JsonDocument.Parse(File.ReadAllText(path)).RootElement;
+            if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("rules", out var rules) && rules.ValueKind == JsonValueKind.Array)
+                return rules.EnumerateArray().Where(r => r.ValueKind == JsonValueKind.Object).Select(r => Str(r, "id")).OfType<string>().ToList();
+        }
+        catch (JsonException) { }
+        return Enumerable.Empty<string>();
+    }
+
+    /// <summary>The svc: ids whose <c>wire</c> names each wire call (Category/Type), from dependencies.json.</summary>
+    public static Dictionary<string, List<string>> Wire(string moduleDir)
+    {
+        var map = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (id, _, wire, _) in Load(moduleDir).Dependencies)
+            foreach (var w in wire)
+            {
+                if (!map.TryGetValue(w, out var list)) map[w] = list = new();
+                if (!list.Contains(id)) list.Add(id);
+            }
+        return map;
+    }
+
+    /// <summary>Each scenario, for the oracle commands.</summary>
+    public static List<Scenario> Scenarios(string moduleDir) => Load(moduleDir).Scenarios.Select(x => x.S).ToList();
+
     private static ModuleIndex? ReadModule(string moduleDir)
     {
         var path = Path.Combine(moduleDir, "module.json");
@@ -259,6 +291,12 @@ public static partial class Registry
             f.Add(new Finding(Rel(Path.Combine(reg, missing)), 0, "REGISTRY-MISSING", "error", "is missing; parity registry init writes the files a registry lacks"));
 
         var ids = ModuleIds(moduleDir, module);
+        var (rules, ruleFindings) = Oracle.Normalization.Load(moduleDir, l.Decisions.Select(x => x.D).ToList());
+        if (File.Exists(Oracle.Normalization.PathOf(moduleDir)))
+        {
+            f.AddRange(ruleFindings);
+            ids.UnionWith(NormIds(Oracle.Normalization.PathOf(moduleDir)));
+        }
         var evidence = new EvidenceSet(moduleDir);
         void Cites(string file, int line, string who, IEnumerable<string> cites, bool evOk = true)
         {
@@ -281,7 +319,7 @@ public static partial class Registry
             var listed = l.Dependencies.Select(x => x.Id).ToHashSet(StringComparer.Ordinal);
             foreach (var svc in module.ServiceCalls.Where(x => !listed.Contains(x)))
                 f.Add(new Finding(depFile, 0, "REGISTRY-GAP", "error", $"{svc} is called in the module but has no entry; add {{ \"id\": \"{svc}\", \"errors\": [...] }} after reviewing its error cases"));
-            foreach (var (id, errors, line) in l.Dependencies)
+            foreach (var (id, errors, _, line) in l.Dependencies)
             {
                 if (!module.ServiceCalls.Contains(id)) f.Add(new Finding(depFile, line, "REGISTRY-ORPHAN", "error", $"{id} is no longer called in the module; remove the entry or re-extract the form that calls it"));
                 foreach (var e in errors)
@@ -313,6 +351,10 @@ public static partial class Registry
                 f.Add(new Finding(scnFile, 0, "SCENARIO-UNKNOWN", "error", $"fixtures/{fx.Name}.json names {fx.Scenario}, which the registry lacks"));
 
         foreach (var (d, line) in l.Decisions) Cites(decFile, line, d.Id, d.Cite);
+
+        // recordings: each sealed, for a scenario the registry has at its current version; a recorded scenario's lastVerified backed
+        // by the verification parity oracle verify wrote against the same recording and rules
+        if (l.HasScenarios) f.AddRange(Oracle.OracleModule.Check(moduleDir, l.Scenarios.Select(x => (x.S, x.Line)).ToList(), scnFile, rules));
 
         return f.OrderBy(x => x.File, StringComparer.Ordinal).ThenBy(x => x.Line).ThenBy(x => x.Code, StringComparer.Ordinal).ThenBy(x => x.Message, StringComparer.Ordinal).ToList();
     }

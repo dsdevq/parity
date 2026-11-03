@@ -24,7 +24,14 @@ material for ids only; behavior comes from the spec.
    warns where a rule has nothing else).
 5. Run the repo's tests. Then `"${PARITY_BIN:-parity}" lint legacy/<Module>/spec/<Form>.md --gate --implement <src dir>`.
    Fix `COV-TEST` by adding the missing test, never by editing the spec.
-6. If the spec is wrong or incomplete, stop: report the rule id and the problem. The spec is changed in
+6. When the form's scenarios have recordings (`legacy/<Module>/recordings/<scenario>/`), run
+   `"${PARITY_BIN:-parity}" oracle verify legacy/<Module> scn:<id>` for each. It runs the scenario's tests, diffs the
+   new client's calls against the legacy client's recorded ones, and lists each difference with the call, the
+   field, both values and where the legacy client makes the call. Fix the new client for each one and run it again
+   until it says `verified`. Never edit a recording, `normalization.json` or `verified/` (the guard refuses it), and
+   never set `lastVerified` by hand: a difference that only a person can call volatile goes in your report as a
+   yes/no question with the evidence.
+7. If the spec is wrong or incomplete, stop: report the rule id and the problem. The spec is changed in
    a specify session with the reviewer, not here.
 
-Report: rules implemented, tests added, anything deliberately left out (there should be nothing).
+Report: rules implemented, tests added, scenarios verified, anything deliberately left out (there should be nothing).

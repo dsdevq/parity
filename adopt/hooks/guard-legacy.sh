@@ -6,6 +6,8 @@
 # legacy/extract.config.json (relative entries are relative to that file). Exit 2 blocks the call and shows
 # the one-line reason to the agent; every denial is also appended to legacy/.guard-denials.log
 # (date, phase, tool, reason; tab separated).
+# In every phase (#36): legacy/<module>/recordings/ is writable only in the record phase and legacy/<module>/verified/
+# never by a tool call (parity oracle verify writes it); see the block before the map phase.
 #   path tools (Read Edit Write MultiEdit NotebookEdit Grep Glob): every path, resolved against the hook's cwd, must be allowed;
 #     a Grep or Glob search root (the path or the cwd, plus the glob up to its first wildcard) must not contain the legacy root
 #   shell tools (Bash PowerShell Monitor): every path-like token must be allowed, no cd may leave the allowed roots;
@@ -30,7 +32,6 @@ set -u
 set -f
 cd "${CLAUDE_PROJECT_DIR:-.}" 2>/dev/null || { printf '%s\n' "parity: CLAUDE_PROJECT_DIR '${CLAUDE_PROJECT_DIR:-}' is not a directory, so the phase cannot be read. Refusing the call rather than failing open" >&2; exit 2; }
 phase=$(cat legacy/.phase 2>/dev/null | tr -d '[:space:]')
-case "$phase" in specify|implement|map) ;; *) exit 0 ;; esac
 input=$(cat)
 tool=$(printf '%s' "$input" | sed -n 's/.*"tool_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
 cfg=legacy/extract.config.json
@@ -131,6 +132,70 @@ need_allowed() {
 not_above() {
   case $legacy in "$N"/*) deny "$1 '$N' contains the legacy source root '$legacy'; narrow path to a directory outside it" "" ;; esac
 }
+
+# --- recordings and verifications (#36), in every phase -------------------------------------------------------
+# legacy/<module>/recordings/ (the legacy client's recorded calls and normalization.json) is written only in the record
+# phase, by parity oracle export or the person recording; legacy/<module>/verified/ only by parity oracle verify, never by
+# a tool call, in any phase. Read, Grep and Glob may read both. A write tool aimed at either, a shell word or an MCP value
+# that resolves into either, a bare 'recordings' or 'verified' word in a command that changes directory (the guard cannot
+# follow it there), and such a path behind a variable, are refused. A cheap test on the raw input decides whether this
+# runs at all, so a phase without jq is only refused for a call that names one of the two.
+phase=${phase:-none}
+lowraw=$(printf '%s' "$input" | tr 'A-Z' 'a-z' | sed 's#\\\\#/#g; s#\\#/#g')
+case $lowraw in
+  *recordings*|*/verified*|*[\"\ ]verified*)
+    command -v jq >/dev/null 2>&1 || deny "jq is required to check a call that names a recording or a verification, and was not found" "Install it (apt install jq, brew install jq, winget install jqlang.jq or scoop install jq)"
+    printf '%s' "$input" | jq -e 'type == "object"' >/dev/null 2>&1 || deny "the hook input is not a JSON object, so it cannot be checked" ""
+    orepo=$(lc "$(fwd "$(pwd)")")
+    otool=$(printf '%s' "$input" | jq -r '.tool_name // empty | strings' 2>/dev/null | tr -d '\r')
+    tool=${otool:-$tool}
+    ocwd=$(printf '%s' "$input" | jq -r '.cwd // empty | strings' 2>/dev/null | tr -d '\r')
+    [ -n "$ocwd" ] || ocwd=$orepo
+    norm "$ocwd" "$orepo"; ocwd=$N
+    ohint="Recordings change only in the record phase, with the person who ran the scenario (parity oracle export); only parity oracle verify marks a scenario verified. Read them with the Read tool"
+    # oprot PATH (normalised): true when no tool call may write it in this phase; the reason in P
+    oprot() {
+      case $1 in
+        "$orepo"/legacy/*/verified|"$orepo"/legacy/*/verified/*) P="legacy/<module>/verified/ is written only by parity oracle verify ('$1')"; return 0 ;;
+        "$orepo"/legacy/*/recordings|"$orepo"/legacy/*/recordings/*) [ "$phase" = record ] && return 1; P="legacy/<module>/recordings/ is read-only outside the record phase ('$1')"; return 0 ;;
+      esac
+      return 1
+    }
+    case $otool in
+      Read|Grep|Glob) ;;
+      Edit|Write|MultiEdit|NotebookEdit)
+        p=$(printf '%s' "$input" | jq -r '(.tool_input.file_path // .tool_input.notebook_path) // empty | strings' 2>/dev/null | tr -d '\r')
+        if [ -n "$p" ]; then norm "$p" "$ocwd"; oprot "$N" && deny "$P" "$ohint"; fi ;;
+      *)
+        case $otool in
+          Bash|PowerShell|Monitor) words=$(printf '%s' "$input" | jq -r '.tool_input.command // empty | strings' 2>/dev/null) ;;
+          *) words=$(printf '%s' "$input" | jq -r '.tool_input | .. | strings' 2>/dev/null) ;;
+        esac
+        words=$(printf '%s\n' "$words" | tr '\r\t' '  ' | sed 's/[][;|&()<>{}=,"`'"'"']/ /g')
+        hascd=0
+        case $otool in Bash|PowerShell|Monitor)
+          case " $(lc "$words" | tr '\n' ' ') " in *" cd "*|*" chdir "*|*" pushd "*|*" set-location "*|*" sl "*|*" push-location "*) hascd=1 ;; esac ;;
+        esac
+        for w in $words; do
+          w=$(fwd "$w")
+          lw=$(lc "$w")
+          case /$lw/ in */recordings/*|*/verified/*) ;; *) continue ;; esac
+          case $lw in
+            *'$'*|*%*%*|~*) deny "the path '$w' names a recording or a verification through a variable, which cannot be resolved" "$ohint" ;;
+          esac
+          case $lw in
+            */*) ;;
+            *) case $otool in Bash|PowerShell|Monitor) ;; *) continue ;; esac
+               if [ "$hascd" = 1 ] && { [ "$lw" = verified ] || [ "$phase" != record ]; }; then
+                 deny "the word '$w' follows a directory change the guard cannot follow, so it may name a protected folder" "$ohint"
+               fi ;;
+          esac
+          norm "$w" "$ocwd"
+          oprot "$N" && deny "$P" "$ohint"
+        done ;;
+    esac ;;
+esac
+case "$phase" in specify|implement|map) ;; *) exit 0 ;; esac
 
 # --- the map phase: read anything, write only the registries and evidence ---------------------------------
 if [ "$phase" = map ]; then
