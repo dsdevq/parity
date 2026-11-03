@@ -293,6 +293,17 @@ public sealed class OracleTests
                     ("Bash", new { command = "echo '{}' > recordings/normalization.json" }, Path.Combine(work, "legacy", "M")),
                     ("Bash", new { command = "cp x.json $M/recordings/a.json" }, null),
                     ("Bash", new { command = "cd legacy/M && echo x > verified/a.json" }, null),
+                    ("Bash", new { command = "echo x>verified/a.json" }, Path.Combine(work, "legacy", "M")),
+                    ("Bash", new { command = "cd legacy/M && echo x>verified/a.json" }, null),
+                    ("Bash", new { command = "cd legacy/M;echo x >verified/a.json" }, null),
+                    ("Bash", new { command = "echo x > verif\"\"ied/a.json" }, Path.Combine(work, "legacy", "M")),
+                    ("Bash", new { command = "cd legacy/M && echo x > verif''ied/a.json" }, null),
+                    ("Bash", new { command = "echo x > veri\\fied/a.json" }, Path.Combine(work, "legacy", "M")),
+                    ("Bash", new { command = "echo x > v*/a.json" }, Path.Combine(work, "legacy", "M")),
+                    ("Bash", new { command = "rm -rf ve*" }, Path.Combine(work, "legacy", "M")),
+                    ("Bash", new { command = "echo x > verifie?/a.json" }, Path.Combine(work, "legacy", "M")),
+                    ("Bash", new { command = "cd legacy/M && rm -rf ve*" }, null),
+                    ("Bash", new { command = "rm -rf legacy/M/v*" }, null),
                     ("Bash", new { command = "cd legacy/M; echo x > recordings/oracle.json" }, null),
                     ("Bash", new { command = "cd legacy/M/registry && echo x > ../verified/a.json" }, null),
                     ("PowerShell", new { command = "Set-Location legacy/M; Set-Content verified/a.json x" }, null),
@@ -310,6 +321,8 @@ public sealed class OracleTests
                     ("Grep", new { pattern = "EffectiveDate", path = "legacy/M/recordings" }),
                     ("Bash", new { command = "parity oracle verify legacy/M scn:rider-added" }),
                     ("Edit", new { file_path = "legacy/M/fixtures/x.json", old_string = "\"shapeVerified\": false", new_string = "\"shapeVerified\": true" }),
+                    ("Bash", new { command = "ls legacy/M/registry/*.md" }),
+                    ("Bash", new { command = "echo verified results *.json" }),
                 })
                 {
                     if (phase == "map" && tool == "Edit") continue;                                                  // map writes only registry/ and evidence/ anyway
@@ -323,7 +336,8 @@ public sealed class OracleTests
             Assert.Equal(0, GuardHookTests.Run(work, Call("Write", new { file_path = "legacy/M/recordings/oracle.json", content = "{}" }), hideJq: false).Code);
             Assert.Equal(0, GuardHookTests.Run(work, Call("Bash", new { command = "git add legacy/M/recordings/rider-added" }), hideJq: false).Code);
             Assert.Equal(0, GuardHookTests.Run(work, Call("Bash", new { command = "cd legacy/M; echo x > recordings/oracle.json" }), hideJq: false).Code);
-            foreach (var cmd in new[] { "cd legacy/M && echo x > verified/a.json", "cd legacy/M/registry && echo x > ../verified/a.json" })
+            Assert.Equal(0, GuardHookTests.Run(work, Call("Bash", new { command = "rm -rf recordi*" }, Path.Combine(work, "legacy", "M")), hideJq: false).Code);
+            foreach (var cmd in new[] { "cd legacy/M && echo x > verified/a.json", "cd legacy/M/registry && echo x > ../verified/a.json", "cd legacy/M;echo x>verified/a.json", "cd legacy/M && echo x > verif\"\"ied/a.json", "cd legacy/M && echo x > v*/a.json", "rm -rf legacy/M/ve*" })
                 Assert.Equal(2, GuardHookTests.Run(work, Call("Bash", new { command = cmd }), hideJq: false).Code);
             var v = GuardHookTests.Run(work, Call("Write", new { file_path = "legacy/M/verified/rider-added.json", content = "{}" }), hideJq: false);
             Assert.Equal(2, v.Code);

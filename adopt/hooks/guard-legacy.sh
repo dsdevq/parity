@@ -138,12 +138,19 @@ not_above() {
 # phase, by parity oracle export or the person recording; legacy/<module>/verified/ only by parity oracle verify, never by
 # a tool call, in any phase. Read, Grep and Glob may read both. A write tool aimed at either, a shell word or an MCP value
 # that resolves into either, a bare 'recordings' or 'verified' word in a command that changes directory (the guard cannot
-# follow it there), and such a path behind a variable, are refused. A cheap test on the raw input decides whether this
-# runs at all, so a phase without jq is only refused for a call that names one of the two.
+# follow it there), a shell word whose wildcard segment can match either folder (in a module folder, or after a cd), and
+# such a path behind a variable, are refused. Quotes are dropped before words are split, so verif""ied is verified. A cheap
+# test on the raw input (with quotes and backslashes removed) decides whether this runs at all: a call that names either
+# folder, or a shell call with a wildcard when jq is present. A phase without jq is only refused for a call that names one.
 phase=${phase:-none}
 lowraw=$(printf '%s' "$input" | tr 'A-Z' 'a-z' | sed 's#\\\\#/#g; s#\\#/#g')
-case $lowraw in
-  *recordings*|*/verified*|*[\"\ ]verified*)
+ocut=$(printf '%s' "$input" | tr 'A-Z' 'a-z' | tr -d "\"'\`\\\\")
+orun=0
+case "$lowraw|$ocut" in
+  *recordings*|*verified*) orun=1 ;;
+  *) case $tool in Bash|PowerShell|Monitor) case $input in *[\*\?\[]*) command -v jq >/dev/null 2>&1 && orun=1 ;; esac ;; esac ;;
+esac
+if [ "$orun" = 1 ]; then
     command -v jq >/dev/null 2>&1 || deny "jq is required to check a call that names a recording or a verification, and was not found" "Install it (apt install jq, brew install jq, winget install jqlang.jq or scoop install jq)"
     printf '%s' "$input" | jq -e 'type == "object"' >/dev/null 2>&1 || deny "the hook input is not a JSON object, so it cannot be checked" ""
     orepo=$(lc "$(fwd "$(pwd)")")
@@ -171,37 +178,62 @@ case $lowraw in
           Bash|PowerShell|Monitor) words=$(printf '%s' "$input" | jq -r '.tool_input.command // empty | strings' 2>/dev/null) ;;
           *) words=$(printf '%s' "$input" | jq -r '.tool_input | .. | strings' 2>/dev/null) ;;
         esac
-        words=$(printf '%s\n' "$words" | tr '\r\t' '  ' | sed 's/[][;|&()<>{}=,"`'"'"']/ /g')
+        words=$(printf '%s\n' "$words" | tr -d "\"\`'" | tr '\r\t' '  ' | sed 's/[][;|&()<>{}=,]/ /g')
         hascd=0
         case $otool in Bash|PowerShell|Monitor)
           case " $(lc "$words" | tr '\n' ' ') " in *" cd "*|*" chdir "*|*" pushd "*|*" set-location "*|*" sl "*|*" push-location "*) hascd=1 ;; esac ;;
         esac
-        for w in $words; do
-          w=$(fwd "$w")
+        # ocheck WORD: refuse a word that names, or can glob to, a protected folder; the quotes are already gone
+        ocheck() {
+          w=$(fwd "$1")
           lw=$(lc "$w")
-          case /$lw/ in */recordings/*|*/verified/*) ;; *) continue ;; esac
+          wr=0; wv=0; stop=0; pre=
+          case $otool in Bash|PowerShell|Monitor)
+            _ifs=$IFS; IFS=/
+            for sg in $lw; do
+              [ "$stop" = 0 ] || continue
+              case $sg in *[\?\*\[]*)
+                case recordings in $sg) wr=1 ;; esac
+                case verified in $sg) wv=1 ;; esac
+                if [ "$wr" = 1 ] || [ "$wv" = 1 ]; then stop=1; continue; fi ;;
+              esac
+              pre="${pre:+$pre/}$sg"
+            done
+            IFS=$_ifs
+            [ "$phase" = record ] && wr=0 ;;
+          esac
+          wild=0
+          if [ "$wr" = 1 ] || [ "$wv" = 1 ]; then wild=1; case $lw in /*) pre=/$pre ;; esac; fi
+          case /$lw/ in */recordings/*|*/verified/*) ;; *) [ "$wild" = 1 ] || return 0 ;; esac
           case $lw in
             *'$'*|*%*%*|~*) deny "the path '$w' names a recording or a verification through a variable, which cannot be resolved" "$ohint" ;;
           esac
           case $lw in
             */*) ;;
-            *) case $otool in Bash|PowerShell|Monitor) ;; *) continue ;; esac ;;
+            *) case $otool in Bash|PowerShell|Monitor) ;; *) return 0 ;; esac ;;
           esac
           case $lw in
             /*|?:/*) ;;
             *) if [ "$hascd" = 1 ]; then
-                 case /$lw/ in
-                   */verified/*) hit=1 ;;
-                   *) [ "$phase" != record ] && hit=1 || hit=0 ;;
-                 esac
+                 hit=$wild
+                 case /$lw/ in */verified/*) hit=1 ;; */recordings/*) [ "$phase" = record ] || hit=1 ;; esac
                  [ "$hit" = 1 ] && deny "the word '$w' follows a directory change the guard cannot follow, so it may name a protected folder" "$ohint"
                fi ;;
           esac
+          if [ "$wild" = 1 ]; then
+            norm "${pre:-.}" "$ocwd"
+            case $N in "$orepo"/legacy/?*/*) ;; "$orepo"/legacy/?*) deny "the word '$w' is a pattern that can match a protected folder inside '$N'" "$ohint" ;; esac
+          fi
           norm "$w" "$ocwd"
           oprot "$N" && deny "$P" "$ohint"
+          return 0
+        }
+        for wb in $words; do
+          ocheck "$wb"
+          case $wb in *\\*) ocheck "$(printf '%s' "$wb" | tr -d '\\')" ;; esac
         done ;;
-    esac ;;
-esac
+    esac
+fi
 case "$phase" in specify|implement|map) ;; *) exit 0 ;; esac
 
 # --- the map phase: read anything, write only the registries and evidence ---------------------------------
