@@ -281,7 +281,7 @@ public static class OracleDiff
         foreach (var c in lCols)
         {
             if (!differing.TryGetValue(c, out var d)) continue;
-            yield return new Difference("dataset", "changed", lc.Seq, nc.Seq, lc.Key, $"{l.At[d.First]}/{c}", l.Rows[d.First].GetValueOrDefault(c) ?? "(absent)", n.Rows[d.First].GetValueOrDefault(c) ?? "(absent)", 0,
+            yield return new Difference("dataset", "changed", lc.Seq, nc.Seq, lc.Key, $"{l.At[d.First]}/{c}", l.Rows[d.First].GetValueOrDefault(c), n.Rows[d.First].GetValueOrDefault(c), 0,
                 d.Count > 1 ? $"differs in {d.Count} of {rows} rows; the first is shown" : null);
         }
     }
@@ -328,7 +328,11 @@ public static class OracleDiff
             if (d.Detail != null) sb.Append($"   {d.Detail}\n");
             if (d.Kind == "missing" && d.Part != "call" && d.Legacy != null) sb.Append($"   legacy: {d.Legacy}\n   new: (absent)\n");
             else if (d.Kind == "extra" && d.Part != "call" && d.New != null) sb.Append($"   legacy: (absent)\n   new: {d.New}\n");
-            else if (d.Kind == "changed") sb.Append($"   legacy: \"{d.Legacy ?? "(no error)"}\"\n   new: \"{d.New ?? "(no error)"}\"\n");
+            else if (d.Kind == "changed")
+            {
+                var none = d.Part == "error" ? "(no error)" : "(absent)";
+                sb.Append($"   legacy: \"{d.Legacy ?? none}\"\n   new: \"{d.New ?? none}\"\n");
+            }
             else if (d.Kind == "not-compared") sb.Append($"   legacy: {d.Legacy}\n   new: {d.New}\n");
             if (where == null) continue;
             var callers = where(d.Call);
