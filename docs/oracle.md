@@ -203,7 +203,7 @@ file only: there is no flag to run something else.
 
 | Rail | Mechanism |
 |---|---|
-| Recordings are read-only to the agent outside record | the guard refuses, in every phase but `record`, a write tool aimed under `legacy/<module>/recordings/`, and a shell word or MCP value that resolves there (also a bare `recordings` after a `cd`, and such a path behind a variable); export refuses outside `record`; the seal catches what a hook cannot see |
+| Recordings are read-only to the agent outside record | the guard refuses, in every phase but `record`, a write tool aimed under `legacy/<module>/recordings/`, and a shell word or MCP value that resolves there (also a bare `recordings` after a `cd`, and such a path behind a variable, a command substitution or a brace expansion); export refuses outside `record`; the seal catches what a hook cannot see |
 | A normalization rule needs a human decision | `NORM-UNDECIDED` refuses the diff and fails `registry check`; the rules file is under `recordings/`, so it changes only in `record` |
 | The oracle settings need a human decision | `recordings/oracle.json` is under `recordings/`, so it changes only in `record`; `ORACLE-UNDECIDED` refuses the diff and verify and fails `registry check` until a `dec:` entry cites the settings' hash; a change unbacks every verification |
 | Only the diff marks a scenario verified | `verified/` is refused to every tool call in every phase, `record` included; for a recorded scenario `registry check` refuses a `lastVerified` that a current verification (same date, recording, rules, oracle settings and scenario version) does not back: `SCENARIO-VERIFY-UNBACKED` |
@@ -211,7 +211,9 @@ file only: there is no flag to run something else.
 
 `Read`, `Grep` and `Glob` may read recordings in every phase. A shell command that names either folder is refused
 whatever it does, `git add` included: stage the module folder (`git add legacy/<Module>`) instead. The guard is for a cooperative agent: what a program
-does with a path it builds itself is outside it, which is why the seal and the registry check exist too.
+does with a path it builds itself is outside it, which is why the seal and the registry check exist too. A shell word under a module folder, or after a `cd`, that holds `$`, a backtick, `%x%` or a brace is refused in every phase, since the guard cannot see where it resolves.
+
+`diff` and `verify` refuse a recording made at another version of the scenario than the registry's current one (exit 3); record the scenario again.
 
 ## State and the contract the tool expects
 

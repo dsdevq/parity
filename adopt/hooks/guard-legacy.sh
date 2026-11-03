@@ -139,16 +139,16 @@ not_above() {
 # a tool call, in any phase. Read, Grep and Glob may read both. A write tool aimed at either, a shell word or an MCP value
 # that resolves into either, a bare 'recordings' or 'verified' word in a command that changes directory (the guard cannot
 # follow it there), a shell word whose wildcard segment can match either folder (in a module folder, or after a cd), and
-# such a path behind a variable, are refused. Quotes are dropped before words are split, so verif""ied is verified. A cheap
+# such a path behind a variable, and a shell word under a module folder (or after a cd) with $, a backtick, %x% or a brace, are refused. Quotes are dropped before words are split, so verif""ied is verified. A cheap
 # test on the raw input (with quotes and backslashes removed) decides whether this runs at all: a call that names either
-# folder, or a shell call with a wildcard when jq is present. A phase without jq is only refused for a call that names one.
+# folder, or a shell call when jq is present. A phase without jq is only refused for a call that names one.
 phase=${phase:-none}
 lowraw=$(printf '%s' "$input" | tr 'A-Z' 'a-z' | sed 's#\\\\#/#g; s#\\#/#g')
 ocut=$(printf '%s' "$input" | tr 'A-Z' 'a-z' | tr -d "\"'\`\\\\")
 orun=0
 case "$lowraw|$ocut" in
   *recordings*|*verified*) orun=1 ;;
-  *) case $tool in Bash|PowerShell|Monitor) case $input in *[\*\?\[]*) command -v jq >/dev/null 2>&1 && orun=1 ;; esac ;; esac ;;
+  *) case $tool in Bash|PowerShell|Monitor) command -v jq >/dev/null 2>&1 && orun=1 ;; esac ;;
 esac
 if [ "$orun" = 1 ]; then
     command -v jq >/dev/null 2>&1 || deny "jq is required to check a call that names a recording or a verification, and was not found" "Install it (apt install jq, brew install jq, winget install jqlang.jq or scoop install jq)"
@@ -178,11 +178,23 @@ if [ "$orun" = 1 ]; then
           Bash|PowerShell|Monitor) words=$(printf '%s' "$input" | jq -r '.tool_input.command // empty | strings' 2>/dev/null) ;;
           *) words=$(printf '%s' "$input" | jq -r '.tool_input | .. | strings' 2>/dev/null) ;;
         esac
-        words=$(printf '%s\n' "$words" | tr -d "\"\`'" | tr '\r\t' '  ' | sed 's/[][;|&()<>{}=,]/ /g')
+        words=$(printf '%s\n' "$words" | tr -d "\"'" | tr '\r\t' '  ' | sed 's/[][;|&()<>=,]/ /g')
         hascd=0
         case $otool in Bash|PowerShell|Monitor)
           case " $(lc "$words" | tr '\n' ' ') " in *" cd "*|*" chdir "*|*" pushd "*|*" set-location "*|*" sl "*|*" push-location "*) hascd=1 ;; esac ;;
         esac
+        # oexp WORD: refuse a shell word that has a variable, a command substitution, a %var% or a brace expansion where the
+        # guard cannot resolve it, when it starts under a module folder or the call changes directory
+        oexp() {
+          case $otool in Bash|PowerShell|Monitor) ;; *) return 0 ;; esac
+          case $1 in *'$'*|*'`'*|*%*%*|*'{'*|*'}'*) ;; *) return 0 ;; esac
+          x=$(fwd "$1"); lx=$(lc "$x")
+          pfx=${lx%%[\$\`\{\}%]*}; pfx=${pfx:-.}
+          case $lx in /*|?:/*) ;; *) [ "$hascd" = 1 ] && deny "the word '$x' expands (variable, substitution or brace) after a directory change the guard cannot follow, so it may name a protected folder" "$ohint" ;; esac
+          norm "$pfx" "$ocwd"
+          case $N in "$orepo"/legacy/?*|"$orepo"/legacy/?*/*) deny "the word '$x' expands (variable, substitution or brace) inside a module folder, so it may name a recording or a verification" "$ohint" ;; esac
+          return 0
+        }
         # ocheck WORD: refuse a word that names, or can glob to, a protected folder; the quotes are already gone
         ocheck() {
           w=$(fwd "$1")
@@ -229,8 +241,10 @@ if [ "$orun" = 1 ]; then
           return 0
         }
         for wb in $words; do
-          ocheck "$wb"
-          case $wb in *\\*) ocheck "$(printf '%s' "$wb" | tr -d '\\')" ;; esac
+          oexp "$wb"
+          wc=$(printf '%s' "$wb" | tr -d '`{}')
+          ocheck "$wc"
+          case $wc in *\\*) ocheck "$(printf '%s' "$wc" | tr -d '\\')" ;; esac
         done ;;
     esac
 fi

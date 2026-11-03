@@ -244,6 +244,17 @@ public sealed class OracleTests
         Assert.Contains(Registry.Check(dir, gate: false), x => x.Code == "SCENARIO-VERIFY-UNBACKED" && x.Message.Contains("oracle settings"));
         WriteSettings(dir, cfg, decide: false);
         Assert.DoesNotContain(Registry.Check(dir, gate: false), x => x.Severity == "error");
+
+        // a scenario whose version moved on since it was recorded is neither diffed nor verified: it is recorded again first
+        var scenariosPath = Path.Combine(dir, "registry", "scenarios.json");
+        var bumped = System.Text.RegularExpressions.Regex.Replace(scenariosText, "(\"id\": \"scn:rider-added\",\\s*\"version\": )1", "${1}2");
+        Assert.NotEqual(scenariosText, bumped);
+        File.WriteAllText(scenariosPath, bumped);
+        var stale = Assert.Throws<InvalidOperationException>(() => OracleModule.Verify(dir, Scn, cfg, Runner(0), Key, Today));
+        Assert.Contains("made at version 1; the scenario is at version 2", stale.Message);
+        Assert.Contains("record it again", stale.Message);
+        Assert.Contains("made at version 1", Assert.Throws<InvalidOperationException>(() => OracleModule.Diff(dir, Scn, null, cfg, Key, Today)).Message);
+        File.WriteAllText(scenariosPath, scenariosText);
     }
 
     [Fact]
@@ -305,6 +316,14 @@ public sealed class OracleTests
                     ("Bash", new { command = "cd legacy/M && rm -rf ve*" }, null),
                     ("Bash", new { command = "rm -rf legacy/M/v*" }, null),
                     ("Bash", new { command = "cd legacy/M; echo x > recordings/oracle.json" }, null),
+                    ("Bash", new { command = "echo x > legacy/M/{verified,x}/a.json" }, null),
+                    ("Bash", new { command = "echo x > legacy/M/v{er,}ified/a.json" }, null),
+                    ("Bash", new { command = "d=verified; echo x > legacy/M/$d/a.json" }, null),
+                    ("Bash", new { command = "echo x > legacy/M/$(echo verified)/a.json" }, null),
+                    ("Bash", new { command = "echo x > legacy/M/`echo verified`/a.json" }, null),
+                    ("Bash", new { command = "echo x > $d/a.json" }, Path.Combine(work, "legacy", "M")),
+                    ("Bash", new { command = "cd legacy/M && echo x > {verified,x}/a.json" }, null),
+                    ("Bash", new { command = "echo x > verified" }, Path.Combine(work, "legacy", "M")),
                     ("Bash", new { command = "cd legacy/M/registry && echo x > ../verified/a.json" }, null),
                     ("PowerShell", new { command = "Set-Location legacy/M; Set-Content verified/a.json x" }, null),
                     ("Write", new { file_path = "legacy/M/verified/rider-added.json", content = "{}" }, null),
@@ -323,6 +342,8 @@ public sealed class OracleTests
                     ("Edit", new { file_path = "legacy/M/fixtures/x.json", old_string = "\"shapeVerified\": false", new_string = "\"shapeVerified\": true" }),
                     ("Bash", new { command = "ls legacy/M/registry/*.md" }),
                     ("Bash", new { command = "echo verified results *.json" }),
+                    ("Bash", new { command = "echo ${HOME} $(date)" }),
+                    ("Bash", new { command = "awk '{print $1}' legacy/M/registry/scenarios.json" }),
                 })
                 {
                     if (phase == "map" && tool == "Edit") continue;                                                  // map writes only registry/ and evidence/ anyway
@@ -337,7 +358,7 @@ public sealed class OracleTests
             Assert.Equal(0, GuardHookTests.Run(work, Call("Bash", new { command = "git add legacy/M/recordings/rider-added" }), hideJq: false).Code);
             Assert.Equal(0, GuardHookTests.Run(work, Call("Bash", new { command = "cd legacy/M; echo x > recordings/oracle.json" }), hideJq: false).Code);
             Assert.Equal(0, GuardHookTests.Run(work, Call("Bash", new { command = "rm -rf recordi*" }, Path.Combine(work, "legacy", "M")), hideJq: false).Code);
-            foreach (var cmd in new[] { "cd legacy/M && echo x > verified/a.json", "cd legacy/M/registry && echo x > ../verified/a.json", "cd legacy/M;echo x>verified/a.json", "cd legacy/M && echo x > verif\"\"ied/a.json", "cd legacy/M && echo x > v*/a.json", "rm -rf legacy/M/ve*" })
+            foreach (var cmd in new[] { "cd legacy/M && echo x > verified/a.json", "cd legacy/M/registry && echo x > ../verified/a.json", "cd legacy/M;echo x>verified/a.json", "cd legacy/M && echo x > verif\"\"ied/a.json", "cd legacy/M && echo x > v*/a.json", "rm -rf legacy/M/ve*", "echo x > legacy/M/{verified,x}/a.json", "echo x > legacy/M/v{er,}ified/a.json", "d=verified; echo x > legacy/M/$d/a.json", "echo x > legacy/M/$(echo verified)/a.json" })
                 Assert.Equal(2, GuardHookTests.Run(work, Call("Bash", new { command = cmd }), hideJq: false).Code);
             var v = GuardHookTests.Run(work, Call("Write", new { file_path = "legacy/M/verified/rider-added.json", content = "{}" }), hideJq: false);
             Assert.Equal(2, v.Code);

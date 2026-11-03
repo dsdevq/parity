@@ -87,7 +87,7 @@ public static class OracleModule
         return Recording.Export(q with { Kind = "recording" });
     }
 
-    /// <summary>The recording of a scenario, refused when its seal is broken.</summary>
+    /// <summary>The recording of a scenario, refused when its seal is broken or it was made at another version of the scenario.</summary>
     public static (string Dir, RecordingFile File) SealedRecording(string moduleDir, string scenario)
     {
         var dir = Recording.RecordingDir(moduleDir, scenario);
@@ -97,6 +97,9 @@ public static class OracleModule
         if (tampered.Count > 0)
             throw new InvalidOperationException($"the recording of {scenario} no longer matches its seal ({string.Join("; ", tampered)}); a recording is read-only after export. Restore it from git, or record the scenario again");
         if (rec.Kind != "recording" || rec.Scenario != scenario) throw new InvalidOperationException($"{Recording.Rel(dir)} holds a {rec.Kind} of {rec.Scenario}, not the recording of {scenario}");
+        var current = ScenarioVersion(moduleDir, scenario);
+        if (rec.ScenarioVersion != current)
+            throw new InvalidOperationException($"the recording of {scenario} was made at version {rec.ScenarioVersion}; the scenario is at version {current}, so its meaning changed since: record it again");
         return (dir, rec);
     }
 
