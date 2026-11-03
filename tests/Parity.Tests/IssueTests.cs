@@ -346,9 +346,9 @@ public sealed partial class IssueTests
                 ("Bash", new { command = "bash --login -c \"cd; cat Legacy/AcmeAdmin/Forms/X.cs\"" }, below, "directory"),
                 ("Bash", new { command = "bash -o pipefail -c \"cd $HOME && cat Legacy/AcmeAdmin/Forms/X.cs\"" }, below, "directory"),
                 ("Bash", new { command = "sudo cd .. && ls" }, below, "first word"),                                             // a cd the guard cannot follow
-                ("Bash", new { command = "sudo cd $HOME && ls" }, below, "first word"),
+                ("Bash", new { command = "sudo cd $HOME && ls" }, below, "directory change"),
                 ("Bash", new { command = "sudo cd && ls" }, below, "first word"),
-                ("Bash", new { command = "xargs cd %USERPROFILE%" }, below, "first word"),
+                ("Bash", new { command = "xargs cd %USERPROFILE%" }, below, "directory change"),
             }).ToArray();
             var denials = 0;
             foreach (var phase in new[] { "specify", "implement" })

@@ -17,7 +17,7 @@ may change; the guard refuses it everywhere else. The reference is docs/oracle.m
    host log), the session id or the time window of the run, their name, the environment and the legacy build.
    Keep the dump outside the repo: it holds real data before redaction.
 3. Check `redact` and `writes` in `legacy/<Module>/recordings/oracle.json` (from `legacy/templates/oracle.json`; with `replay`, the command
-   `parity oracle verify` runs) with the person: every field that carries a
+   `oracle verify` runs) with the person: every field that carries a
    person, an id or an amount needs a redaction rule, and every call that changes host state is a write.
    The settings need a `dec:` entry in `legacy/<Module>/registry/decisions.json` that cites `oracle:<hash>` (`registry check` prints the hash), written from
    what the person said. `PARITY_REDACT_KEY` must be set (the same private value wherever recordings and replays are exported).
