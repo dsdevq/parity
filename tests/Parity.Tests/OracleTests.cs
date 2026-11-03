@@ -684,6 +684,21 @@ public sealed class OracleTests
         Assert.StartsWith("scn:rider-added: 6 recorded call(s), 6 replayed, 0 difference(s)\n", green.Out);
         Assert.Equal(before, Files());                                                                           // no replays/, no verified/, no registry edit
 
+        // --json on the standalone form: the same exit codes, the JSON alone on stdout, the same redaction; a clean run lists every call with no difference
+        var jsonDiff = Run(cwd, env, "oracle", "diff", "--recording", recording, "--capture", seeded, "--json");
+        Assert.True(jsonDiff.Code == 1, jsonDiff.Out + jsonDiff.Err);
+        var jsonRoot = JsonDocument.Parse(jsonDiff.Out).RootElement;
+        Assert.Equal("scn:rider-added", jsonRoot.GetProperty("scenario").GetString());
+        var jsonCalls = jsonRoot.GetProperty("calls").EnumerateArray().ToList();
+        Assert.Equal(6, jsonCalls.Count);
+        Assert.Equal(3, jsonCalls.Sum(c => c.GetProperty("differences").GetArrayLength()));
+        Assert.Equal(JsonValueKind.Null, jsonCalls.Single(c => c.GetProperty("recordedSeq").GetInt32() == 4).GetProperty("captureSeq").ValueKind);
+        Assert.DoesNotContain("agent1", jsonDiff.Out);
+        var jsonGreen = Run(cwd, env, "oracle", "diff", "--recording", recording, "--capture", fixedRun, "--json");
+        Assert.True(jsonGreen.Code == 0, jsonGreen.Out + jsonGreen.Err);
+        Assert.All(JsonDocument.Parse(jsonGreen.Out).RootElement.GetProperty("calls").EnumerateArray(), c => Assert.Equal(0, c.GetProperty("differences").GetArrayLength()));
+        Assert.Equal(before, Files());
+
         // a sealed replay folder is a capture too: the registry diff's own import of the same rows gives the same report
         Phase(dir, "implement");
         OracleModule.Diff(dir, Scn, seeded, cfg, Key, Today);
