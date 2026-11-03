@@ -30,12 +30,13 @@ parity - reverse-engineer a legacy WinForms module into a citable manifest and g
   parity oracle export <module-dir> <scn:id> --log <rows.jsonl>[,...] (--session <id>[,...] | --from <time> [--to <time>])
                   --recorded-by <name> [--environment <env>] [--legacy-build <build>] [--replace]
                                                        record phase: one scenario's host log rows into recordings/<scenario>/, redacted and sealed
-  parity oracle diff   <module-dir> <scn:id> [--capture <rows.jsonl>]
+  parity oracle diff   <module-dir> <scn:id> [--capture <rows.jsonl>] [--max-call-mb <n>]
                                                        the new client's calls (a capture, else the last replay) against the recording; exit 1 on a difference
-  parity oracle diff   --recording <recording-dir> --capture <replay-dir|rows.jsonl>
+  parity oracle diff   --recording <recording-dir> --capture <replay-dir|rows.jsonl> [--max-call-mb <n>]
                                                        the same diff with no registry read and nothing written; never marks anything verified
-  parity oracle verify <module-dir> <scn:id>
-                                                       run replay from recordings/oracle.json (the scenario's tests), diff its capture; only a green run with no difference sets lastVerified
+  parity oracle verify <module-dir> <scn:id> [--max-call-mb <n>]
+                                                       run replay from recordings/oracle.json (the scenario's tests), diff its capture; only a green run with no difference sets lastVerified;
+                                                       a call over --max-call-mb (default 64, 0 for none) on either side is a difference, not compared
   parity probe    <project.csproj> [--forms <glob>]    anonymized statement shapes; paste into an issue
   parity report   <manifest.json>                      anonymized raw/diagnostics/unresolved; review, then paste into an issue
   parity hash     <manifest.json>
@@ -172,12 +173,15 @@ try
             var sub = Positional(opts, 0) ?? throw new ArgumentException("oracle: the subcommand is export, diff or verify");
             var key = Environment.GetEnvironmentVariable("PARITY_REDACT_KEY");
             var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            var maxCallMb = Opt(opts, "max-call-mb") is not { } mb ? OracleDiff.DefaultMaxCallMb
+                : int.TryParse(mb, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var n) ? n
+                : throw new ArgumentException($"--max-call-mb '{mb}' is not a whole number of MB (0 for no limit)");
             if (sub == "diff" && opts.ContainsKey("recording"))
             {
                 if (Positional(opts, 1) != null) throw new ArgumentException("oracle diff takes either <module-dir> <scn:id> or --recording <dir>, not both");
                 var recording = Opt(opts, "recording") is { Length: > 0 } rd ? rd : throw new ArgumentException("oracle diff --recording needs the recording folder (recordings/<scenario>/)");
                 var capture = Opt(opts, "capture") is { Length: > 0 } cd ? cd : throw new ArgumentException("oracle diff --recording needs --capture <replay-dir|rows.jsonl>");
-                var r = OracleModule.DiffStandalone(recording, capture, key, today);
+                var r = OracleModule.DiffStandalone(recording, capture, key, today, maxCallMb);
                 Console.Write(OracleDiff.Render(r, null, OracleModule.StandaloneNote));
                 return r.Differences.Count == 0 ? 0 : 1;
             }
@@ -200,14 +204,14 @@ try
                 }
                 case "diff":
                 {
-                    var r = OracleModule.Diff(dir, scn, Opt(opts, "capture"), oracle, key, today);
+                    var r = OracleModule.Diff(dir, scn, Opt(opts, "capture"), oracle, key, today, maxCallMb);
                     Console.Write(OracleDiff.Render(r, OracleModule.Where(dir)));
                     return r.Differences.Count == 0 ? 0 : 1;
                 }
                 case "verify":
                 {
                     if (string.IsNullOrWhiteSpace(oracle.Replay)) throw new InvalidOperationException($"no replay in {Recording.Rel(OracleModule.SettingsPath(dir))}: verify runs that command (the scenario's tests, which write the capture) and refuses without it");
-                    var r = OracleModule.Verify(dir, scn, oracle, new ShellReplayRunner(oracle.Replay, Console.Error), key, today);
+                    var r = OracleModule.Verify(dir, scn, oracle, new ShellReplayRunner(oracle.Replay, Console.Error), key, today, maxCallMb);
                     Console.Write(r.Text);
                     return r.ExitCode;
                 }
