@@ -185,9 +185,16 @@ case $lowraw in
           esac
           case $lw in
             */*) ;;
-            *) case $otool in Bash|PowerShell|Monitor) ;; *) continue ;; esac
-               if [ "$hascd" = 1 ] && { [ "$lw" = verified ] || [ "$phase" != record ]; }; then
-                 deny "the word '$w' follows a directory change the guard cannot follow, so it may name a protected folder" "$ohint"
+            *) case $otool in Bash|PowerShell|Monitor) ;; *) continue ;; esac ;;
+          esac
+          case $lw in
+            /*|?:/*) ;;
+            *) if [ "$hascd" = 1 ]; then
+                 case /$lw/ in
+                   */verified/*) hit=1 ;;
+                   *) [ "$phase" != record ] && hit=1 || hit=0 ;;
+                 esac
+                 [ "$hit" = 1 ] && deny "the word '$w' follows a directory change the guard cannot follow, so it may name a protected folder" "$ohint"
                fi ;;
           esac
           norm "$w" "$ocwd"

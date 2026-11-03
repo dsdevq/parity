@@ -292,6 +292,10 @@ public sealed class OracleTests
                     ("Bash", new { command = "cd legacy/M && rm -r recordings" }, null),
                     ("Bash", new { command = "echo '{}' > recordings/normalization.json" }, Path.Combine(work, "legacy", "M")),
                     ("Bash", new { command = "cp x.json $M/recordings/a.json" }, null),
+                    ("Bash", new { command = "cd legacy/M && echo x > verified/a.json" }, null),
+                    ("Bash", new { command = "cd legacy/M; echo x > recordings/oracle.json" }, null),
+                    ("Bash", new { command = "cd legacy/M/registry && echo x > ../verified/a.json" }, null),
+                    ("PowerShell", new { command = "Set-Location legacy/M; Set-Content verified/a.json x" }, null),
                     ("Write", new { file_path = "legacy/M/verified/rider-added.json", content = "{}" }, null),
                     ("mcp__filesystem__write_file", new { path = "legacy/M/verified/rider-added.json", content = "{}" }, null),
                 })
@@ -318,6 +322,9 @@ public sealed class OracleTests
             Assert.Equal(0, GuardHookTests.Run(work, Call("Write", new { file_path = rec, content = "<SaveRider/>" }), hideJq: false).Code);
             Assert.Equal(0, GuardHookTests.Run(work, Call("Write", new { file_path = "legacy/M/recordings/oracle.json", content = "{}" }), hideJq: false).Code);
             Assert.Equal(0, GuardHookTests.Run(work, Call("Bash", new { command = "git add legacy/M/recordings/rider-added" }), hideJq: false).Code);
+            Assert.Equal(0, GuardHookTests.Run(work, Call("Bash", new { command = "cd legacy/M; echo x > recordings/oracle.json" }), hideJq: false).Code);
+            foreach (var cmd in new[] { "cd legacy/M && echo x > verified/a.json", "cd legacy/M/registry && echo x > ../verified/a.json" })
+                Assert.Equal(2, GuardHookTests.Run(work, Call("Bash", new { command = cmd }), hideJq: false).Code);
             var v = GuardHookTests.Run(work, Call("Write", new { file_path = "legacy/M/verified/rider-added.json", content = "{}" }), hideJq: false);
             Assert.Equal(2, v.Code);
             Assert.Contains("written only by parity oracle verify", v.Err);
