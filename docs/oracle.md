@@ -29,15 +29,57 @@ legacy/<Module>/
   recordings/<slug>/calls/NNN.request.<xml|json|txt>, NNN.reply.<...>, NNN.dataset.<xml|json>
   recordings/normalization.json         the normalization rules (one file per module)
   recordings/oracle.json                the oracle settings: writes, redact, replay (one file per module)
-  replays/<slug>/                       the new client's last capture, same format; rewritten by every diff --capture and verify
+  replays/<slug>/                       the new client's last capture, same format; rewritten by every registry `diff --capture` and `verify` (the standalone diff writes nothing)
   verified/<slug>.json                  written only by parity oracle verify
 ```
 
 `<slug>` is the scenario id without `scn:` (`scn:rider-added` is `rider-added`). The scenario must exist in
-`registry/scenarios.json` (written in the map phase); export refuses one that does not.
+`registry/scenarios.json` (written in the map phase, or by hand: see What each command needs); export refuses one that does not.
 
 Commit `recordings/` (after reading it, see Redaction) and `verified/`. `replays/` is regenerated; commit it or
 ignore it as you like. The raw dumps (the log rows before redaction) never belong in the repo.
+
+## What each command needs
+
+None of the oracle commands needs the extractor's output (`module.json`, the manifests). Most need a registry, which the map
+phase writes from that output but which can be written by hand, so a team can record and diff before (or without) the map phase.
+
+| Command | Registry it reads | Extractor output |
+|---|---|---|
+| `oracle export` | `scenarios.json`: the scenario's `id` and `version` | not read |
+| `oracle diff <module-dir> <scn:id>` | `scenarios.json` (the recording must be of the scenario's current version); `decisions.json` once `normalization.json` or `oracle.json` sets anything; `dependencies.json` only for the report's "legacy client" line (`wire`) | `module.json` only for the callers on that line; without it the line names the svc: id alone |
+| `oracle diff --recording <dir> --capture <dir-or-rows>` | none | not read |
+| `oracle verify <module-dir> <scn:id>` | as the registry diff, and it writes the scenario's `lastVerified` into `scenarios.json` | not read |
+| `registry check` (its `RECORDING-*`, `NORM-*`, `ORACLE-*` and `SCENARIO-VERIFY-UNBACKED` findings) | all three files | required: without `module.json` it stops at `REGISTRY-MISSING` |
+
+Without a registry, only the standalone diff runs. Without the extractor's output, `registry check` does not report a broken
+seal, but `diff` and `verify` check the seal themselves and refuse.
+
+**The minimal registry.** The oracle commands read only the fields named above; the schema of each file (`docs/adopt.md`, The
+map phase and the registries) still applies, and `registry check` holds them to it once the extract exists. For one scenario, with no normalization
+rule and no oracle settings:
+
+`registry/scenarios.json`:
+
+```json
+{ "module": "unreviewed", "scenarios": [
+  { "id": "scn:rider-added", "version": 1, "title": "an agent adds a rider to a policy", "role": "agent", "rights": [],
+    "negative": false, "exercises": [], "cite": [] }
+] }
+```
+
+`registry/decisions.json`: `{ "module": "unreviewed", "decisions": [] }`. `registry/dependencies.json` (optional for the oracle):
+`{ "module": "unreviewed", "dependencies": [] }`.
+
+`module` is the extract revision the registry was reviewed against; the oracle commands do not read it, and `parity registry init`
+and `stamp` write the real one once the extract exists. `exercises` lists the `handler:`, `svc:` and `state:` ids the scenario runs
+through: the oracle does not need them, `registry check` requires at least one. Each normalization rule and the oracle settings then
+need a decision, as below:
+
+```json
+{ "id": "dec:session-id-differs-every-login", "question": "The session id is different on every login. May the diff ignore its value?",
+  "answer": "Yes. The host issues it per login.", "owner": "alex", "date": "2026-11-03", "cite": ["norm:session-id"] }
+```
 
 ## The host log
 
@@ -116,6 +158,20 @@ parity oracle diff legacy/<Module> scn:<id> [--capture <rows.jsonl>]
 imports them into `replays/<slug>/` through the same redaction as a recording, and diffs. Without it, the last
 replay is diffed. Exit 0 when there is no difference, 1 when there is, 3 when the diff is refused (a broken seal,
 a rule without a decision, a scenario the registry lacks, a recording made at another version of the scenario). It never marks anything verified.
+
+**Standalone.** `parity oracle diff --recording <recordings/<slug>/> --capture <replays/<slug>/ | rows.jsonl>` runs the same
+diff with no registry read and nothing written:
+
+- `--recording` is a sealed recording folder (the output of export, wherever it now sits); a broken seal is refused as above.
+- `--capture` is a sealed replay folder or the host log rows of one new-client run. Rows are imported through the same redaction
+  into a temporary folder, which is deleted after the comparison: `replays/`, `verified/` and `registry/` are not touched.
+- The oracle settings and the normalization rules are the recording's own: `oracle.json` and `normalization.json` in the folder
+  that holds it (`recordings/` in a module). The redaction, the `writes` and the masking are therefore the registry diff's. A rule
+  or a settings file that is not valid is refused; the decision behind each is not checked, since that needs `decisions.json`.
+- The scenario's version is not checked (it needs `scenarios.json`), and the report has no "legacy client" line (it needs
+  `dependencies.json`). Its third line says so: `standalone diff: no registry read, ...`.
+- Exit codes are the registry diff's: 0 no difference, 1 a difference, 3 refused. It never marks anything verified: only `verify`,
+  which needs the registry and every decision, does.
 
 **Matching.** Calls are paired by `Category/Type` and their order among the calls of that key. When one side has
 fewer calls of a key, the pairing is an order-preserving alignment that skips the calls whose requests fit worst,
@@ -246,6 +302,24 @@ whether it shows the reply the way the legacy client does is still the spec's to
    callers for the report), the phase file, the guard hook and the `ev:`-style provenance discipline; a sibling
    tool would duplicate all of them or reach into parity's files anyway. It is one more command group (`parity
    oracle`), not a new process.
+
+## Design decisions (issue 39)
+
+1. **The standalone diff checks no decision.** A normalization rule hides a value, which is why the registry diff refuses a rule
+   without a `dec:` entry. The standalone diff has no `decisions.json` to check, and refusing every rule would make it useless on a
+   recording whose session ids differ per login. It applies the recording's rules, says on its third line that their decisions
+   were not checked, and marks nothing verified. A verification still needs `verify`, which refuses an undecided rule.
+2. **Rules and settings come from beside the recording, not from flags.** `oracle.json` and `normalization.json` sit in
+   `recordings/` next to the recording they belong to, where the guard keeps them read-only outside the record phase. A flag naming
+   another rules file would let a diff use rules nobody recorded with the scenario.
+3. **`--recording` takes a sealed folder, not log rows.** The legacy side is the expected output: export selects one run, redacts
+   it and seals it, and the standalone diff keeps that. A repo with no registry makes its recording with export and the minimal
+   registry above. `--capture` takes rows as well as a replay folder, because the new client's capture is regenerated every run.
+4. **Nothing is written.** A standalone capture is imported into a temporary folder: a `replays/<slug>/` it wrote would be read by
+   the registry diff as its last replay, from a run the registry never saw.
+5. **No `parity oracle init`.** Issue 39's second ask (a command that writes the minimal registry) is not built: the minimal
+   registry is documented above, and the standalone diff covers the case that needs no registry at all. Revisit when an adopter
+   writes the same minimal registry by hand twice.
 
 ## Known limits
 

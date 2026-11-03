@@ -120,9 +120,11 @@ public static class OracleModule
     private static readonly JsonSerializerOptions StrictOptions = new(Json.Options) { UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow };
 
     /// <summary>The oracle settings of a module; an absent file sets nothing, an unreadable one or one with a key outside <c>replay</c>, <c>writes</c> and <c>redact</c> is refused.</summary>
-    public static OracleConfig LoadSettings(string moduleDir)
+    public static OracleConfig LoadSettings(string moduleDir) => LoadSettingsFile(SettingsPath(moduleDir));
+
+    /// <summary><see cref="LoadSettings"/> for a settings file at <paramref name="path"/>.</summary>
+    public static OracleConfig LoadSettingsFile(string path)
     {
-        var path = SettingsPath(moduleDir);
         if (!File.Exists(path)) return new OracleConfig();
         try { return JsonSerializer.Deserialize<OracleConfig>(File.ReadAllText(path), StrictOptions) ?? throw new JsonException("the file is empty"); }
         catch (JsonException ex) { throw new InvalidOperationException($"{Recording.Rel(path)} is not valid oracle settings (replay, writes, redact): {ex.Message}"); }
@@ -162,6 +164,54 @@ public static class OracleModule
         Settings(moduleDir, cfg);
         var (repDir, rep) = capture != null ? Import(moduleDir, scenario, capture, cfg, redactKey, today) : LoadReplay(moduleDir, scenario);
         return OracleDiff.Compare(recDir, rec, repDir, rep, rules);
+    }
+
+    /// <summary>The line the standalone report carries, so nobody reads it as a registry diff.</summary>
+    public const string StandaloneNote = "standalone diff: no registry read, so the scenario's version and the decisions behind the rules and the oracle settings are not checked; nothing is marked verified";
+
+    /// <summary>
+    /// <c>parity oracle diff --recording &lt;dir&gt; --capture &lt;dir-or-rows&gt;</c>: a sealed recording folder against a sealed replay
+    /// folder or the host log rows of one new-client run, with no registry read. The oracle settings and the normalization rules are the
+    /// recording's own, <c>oracle.json</c> and <c>normalization.json</c> in the folder that holds it (<c>recordings/</c> in a module), so
+    /// the redaction and the masking are the registry diff's; the rules are checked for their schema, not for a decision. Rows are imported
+    /// into a temporary folder that is deleted after the comparison: nothing is written, <c>replays/</c> and <c>verified/</c> included.
+    /// </summary>
+    public static DiffResult DiffStandalone(string recordingDir, string capture, string? redactKey, DateOnly today)
+    {
+        var (recDir, rec) = SealedFolder(recordingDir, "--recording");
+        if (rec.Kind != "recording") throw new InvalidOperationException($"{Recording.Rel(recDir)} holds a {rec.Kind}, not a recording; --recording takes the legacy client's sealed recording folder (recordings/<scenario>/)");
+        var home = Path.GetDirectoryName(Path.GetFullPath(recDir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)) ?? ".";
+        var cfg = LoadSettingsFile(Path.Combine(home, SettingsFile));
+        var (rules, findings) = Normalization.LoadFile(Path.Combine(home, Normalization.FileName), null);
+        if (findings.Count > 0)
+            throw new InvalidOperationException($"normalization rules refused ({findings.Count} finding(s)):\n" + string.Join("\n", findings.Select(x => x.ToString())));
+        if (Directory.Exists(capture))
+        {
+            var (repDir, rep) = SealedFolder(capture, "--capture");
+            if (rep.Kind != "replay" || rep.Scenario != rec.Scenario)
+                throw new InvalidOperationException($"{Recording.Rel(repDir)} holds a {rep.Kind} of {rep.Scenario}; --capture takes a replay of {rec.Scenario} (replays/<scenario>/) or the host log rows of one new-client run");
+            return OracleDiff.Compare(recDir, rec, repDir, rep, rules);
+        }
+        if (!File.Exists(capture)) throw new InvalidOperationException($"--capture {capture} is neither a replay folder nor a file of host log rows");
+        var tmp = Path.Combine(Path.GetTempPath(), $"parity-standalone-{Guid.NewGuid():N}");
+        try
+        {
+            var (repDir, rep) = Recording.Export(new ExportRequest(tmp, rec.Scenario, "replay", new() { capture }, new(), null, null, null, null, null, true, cfg, redactKey, today, rec.ScenarioVersion));
+            return OracleDiff.Compare(recDir, rec, repDir, rep, rules);
+        }
+        finally { if (Directory.Exists(tmp)) Directory.Delete(tmp, true); }
+    }
+
+    /// <summary>A recording or replay folder whose seal still matches; refused otherwise, naming the flag it came from.</summary>
+    private static (string, RecordingFile) SealedFolder(string dir, string flag)
+    {
+        if (!File.Exists(Path.Combine(dir, Recording.IndexFile)))
+            throw new InvalidOperationException($"{flag} {dir} is not a recording or replay folder: it has no {Recording.IndexFile} (parity oracle export writes one)");
+        var file = Recording.Load(dir);
+        var tampered = Recording.Tampered(dir, file);
+        if (tampered.Count > 0)
+            throw new InvalidOperationException($"the {file.Kind} at {Recording.Rel(dir)} no longer matches its seal ({string.Join("; ", tampered)}); a recording is read-only after export. Restore it from git, or record the scenario again");
+        return (dir, file);
     }
 
     private static (string, RecordingFile) LoadReplay(string moduleDir, string scenario)

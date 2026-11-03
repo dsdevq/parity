@@ -32,6 +32,8 @@ parity - reverse-engineer a legacy WinForms module into a citable manifest and g
                                                        record phase: one scenario's host log rows into recordings/<scenario>/, redacted and sealed
   parity oracle diff   <module-dir> <scn:id> [--capture <rows.jsonl>]
                                                        the new client's calls (a capture, else the last replay) against the recording; exit 1 on a difference
+  parity oracle diff   --recording <recording-dir> --capture <replay-dir|rows.jsonl>
+                                                       the same diff with no registry read and nothing written; never marks anything verified
   parity oracle verify <module-dir> <scn:id>
                                                        run replay from recordings/oracle.json (the scenario's tests), diff its capture; only a green run with no difference sets lastVerified
   parity probe    <project.csproj> [--forms <glob>]    anonymized statement shapes; paste into an issue
@@ -168,11 +170,20 @@ try
         case "oracle":
         {
             var sub = Positional(opts, 0) ?? throw new ArgumentException("oracle: the subcommand is export, diff or verify");
+            var key = Environment.GetEnvironmentVariable("PARITY_REDACT_KEY");
+            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            if (sub == "diff" && opts.ContainsKey("recording"))
+            {
+                if (Positional(opts, 1) != null) throw new ArgumentException("oracle diff takes either <module-dir> <scn:id> or --recording <dir>, not both");
+                var recording = Opt(opts, "recording") is { Length: > 0 } rd ? rd : throw new ArgumentException("oracle diff --recording needs the recording folder (recordings/<scenario>/)");
+                var capture = Opt(opts, "capture") is { Length: > 0 } cd ? cd : throw new ArgumentException("oracle diff --recording needs --capture <replay-dir|rows.jsonl>");
+                var r = OracleModule.DiffStandalone(recording, capture, key, today);
+                Console.Write(OracleDiff.Render(r, null, OracleModule.StandaloneNote));
+                return r.Differences.Count == 0 ? 0 : 1;
+            }
             var dir = Positional(opts, 1) ?? throw new ArgumentException($"oracle {sub} needs <module-dir> (legacy/<Module>)");
             var scn = Positional(opts, 2) ?? throw new ArgumentException($"oracle {sub} needs <scn:id>");
             var oracle = OracleModule.LoadSettings(dir);
-            var key = Environment.GetEnvironmentVariable("PARITY_REDACT_KEY");
-            var today = DateOnly.FromDateTime(DateTime.UtcNow);
             static List<string> List(string? v) => (v ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
             static DateTimeOffset? Time(string? v, string name) => v == null ? null
                 : DateTimeOffset.TryParse(v, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out var t) ? t
