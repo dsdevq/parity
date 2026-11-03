@@ -1,0 +1,9 @@
+{
+  "writes": ["Policy/Save*", "*/Delete*"],
+  "redact": [
+    { "target": "any", "field": "**/ClientName" },
+    { "target": "dataset", "field": "Client/*" },
+    { "target": "any", "field": "**", "match": "[0-9]{3}-[0-9]{2}-[0-9]{4}" }
+  ],
+  "replay": "npx playwright test e2e/scenarios --grep \"$PARITY_SCENARIO\" && sh tools/dump-host-log.sh > \"$PARITY_CAPTURE\""
+}

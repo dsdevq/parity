@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.RegularExpressions;
 using Parity.Lint;
 using Parity.Model;
+using Parity.Oracle;
 using Parity.Passes;
 using Parity.Project;
 using Parity.Render;
@@ -26,13 +27,21 @@ parity - reverse-engineer a legacy WinForms module into a citable manifest and g
   parity registry init    <module-dir>                 write registry/ seeded from module.json; never overwrites
   parity registry query   <module-dir> [--touches <id>] [--role <r>] [--right <r>] [--negative|--positive] [--unverified]
   parity registry catalog <module-dir> [--out <file.md>]  dependencies with shapes, callers, error cases and fixture provenance
+  parity oracle export <module-dir> <scn:id> --log <rows.jsonl>[,...] (--session <id>[,...] | --from <time> [--to <time>])
+                  --recorded-by <name> [--environment <env>] [--legacy-build <build>] [--replace]
+                                                       record phase: one scenario's host log rows into recordings/<scenario>/, redacted and sealed
+  parity oracle diff   <module-dir> <scn:id> [--capture <rows.jsonl>]
+                                                       the new client's calls (a capture, else the last replay) against the recording; exit 1 on a difference
+  parity oracle verify <module-dir> <scn:id>
+                                                       run replay from recordings/oracle.json (the scenario's tests), diff its capture; only a green run with no difference sets lastVerified
   parity probe    <project.csproj> [--forms <glob>]    anonymized statement shapes; paste into an issue
   parity report   <manifest.json>                      anonymized raw/diagnostics/unresolved; review, then paste into an issue
   parity hash     <manifest.json>
   parity diff     <old.json> <new.json>                entries added, removed and changed, by id per section
   parity rebind   <spec.md> [--prev <old.json>]        move a STALE spec to the new manifest when nothing it cites changed
 
-Exit codes: 0 ok, 1 lint errors / manifests differ / rebind left a work list / init has changes waiting for --merge / doctor failed a check, 2 usage, 3 failure (a refused rebind or fixture scaffold too).
+Exit codes: 0 ok, 1 lint errors / manifests differ / rebind left a work list / init has changes waiting for --merge / doctor failed a check /
+oracle diff found a difference / oracle verify did not verify, 2 usage, 3 failure (a refused rebind, fixture scaffold or oracle command too).
 """;
 
 try
@@ -154,6 +163,44 @@ try
                     return 0;
                 }
                 default: throw new ArgumentException($"registry: unknown subcommand '{sub}'");
+            }
+        }
+        case "oracle":
+        {
+            var sub = Positional(opts, 0) ?? throw new ArgumentException("oracle: the subcommand is export, diff or verify");
+            var dir = Positional(opts, 1) ?? throw new ArgumentException($"oracle {sub} needs <module-dir> (legacy/<Module>)");
+            var scn = Positional(opts, 2) ?? throw new ArgumentException($"oracle {sub} needs <scn:id>");
+            var oracle = OracleModule.LoadSettings(dir);
+            var key = Environment.GetEnvironmentVariable("PARITY_REDACT_KEY");
+            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            static List<string> List(string? v) => (v ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+            static DateTimeOffset? Time(string? v, string name) => v == null ? null
+                : DateTimeOffset.TryParse(v, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out var t) ? t
+                : throw new ArgumentException($"--{name} '{v}' is not a date and time");
+            switch (sub)
+            {
+                case "export":
+                {
+                    var (outDir, rec) = OracleModule.Export(new ExportRequest(dir, scn, "recording", List(Opt(opts, "log")), List(Opt(opts, "session")), Time(Opt(opts, "from"), "from"), Time(Opt(opts, "to"), "to"),
+                        Opt(opts, "recorded-by"), Opt(opts, "environment"), Opt(opts, "legacy-build"), opts.ContainsKey("replace"), oracle, key, today));
+                    Console.WriteLine($"{Path.GetRelativePath(Environment.CurrentDirectory, outDir).Replace('\\', '/')}\t{rec.Calls.Count} call(s)\t{rec.Calls.Count(c => c.Write)} write(s)\t{rec.Redacted} value(s) redacted\t{rec.Seal}");
+                    Console.Error.WriteLine("review the files before committing: every value a redaction rule did not name is as the host logged it");
+                    return 0;
+                }
+                case "diff":
+                {
+                    var r = OracleModule.Diff(dir, scn, Opt(opts, "capture"), oracle, key, today);
+                    Console.Write(OracleDiff.Render(r, OracleModule.Where(dir)));
+                    return r.Differences.Count == 0 ? 0 : 1;
+                }
+                case "verify":
+                {
+                    if (string.IsNullOrWhiteSpace(oracle.Replay)) throw new InvalidOperationException($"no replay in {Recording.Rel(OracleModule.SettingsPath(dir))}: verify runs that command (the scenario's tests, which write the capture) and refuses without it");
+                    var r = OracleModule.Verify(dir, scn, oracle, new ShellReplayRunner(oracle.Replay, Console.Error), key, today);
+                    Console.Write(r.Text);
+                    return r.ExitCode;
+                }
+                default: throw new ArgumentException($"oracle: unknown subcommand '{sub}'");
             }
         }
         case "probe":

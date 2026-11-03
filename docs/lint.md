@@ -56,14 +56,22 @@ output format (`docs/adopt.md`, The map phase and the registries). Exit 1 on err
 |---|---|---|
 | REGISTRY-MISSING | error | no `registry/`, no `module.json`, or one of the three files is missing |
 | REGISTRY-STALE | error | a file's `module` stamp is not the current extract revision (a hash over every manifest's hash): a re-extract changed a manifest and the registry has not been reviewed since. `parity registry stamp` clears it once the rest is green |
-| REGISTRY-INVALID | error | not valid JSON; a field outside the schema (the schema holds only invented or structural fields, never host data); a missing or mistyped field; an id that is not `scn:`/`dec:` lowercase words; a repeated id; `role`, `rights` or an error `case` that is not a lowercase token; a date that is not `YYYY-MM-DD` |
+| REGISTRY-INVALID | error | not valid JSON; a field outside the schema (the schema holds only invented or structural fields, never host data); a missing or mistyped field; an id that is not `scn:`/`dec:` lowercase words; a repeated id; `role`, `rights` or an error `case` that is not a lowercase token; a date that is not `YYYY-MM-DD`; a dependency `wire` entry that is not `Category/Type` |
 | DECISION-INVALID | error | a decision entry with a field outside the schema, a missing `question`, `answer`, `owner` or `date`, a date that is not `YYYY-MM-DD`, no `cite`, a malformed id or a repeated one |
 | REGISTRY-GAP | error | a `svc:` id of `module.json` has no entry in `dependencies.json` |
 | REGISTRY-ORPHAN | error | a `dependencies.json` entry names a `svc:` id the module no longer calls |
 | REGISTRY-UNCITED | error | a scenario cites nothing, or an error case names neither a fixture nor a cite |
 | FIXTURE-MISSING | error | an error case's fixture does not exist or records another service |
-| CITE-UNKNOWN | error | a scenario's `exercises` or any `cite` holds an id that is not in the module's manifests, or an `ev:` id with no record |
+| CITE-UNKNOWN | error | a scenario's `exercises` or any `cite` holds an id that is not in the module's manifests, or an `ev:` id with no record; a decision cites a `norm:` id `recordings/normalization.json` does not declare (an `oracle:` id is the settings hash, not checked against the manifests) |
 | EV-STALE, EV-INVALID | error | a cited `ev:` record, as in spec lint |
-| SCENARIO-UNKNOWN | error | a fixture's `scenario` is not in `scenarios.json` |
+| SCENARIO-UNKNOWN | error | a fixture's or a recording's `scenario` is not in `scenarios.json` |
 | SCENARIO-UNREFERENCED | warning, error with `--gate` | no fixture names the scenario and no spec rule lists it under `scenarios:` |
 | SCENARIO-UNVERIFIED | warning, error with `--gate` | the scenario has no `lastVerified` date |
+| SCENARIO-VERIFY-UNBACKED | error | a recorded scenario's `lastVerified` is not backed by `verified/<scenario>.json` with the same date, recording seal, rules hash, oracle settings hash and scenario version: only `parity oracle verify` sets it (`docs/oracle.md`) |
+| RECORDING-INVALID | error | a `recordings/<scenario>/recording.json` that cannot be read, or that sits in another scenario's folder |
+| RECORDING-TAMPERED | error | a recorded file was edited, removed or added, or the index edited, after export; restore it from git or record again |
+| RECORDING-VERSION | error | the recording was made for another version of its scenario than the registry's current one; record the scenario again (`parity oracle diff` and `verify` refuse it too, exit 3) |
+| NORM-INVALID | error | `recordings/normalization.json` is not valid JSON, has a key or field outside its schema, a malformed `version` (an optional label), `id`, `scope`, `target` or `field`, or a `match` that is not a regular expression |
+| NORM-UNDECIDED | error | a normalization rule names no decision, a decision `decisions.json` lacks, or one that does not cite the rule; `parity oracle diff` and `verify` refuse to run while one exists |
+| ORACLE-UNDECIDED | error | `recordings/oracle.json` sets something and no decision cites its hash (`oracle:sha256:<16 hex>`, named in the message); `parity oracle diff` and `verify` refuse to run |
+| ORACLE-INVALID | error | `recordings/oracle.json` is not JSON, or has a key outside `replay`, `writes` and `redact`, or a value of the wrong type |

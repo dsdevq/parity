@@ -35,7 +35,6 @@ public sealed class ExtractConfig
     public List<string> SharedState { get; set; } = new();
     /// <summary>How deep below a handler shared-state reads and writes are recorded; null means <see cref="MaxCallDepth"/>, 0 means handlers only.</summary>
     public int? SharedStateDepth { get; set; }
-
     [JsonIgnore] public string BaseDir { get; set; } = ".";
 
     public static ExtractConfig Load(string path)
@@ -56,6 +55,38 @@ public sealed class GuardConfig
     public List<string> DenyTools { get; set; } = new();
     /// <summary>Directories readable and writable in specify and implement besides the consuming repo. Relative entries are relative to the config file.</summary>
     public List<string> AllowRoots { get; set; } = new();
+}
+
+/// <summary>
+/// The oracle layer's settings (<c>docs/oracle.md</c>), the file <c>legacy/&lt;Module&gt;/recordings/oracle.json</c>. Read by
+/// <c>parity oracle export</c>, <c>diff</c> and <c>verify</c>.
+/// </summary>
+public sealed class OracleConfig
+{
+    /// <summary>
+    /// The shell command <c>parity oracle verify</c> runs: the new client's tests for one scenario, which leave the host log rows of
+    /// that run at <c>$PARITY_CAPTURE</c>. Its exit code is the test result. <c>{scenario}</c>, <c>{capture}</c> and <c>{module}</c> are
+    /// replaced too. Null: verify refuses.
+    /// </summary>
+    public string? Replay { get; set; }
+    /// <summary>Wire calls that change host state, as <c>Category/Type</c> globs (<c>*</c> is any run of characters, case-insensitive). Reads may reorder between two writes; nothing crosses a write.</summary>
+    public List<string> Writes { get; set; } = new();
+    /// <summary>Values replaced at export by a keyed pseudonym, so real data never lands in a recording.</summary>
+    public List<RedactRule> Redact { get; set; } = new();
+}
+
+/// <summary>
+/// One redaction: every value of <see cref="Target"/> whose field path matches <see cref="Field"/> (and whose value matches
+/// <see cref="Match"/>, when given) is replaced by <c>redacted:&lt;8 hex&gt;</c>, an HMAC of the value under <c>PARITY_REDACT_KEY</c>.
+/// </summary>
+public sealed class RedactRule
+{
+    /// <summary>request, reply, dataset, error or any.</summary>
+    public string Target { get; set; } = "any";
+    /// <summary>A field path glob: <c>*</c> within one segment, <c>**</c> across segments, row and sibling indexes ignored.</summary>
+    public string Field { get; set; } = "**";
+    /// <summary>A regular expression the value must contain a match of; null redacts every value at the path.</summary>
+    public string? Match { get; set; }
 }
 
 /// <summary>

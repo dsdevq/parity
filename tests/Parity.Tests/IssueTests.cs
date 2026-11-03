@@ -339,16 +339,16 @@ public sealed partial class IssueTests
                 ("Bash", new { command = "CDPATH= cd .. && " + Up }, below, "outside"),
                 ("Bash", new { command = "bash -c \"cd ..; " + Up + "\"" }, below, "outside"),                                   // a nested shell's command
                 ("Bash", new { command = "sh -c 'cd .. && " + Up + "'" }, below, "outside"),
-                ("PowerShell", new { command = "if ($true) { cd .. }; " + PsUp }, below, "outside"),                            // PowerShell blocks
-                ("PowerShell", new { command = "foreach ($x in 1) { Set-Location .. }; " + PsUp }, below, "outside"),
-                ("PowerShell", new { command = "1 | ForEach-Object { cd .. }; " + PsUp }, below, "outside"),
+                ("PowerShell", new { command = "if ($true) { cd .. }; " + PsUp }, below, "directory change"),                            // PowerShell blocks
+                ("PowerShell", new { command = "foreach ($x in 1) { Set-Location .. }; " + PsUp }, below, "directory change"),
+                ("PowerShell", new { command = "1 | ForEach-Object { cd .. }; " + PsUp }, below, "directory change"),
                 ("Bash", new { command = "bash --norc -c \"cd $HOME && cat Legacy/AcmeAdmin/Forms/X.cs\"" }, below, "directory"),  // long options before -c
                 ("Bash", new { command = "bash --login -c \"cd; cat Legacy/AcmeAdmin/Forms/X.cs\"" }, below, "directory"),
                 ("Bash", new { command = "bash -o pipefail -c \"cd $HOME && cat Legacy/AcmeAdmin/Forms/X.cs\"" }, below, "directory"),
                 ("Bash", new { command = "sudo cd .. && ls" }, below, "first word"),                                             // a cd the guard cannot follow
-                ("Bash", new { command = "sudo cd $HOME && ls" }, below, "first word"),
+                ("Bash", new { command = "sudo cd $HOME && ls" }, below, "directory change"),
                 ("Bash", new { command = "sudo cd && ls" }, below, "first word"),
-                ("Bash", new { command = "xargs cd %USERPROFILE%" }, below, "first word"),
+                ("Bash", new { command = "xargs cd %USERPROFILE%" }, below, "directory change"),
             }).ToArray();
             var denials = 0;
             foreach (var phase in new[] { "specify", "implement" })
