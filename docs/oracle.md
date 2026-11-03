@@ -29,7 +29,7 @@ legacy/<Module>/
   recordings/<slug>/calls/NNN.request.<xml|json|txt>, NNN.reply.<...>, NNN.dataset.<xml|json>
   recordings/normalization.json         the normalization rules (one file per module)
   recordings/oracle.json                the oracle settings: writes, redact, replay (one file per module)
-  replays/<slug>/                       the new client's last capture, same format; rewritten by every diff --capture and verify
+  replays/<slug>/                       the new client's last capture, same format; rewritten by every registry `diff --capture` and `verify` (the standalone diff writes nothing)
   verified/<slug>.json                  written only by parity oracle verify
 ```
 

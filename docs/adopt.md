@@ -22,7 +22,7 @@ legacy/
     registry/                   scenarios.json, decisions.json, dependencies.json (map phase, see below)
     recordings/<scenario>/      written by parity oracle export in the record phase: one scenario's host calls, sealed (docs/oracle.md)
     recordings/normalization.json  the normalization rules, each backed by a dec: decision
-    replays/<scenario>/         the new client's last capture, written by parity oracle diff --capture and verify
+    replays/<scenario>/         the new client's last capture, written by parity oracle diff <module-dir> --capture and verify
     verified/<scenario>.json    written only by parity oracle verify
     spec/<Form>.md
     extractor-debt.md           only when raw/diagnostics exist
